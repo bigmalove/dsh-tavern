@@ -28,10 +28,10 @@ export function createPlayCardSnapshots({ worldBooks, planner, readCard, writeCh
   async function build(chat, card, preservePreferences = false, resolvedWorldBook) {
     const writing = writingChat(chat)
     let worldBook = resolvedWorldBook ?? null
-    try { if (!writing && !preferenceOnly(chat) && resolvedWorldBook === undefined) worldBook = await worldBooks.bound(chat.cardPath, card, chat) }
+    try { if (!preferenceOnly(chat) && resolvedWorldBook === undefined) worldBook = await worldBooks.bound(chat.cardPath, card, chat) }
     catch (error) { logger.warn('dsh-tavern: 常驻世界书读取失败，已跳过:', str(error && error.message || error)) }
-    const worldBookContext = writing ? '' : constantWorldBookContext({ worldBook }).context
-    const planned = preferenceOnly(chat) || writing ? '' : sanitizeAgentProjectionText((await planner.plan({ purpose: 'play-card-snapshot', card, chat, worldBookContext, worldBookLabel: '常驻世界书' })).text)
+    const worldBookContext = constantWorldBookContext({ worldBook }).context
+    const planned = preferenceOnly(chat) ? '' : sanitizeAgentProjectionText((await planner.plan({ purpose: 'play-card-snapshot', card, chat, worldBookContext, worldBookLabel: '常驻世界书' })).text)
     let preference = null
     if (preservePreferences) {
       if (chat.userProfileContextSnapshot) preference = { text: chat.userProfileContextSnapshot, revision: chat.userProfileRevision, profileId: chat.userProfileId }
@@ -49,8 +49,8 @@ export function createPlayCardSnapshots({ worldBooks, planner, readCard, writeCh
     // Card Agents edit the card itself: keep only the reference text, never a
     // definition snapshot that later reads would prefer over the live card.
     if (cardAgent(chat)) return patch
-    // Writing conversations freeze no card definition and own no worldbook: the
-    // preference text above is the whole fixed background.
+    // A writing conversation has no card to freeze. Its fixed background is the
+    // preference plus the constant entries of the 全局生效 books read above.
     if (writing) return patch
     Object.assign(patch, {
       cardDefinitionSnapshot: structuredClone(card),

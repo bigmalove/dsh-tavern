@@ -235,9 +235,14 @@ export function createWorldBookLibrary(options = {}) {
     // This resolver lives for one bound read only. Binding metadata, the view
     // and the exported document must describe the same resource observation.
     const records = new Map()
-    const normalizedCardPath = normalizePath(cardPath, 'card')
-    card ??= await cards.read(normalizedCardPath)
-    if (card === undefined) throw new Error('人物卡不存在: ' + normalizedCardPath)
+    // A conversation without a character card (写作模式) has no card binding to
+    // resolve: only standalone books marked 全局生效 apply. Same merge, same view.
+    const cardless = str(cardPath) === ''
+    const normalizedCardPath = cardless ? '' : normalizePath(cardPath, 'card')
+    if (!cardless) {
+      card ??= await cards.read(normalizedCardPath)
+      if (card === undefined) throw new Error('人物卡不存在: ' + normalizedCardPath)
+    }
     function read(locator) {
       const source = sourceOf(locator)
       const key = JSON.stringify(source)
@@ -245,9 +250,12 @@ export function createWorldBookLibrary(options = {}) {
         source.kind === 'card' && source.cardPath === normalizedCardPath ? card : undefined, templateOnly))
       return records.get(key)
     }
-    const current = await binding(cardPath, { card, read })
-    if (current.available !== true) throw new Error('绑定的世界书不存在，请重新绑定或解绑')
-    const localSources = current.kind === 'multiple' ? current.books.map(book => book.source) : current.source ? [current.source] : []
+    let localSources = []
+    if (!cardless) {
+      const current = await binding(cardPath, { card, read })
+      if (current.available !== true) throw new Error('绑定的世界书不存在，请重新绑定或解绑')
+      localSources = current.kind === 'multiple' ? current.books.map(book => book.source) : current.source ? [current.source] : []
+    }
     const sources = [], identities = new Set()
     for (const locator of localSources.concat(includeGlobals ? await globalSources() : [])) {
       const source = sourceOf(locator), identity = JSON.stringify(source)

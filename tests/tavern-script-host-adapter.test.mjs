@@ -285,3 +285,25 @@ test('template initialization opts into a bounded projection without reading com
  await adapter.readFullPromptTemplateState('session-1')
  assert.equal(full,1,'default API retains its complete-state contract')
 })
+
+// 写作模式是无卡的正文模式，与游玩共用模板能力；缺失 writing 白名单曾让
+// 「发送第一轮消息 → 投影用户输入 → 保存模板全局变量」整轮失败。
+const playModes = value => ['story', 'script', 'writing'].includes(value.mode)
+
+test('写作模式（无卡）可以保存模板全局变量；卡片模式仍然被拒绝', async () => {
+  const writing = { ...chat(), cardPath: '', mode: 'writing', mvu: { enabled: false } }
+  const saved = []
+  const { adapter } = harness(writing, {
+    isPlayChat: playModes,
+    globalVariables: {
+      read: async () => ({ keep: 1 }),
+      save: async (variables, expected) => { saved.push({ variables, expected }); return variables }
+    }
+  })
+  const result = await adapter.saveFullPromptTemplateGlobals('session-1', { keep: 2 }, { keep: 1 })
+  assert.equal(result.updated, true)
+  assert.deepEqual(saved, [{ variables: { keep: 2 }, expected: { keep: 1 } }])
+
+  const card = harness({ ...chat(), mode: 'card', mvu: { enabled: false } }, { isPlayChat: playModes })
+  await assert.rejects(card.adapter.saveFullPromptTemplateGlobals('session-1', { keep: 2 }, { keep: 1 }), /没有绑定游玩对话/)
+})

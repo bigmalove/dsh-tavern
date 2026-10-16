@@ -124,6 +124,7 @@
 			const lastModeSession = React.useRef(null);
 			const fileRef = React.useRef(null);
 			const saveImportFile = React.useRef(null);
+			const writingSaveFile = React.useRef(null);
 			const sillyTavernChatFile = React.useRef(null);
 			const saveImportMenu = React.useRef(null);
 			const [saveImportMenuOpen, setSaveImportMenuOpen] = React.useState(false);
@@ -558,7 +559,8 @@
 					const imported = await call("importGameSave", { fileB64: btoa(binary) });
 					notifyDataChanged(["cards", "sessions"]);
 					closePicker();
-					await finishPendingOpen({ sessionId: imported.sessionId, targetMode: "story" });
+					// 导入什么模式就打开什么模式：游玩存档回游玩，写作存档回写作。
+					await finishPendingOpen({ sessionId: imported.sessionId, targetMode: imported.mode || "story" });
 				} catch (error) { setError("导入存档失败：" + String(error.message || error)); }
 				finally { setBusy(false); }
 			}
@@ -1135,6 +1137,12 @@
 					h("button", { className: uiMode === "card" ? "active" : "", disabled: busy, onClick: function () { switchMode("card"); } }, "卡片")
 				),
 				h("button", { className: "dsh-tavern-side-new", disabled: busy, onClick: function () { if (uiMode === "writing") { void newWritingConversation(); return; } openPicker(); } }, uiMode === "play" ? (openingPicker ? "继续开局 · " + openingPicker.card.name : requestMode === "sillytavern" ? "＋ 选择人物卡 · 新开silly 对话" : "＋ 选择人物卡 · 新开游玩") : uiMode === "writing" ? "＋ 新建写作" : "＋ 新建卡片工作台对话"),
+				// 写作没有选卡/开局对话框：导入存档直接作为副本开局，模式随存档内容（写作或游玩）。
+				uiMode === "writing" ? h("div", { className: "dsh-tavern-writing-import", style: { display: "flex", alignItems: "center", gap: "8px", padding: "0 12px 8px" } },
+					h("input", { ref: writingSaveFile, type: "file", accept: ".dshsave", style: { display: "none" }, onChange: function (event) { const file = event.target.files && event.target.files[0]; event.target.value = ""; if (file) void importGameSave(file); } }),
+					h("button", { className: "dsh-tavern-btn", disabled: busy, onClick: function () { if (writingSaveFile.current) writingSaveFile.current.click(); } }, busy ? "正在导入…" : "导入存档"),
+					h("small", { style: { opacity: .7 } }, "导入 .dshsave（游玩或写作存档）")
+				) : null,
 				uiMode === "play" && requestMode === "sillytavern" ? h("div", { className: "dsh-tavern-compatibility-notice" },
 					h("strong", null, "silly 模式"),
 					h("div", null, "按 SillyTavern 方式组织对话。未选择外部预设时使用内置纯净预设；选择后使用整份外部预设。对话与普通游玩分别保存。")

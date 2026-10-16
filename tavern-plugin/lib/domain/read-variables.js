@@ -6,7 +6,7 @@ const visible=key=>!key.startsWith('$')&&!key.startsWith('__')
 const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex')
 
 export function readVariables(chat,args={}) {
-  if(!chat||!['story','script'].includes(chat.mode||'story'))throw Error('变量查询仅用于当前游玩会话')
+  if(!chat||!['story','script','writing'].includes(chat.mode||'story'))throw Error('变量查询仅用于当前游玩会话')
   const action=args.action||'list',path=args.path||'',query=args.query||''
   if(!['list','read','search'].includes(action))throw Error('action 必须是 list、read 或 search')
   if(typeof path!=='string'||path.length>1024||path&&!path.startsWith('/')||/~(?![01])/u.test(path))throw Error('path 必须是变量根下的 JSON Pointer；根目录用空字符串')

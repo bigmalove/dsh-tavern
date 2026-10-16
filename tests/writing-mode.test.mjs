@@ -16,6 +16,7 @@ import { renderTavernMacros } from '../tavern-plugin/lib/domain/tavern-macro-eng
 import { projectReplyLayers } from '../tavern-plugin/lib/domain/reply-presentation.js'
 import { createForegroundFrameSessionAdapter } from '../tavern-plugin/lib/domain/foreground-frame-session-adapter.js'
 import { sessionSeedTrajectoryMessages } from '../tavern-plugin/lib/domain/session-seed-trajectory.js'
+import { buildGameSave, readGameSave } from '../tavern-plugin/lib/domain/game-save.js'
 
 const clone = value => value === undefined ? undefined : structuredClone(value)
 
@@ -39,15 +40,22 @@ test('写作模式：无人物卡新建空白会话，写入作者契约的种�
   assert.equal(chat.cardName, '写作')
   assert.deepEqual(chat.messages, [])
   assert.equal(chat.openingText, '')
-  assert.equal(chat.mvu.enabled, false)
+  assert.equal(chat.mvu.enabled, false, '没有人物卡的变量资源，MVU 自然不启用')
+  // 生图与姿势结算沿用本局默认（默认关闭只是默认值，不是写作模式专属限制）。
   assert.equal(chat.sceneImagesEnabled, false)
   assert.equal(chat.imageModelSelection, null)
-  assert.equal(chat.backgroundTasks.posture, false)
+  assert.equal(chat.backgroundTasks.posture, true, '姿势结算跟随默认，不再被特判关闭')
   assert.equal(chat.backgroundTasks.characterDesign, false)
-  assert.equal(chat.cardContextSnapshot, '')
   assert.equal(chat.cardContextSnapshotVersion, 7)
-  assert.equal(h.session().prefix ?? '', '')
-  assert.equal(h.state.reads, 0, '写作会话不读人物卡')
+  assert.match(String(h.session().prefix ?? ''), /【常驻世界书】/, '写作会话的固定前缀只有常驻世界书')
+  assert.equal(h.state.reads, 0, '写作会话不通过卡片读取读人物卡')
+  // 固定背景只有（全局生效的）常驻世界书，没有人物卡字段。
+  assert.match(chat.cardContextSnapshot, /【常驻世界书】/)
+  assert.match(chat.cardContextSnapshot, /固定世界书/)
+  for (const cardField of ['【故事设定 · 人物卡】', '固定描述', '固定性格', '固定场景', '固定示例', '逐轮系统', '逐轮后置']) {
+    assert.equal(chat.cardContextSnapshot.includes(cardField), false, '写作快照不含人物卡内容：' + cardField)
+  }
+  assert.equal(Object.hasOwn(chat, 'cardDefinitionSnapshot'), false)
 
   const seed = seedMessages(h.session())
   assert.deepEqual(seed.map(event => event.type), ['user/message', 'assistant/message', 'user/message'])
@@ -55,6 +63,28 @@ test('写作模式：无人物卡新建空白会话，写入作者契约的种�
   assert.match(seed[0].data.content[0].text, /我是作者，不扮演故事中的任何角色/)
   assert.match(seed[1].data.message.content[0].text, /写作指令/)
   assert.ok(seed.every(event => event.seq < h.session().durable.length))
+})
+
+test('写作会话沿用本局默认：世界书、生图、姿势结算都按设置开启，不被关掉', async () => {
+  const h = initializationFixture()
+  h.state.settings = {
+    compatibilityMode: true,
+    defaultPlaySettings: {
+      webSearchEnabled: true,
+      sceneImagesEnabled: true,
+      backgroundTasks: { posture: true, variables: true, variableFeedback: true }
+    },
+    defaultImageModel: { provider: 'fixture', model: 'image' }
+  }
+  const chat = await h.make().start({ cardPath: '', sessionId: 'session', mode: 'writing', userName: '作者' })
+
+  assert.equal(chat.sceneImagesEnabled, true, '本局默认开启生图时，写作会话同样开启')
+  assert.deepEqual(chat.imageModelSelection, { provider: 'fixture', model: 'image' })
+  assert.equal(chat.webSearchEnabled, true)
+  assert.equal(chat.backgroundTasks.posture, true)
+  assert.equal(chat.backgroundTasks.variables, true)
+  // 常驻世界书照常读入写作用的世界书（全局生效的独立世界书）。
+  assert.match(chat.cardContextSnapshot, /【常驻世界书】/)
 })
 
 test('写作模式重入不重复写种子、不改写已有会话', async () => {
@@ -151,10 +181,13 @@ test('写作回合：正文提示词走写作规则，无卡片段落，帧与�
   assert.ok(body, '调用正文规划')
   assert.equal(body.card, null)
   assert.equal(body.chat.mode, 'writing')
-  assert.match(body.text === undefined ? '' : String(body.text), /^$/)
-  const sections = run.plannerCalls.filter(call => call.purpose === 'body')
-  assert.equal(sections.length, 1)
+  assert.equal(run.plannerCalls.filter(call => call.purpose === 'body').length, 1)
   assert.equal(run.cardReads.length, 0, '写作回合不读人物卡')
+  // 帧里带的是写作规则，而不是游玩规则。
+  const frameText = foregroundFrameText(prepared.frame)
+  assert.match(frameText, /提示词:writing/)
+  assert.doesNotMatch(frameText, /提示词:story/)
+  assert.doesNotMatch(frameText, /【故事设定 · 人物卡】/)
 
   await run.orchestrator.finalize({ sessionId: 'session-w', turn: 1, userText: '写一场雨夜追逐戏。', assistantText: '雨砸在青石板上。' })
   const chat = run.chat()
@@ -185,10 +218,14 @@ test('写作会话的正文规划：基础段用 writing 提示词，且不带�
   assert.match(playPlanned.text, /【story】/)
 })
 
-test('写作会话的稳定前缀只含长期偏好，卡片与世界书不进前缀', async () => {
+test('写作会话的固定背景只含常驻世界书，人物卡段落不进入', async () => {
   const planner = createContextPlanner({ prompt: name => '【' + name + '】' })
   const planned = await planner.plan({ purpose: 'play-card-snapshot', card: null, chat: { mode: 'writing' }, worldBookContext: '固定世界书', worldBookLabel: '常驻世界书' })
-  assert.equal(planned.text, '')
+  assert.match(planned.text, /【常驻世界书】/)
+  assert.equal(planned.text.includes('【故事设定 · 人物卡】'), false)
+
+  const empty = await planner.plan({ purpose: 'play-card-snapshot', card: null, chat: { mode: 'writing' }, worldBookContext: '', worldBookLabel: '常驻世界书' })
+  assert.equal(empty.text, '')
 })
 
 test('写作会话的候选规划不读人物卡，也不崩', async () => {
@@ -221,8 +258,8 @@ test('原生写作会话：无开场白、写 v2 作者契约、恢复幂等', n
   assert.equal(seed.length, 3)
   assert.match(seed[0].content[0].text, /我是作者，不扮演故事中的任何角色/)
   assert.equal(messages.some(message => String(message.id).startsWith('tavern-seed-trajectory:v1:')), false)
-  // 写作会话没有人物卡固定背景：既不写固定前缀，也不带卡片内容。
-  assert.equal(messages.filter(message => String(message.id).startsWith('tavern-session-prefix:')).length, 0)
+  // 写作会话的固定背景只有（全局生效的）常驻世界书：写固定前缀，但不带人物卡内容。
+  assert.equal(messages.filter(message => String(message.id).startsWith('tavern-session-prefix:')).length, 1)
   assert.equal(h.requests.length, 0, '开局不调用模型')
 
   const before = structuredClone(messages)
@@ -232,7 +269,7 @@ test('原生写作会话：无开场白、写 v2 作者契约、恢复幂等', n
   assert.deepEqual(h.target.session.deriveMessages(), before)
 })
 
-test('原生写作会话的第一轮请求不含人物卡与世界书，只带上作者契约', native, async t => {
+test('原生写作会话的第一轮请求：不带人物卡，常驻世界书照常进入，关键词条目不被误召回', native, async t => {
   const h = await createInitializationNative(process.env.DSH_BOOT_MODULE)
   t.after(() => h.dispose())
   await h.open().start({ ...h.input, cardPath: '', mode: 'writing' })
@@ -241,7 +278,20 @@ test('原生写作会话的第一轮请求不含人物卡与世界书，只带�
   assert.equal(h.requests.length, 1)
   const request = h.requests[0]
   assert.doesNotMatch(request.system, /不可丢失的固定背景/, '写作会话不注入人物卡背景')
-  assert.doesNotMatch(request.system, /Fixture constant worldbook/, '写作会话不注入常驻世界书')
-  assert.equal(JSON.stringify(request.messages).includes('Fixture recalled worldbook'), false, '写作会话不做世界书召回')
+  assert.doesNotMatch(request.system, /Fixture card special instruction/, '写作会话不注入人物卡系统提示')
+  assert.match(request.system, /Fixture constant worldbook/, '常驻（全局生效）世界书照常进入固定背景')
+  assert.equal(JSON.stringify([request.system, request.messages]).includes('Fixture recalled worldbook'), false, '没有命中关键词的动态条目不召回')
   assert.match(JSON.stringify(request.messages), /我是作者，不扮演故事中的任何角色/, '作者契约随会话历史进入请求')
+})
+
+test('写作会话的存档包可以原样往返：无人物卡、无剧本，模式保留为写作', () => {
+  const chat = { id: 'chat-w', sessionId: 'session-w', mode: 'writing', cardPath: '', cardName: '写作',
+    messages: [{ role: 'assistant', turn: 1, text: '第一章' }], timeline: { checkpoints: [] } }
+  const session = { header: { id: 'session-w' }, inheritedEventCount: 0, events: [{ seq: 0, type: 'turn/end', data: { turn: 1 } }] }
+  const buffer = buildGameSave({ chat, revisions: [], session, card: { path: '', payload: null }, tavernVersion: '2.7.0', exportedAt: 1 })
+  const read = readGameSave(buffer, { tavernVersion: '2.7.0' })
+  assert.equal(read.chat.mode, 'writing')
+  assert.equal(read.chat.cardPath, '')
+  assert.equal(read.card, null, '写作存档不携带人物卡')
+  assert.equal(read.manifest.source.mode, 'writing')
 })

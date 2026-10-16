@@ -124,7 +124,7 @@ export function createConversationInitialization(options) {
     const openingExtensions = blankOpening ? null : await cards.extensions(cardPath)
     const openingChoices = blankOpening ? [] : cardOpeningChoices(card)
     const selectedOpeningIndex = str(openingId) === '' ? 0 : Math.max(0, openingChoices.findIndex(function (choice) { return choice.id === str(openingId) }))
-    const usesMvu = chatMode !== 'card' && chatMode !== 'writing' && (
+    const usesMvu = chatMode !== 'card' && (
       (Array.isArray(openingExtensions && openingExtensions.mvuResources) && openingExtensions.mvuResources.some(function (item) { return item.enabled !== false }))
       || openingChoices.some(function (choice) { return /<(?:initvar|json_?patch)>|_\.(?:set|insert|assign|remove|unset|delete|add)\(/i.test(choice.text) })
     )
@@ -174,17 +174,14 @@ export function createConversationInitialization(options) {
     chat.userProfileId = profile?.profileId || 'default'
     chat.userProfileEnabled = profile?.hasConfirmed === true && profile.defaultEnabled === true
     chat.webSearchEnabled = groupOfMode(chat.mode) === 'play' && defaults.webSearchEnabled
-    // No card means no scene material: illustration planning stays a play feature.
-    chat.sceneImagesEnabled = groupOfMode(chat.mode) === 'play' && chat.mode !== 'writing' && defaults.sceneImagesEnabled
+    chat.sceneImagesEnabled = groupOfMode(chat.mode) === 'play' && defaults.sceneImagesEnabled
     chat.statusBarPlacement = defaults.statusBarPlacement
     chat.conversationFeaturesVersion = 1
     chat.backgroundModelSelection = groupOfMode(chat.mode) === 'play' ? normalizeBackgroundModel(currentSettings.defaultBackgroundModel) : null
-    chat.imageModelSelection = groupOfMode(chat.mode) === 'play' && chat.mode !== 'writing' ? normalizeBackgroundModel(currentSettings.defaultImageModel) : null
+    chat.imageModelSelection = groupOfMode(chat.mode) === 'play' ? normalizeBackgroundModel(currentSettings.defaultImageModel) : null
     chat.disabledWritingSkills = groupOfMode(chat.mode) === 'play' ? [...(currentSettings.defaultDisabledWritingSkills || [])] : []
     chat.backgroundConfigVersion = 1
-    // A writing conversation has no variables and no character posture to settle:
-    // its default background work is empty until the user turns something on.
-    chat.backgroundTasks = normalizeBackgroundTasks(chat.mode === 'writing' ? { posture: false, characterDesign: false } : (groupOfMode(chat.mode) === 'play' ? defaults.backgroundTasks : {}))
+    chat.backgroundTasks = normalizeBackgroundTasks(groupOfMode(chat.mode) === 'play' ? defaults.backgroundTasks : {})
     chat.mvu = usesMvu ? {
       enabled: true,
       owner: 'official',

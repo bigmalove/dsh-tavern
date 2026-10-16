@@ -246,8 +246,6 @@ export function createCandidateGenerator(options) {
     if (chat === undefined || chat === null) throw new Error('当前会话没有绑定人物卡')
     const mode = chat.mode || 'story'
     if (mode === 'card') throw new Error('卡片模式不生成剧情候选项')
-    // 候选项按人物行为组织，写作模式（用户不是角色）暂不提供。
-    if (mode === 'writing') throw new Error('写作模式暂不支持生成候选项')
     const requestId = str(input.requestId).trim().slice(0, 160)
     let taskRun = null
     const activity = tasks.activity(chat)

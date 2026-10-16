@@ -1369,7 +1369,7 @@ export async function apply(ctx) {
     const header = await chatForSession(str(sessionId))
     if (!header) throw new Error('当前 Session 没有绑定 Tavern 对话')
     const chat = await readChat(header.id)
-    if (!chat || !['story', 'script'].includes(chat.mode || 'story')) throw new Error('只有游玩对话可以导出存档')
+    if (!chat || !['story', 'script', 'writing'].includes(chat.mode || 'story')) throw new Error('只有正文对话可以导出存档')
     assertConversationForkable(chat, { agentRunning: agentRegistry.get(chat.sessionId)?.phase?.kind === 'running' })
     const revisions = await collectSaveRevisions(chat, readChatRevision)
     const live = sessionStore.get(chat.sessionId)
@@ -1446,7 +1446,7 @@ export async function apply(ctx) {
   function assertImportableSave(save) {
     const states = [save.chat, ...save.revisions.map(item => item.state)]
     if (states.some(state => !state || typeof state !== 'object' || !Array.isArray(state.messages))) throw new Error('存档包已损坏：存档内容不完整')
-    if (!['story', 'script'].includes(save.chat.mode || 'story')) throw new Error('存档包不是游玩对话')
+    if (!['story', 'script', 'writing'].includes(save.chat.mode || 'story')) throw new Error('存档包不是正文对话')
     const events = save.session?.events
     if (!Array.isArray(events) || !events.some(event => event?.type === 'turn/end')) throw new Error('存档包已损坏：缺少模型会话记录')
     if (events.some((event, index) => event?.seq !== index)) throw new Error('存档包已损坏：模型会话记录不连续')
@@ -1455,7 +1455,9 @@ export async function apply(ctx) {
     if (typeof args?.fileB64 !== 'string' || !args.fileB64) throw new Error('请选择 .dshsave 存档文件')
     const save = readGameSave(Buffer.from(args.fileB64, 'base64'), { tavernVersion: TAVERN_PACKAGE_VERSION })
     assertImportableSave(save)
-    if (!save.card?.payload && !save.chat.cardDefinitionSnapshot && !await readCard(str(save.chat.cardPath)).catch(() => undefined)) throw new Error('存档包里没有人物卡，本机也没有这张卡，无法导入')
+    // 写作会话本来就无人物卡：不要求卡存在，也不导入卡。
+    if ((save.chat.mode || 'story') !== 'writing'
+      && !save.card?.payload && !save.chat.cardDefinitionSnapshot && !await readCard(str(save.chat.cardPath)).catch(() => undefined)) throw new Error('存档包里没有人物卡，本机也没有这张卡，无法导入')
     const sourceChatId = str(save.chat.id), sourceSessionId = str(save.session.header?.id || save.chat.sessionId)
     if (!/^[a-zA-Z0-9_-]+$/.test(sourceChatId) || !/^[a-zA-Z0-9_-]+$/.test(sourceSessionId)) throw new Error('存档包里的游戏编号无效')
     if (importingGameSaves.has(sourceChatId)) throw new Error('这份存档正在导入，请稍候')
@@ -1587,7 +1589,7 @@ export async function apply(ctx) {
         throw error
       }
       await conversationRegistry.publish(saved)
-      return { chatId, sessionId, cardPath, title: saved.title, revisions: save.revisions.length, images: replacedRefs.size }
+      return { chatId, sessionId, cardPath, mode: str(save.chat.mode) || 'story', title: saved.title, revisions: save.revisions.length, images: replacedRefs.size }
     } finally { importingGameSaves.delete(sourceChatId) }
   }
   async function exportTavernLogs(sessionId) {
@@ -2376,7 +2378,7 @@ export async function apply(ctx) {
   const searchWorldbook = createWorldbookSearch({
     load: async sessionId => {
       const chat = await chatForSession(sessionId)
-      if (!chat || !['story', 'script'].includes(chat.mode || 'story')) throw new Error('世界书查询仅用于当前游玩对话')
+      if (!chat || !['story', 'script', 'writing'].includes(chat.mode || 'story')) throw new Error('世界书查询仅用于当前游玩对话')
       const card = await readChatCard(chat)
       return { chat, card, worldBook: await playWorldBook(chat, card) }
     },
@@ -2533,7 +2535,7 @@ export async function apply(ctx) {
   const worldbookPrefilter = createWorldbookPrefilter({
     async run(chatId, signal) {
       const chat = await storyContext({ chatId })
-      if (!chat || !['story', 'script'].includes(chat.mode || 'story') || chat.requestMode === 'sillytavern' || chat.regenInProgress) return
+      if (!chat || !['story', 'script', 'writing'].includes(chat.mode || 'story') || chat.requestMode === 'sillytavern' || chat.regenInProgress) return
       const latest = chat.messages?.at(-1)
       if (latest?.role !== 'assistant' || latest.greeting === true || backgroundTasks.activity(chat).busy) return
       if (backgroundModelSelection(chat) === null) return
@@ -2878,7 +2880,7 @@ export async function apply(ctx) {
         })
       }
       const chat = await sessionStateForSession(target.session.id)
-      if (!chat || !['story', 'script'].includes(chat.mode)) return fallback()
+      if (!chat || !['story', 'script', 'writing'].includes(chat.mode)) return fallback()
       const pendingMessages = pendingCompactionMessages.get(target) || []
       return compactForegroundIfNeeded({
         trigger, native: fallback, forced,
@@ -3149,9 +3151,8 @@ export async function apply(ctx) {
     catch { return Infinity }
   }
   // What recall, world book search and screening read: the bound book plus plugin entries (tavern.worldbookEntries).
+  // 没有人物卡的会话（写作模式）没有卡绑定，World Book Library 只解析全局生效的独立世界书。
   async function playWorldBook(chat, card) {
-    // Writing conversations bind no worldbook at all: answer with an empty read.
-    if (!chat || str(chat.cardPath) === '' || str(chat.mode) === 'writing') return null
     const record = await worldBooks.bound(chat.cardPath, card, chat)
     if (!chat?.sessionId) return record
     const turn = Number([...(chat.messages || [])].reverse().find(message => message?.role === 'assistant')?.turn) || 0
@@ -3177,7 +3178,7 @@ export async function apply(ctx) {
       if (!changed?.indices) break
       selected = await boundedHistory.read(chatId, str(sessionId), { lastAssistant: true, lastVariables: true, enough: mvuReplies, include: changed.indices, revision: changed.revision })
     }
-    const chat = selected && ['story', 'script'].includes(selected.chat.mode || 'story') && selected.chat.requestMode !== 'sillytavern'
+    const chat = selected && ['story', 'script', 'writing'].includes(selected.chat.mode || 'story') && selected.chat.requestMode !== 'sillytavern'
       ? normalizeChat(selected.chat) : await chatForSession(sessionId)
     if (chat?._storageRevision !== undefined) surfaceSyncedRevisions.set(str(sessionId), chat._storageRevision)
     return chat
@@ -3185,7 +3186,7 @@ export async function apply(ctx) {
   async function storyContext({ sessionId, chatId }) {
     const need = { storyRows: async header => (await worldBookScanDepth(header)) + 1, lastAssistant: true, lastVariables: true }
     const selected = chatId === undefined ? await boundedHistory.forSession(sessionId, need) : await boundedHistory.read(chatId, undefined, need)
-    if (selected && ['story', 'script'].includes(selected.chat.mode || 'story') && selected.chat.requestMode !== 'sillytavern') return normalizeChat(selected.chat)
+    if (selected && ['story', 'script', 'writing'].includes(selected.chat.mode || 'story') && selected.chat.requestMode !== 'sillytavern') return normalizeChat(selected.chat)
     return chatId === undefined ? chatForSession(sessionId) : readChat(chatId)
   }
   async function prepareNextWorldBookContext(snapshot, signal) {
@@ -3552,7 +3553,7 @@ export async function apply(ctx) {
   // A manual plugin task: an exclusive background task, like the ledger; returns once started.
   async function startPluginTask(sessionId, key, input) {
     const chat = await taskStateReader.forSession(str(sessionId))
-    if (!chat || !['story', 'script'].includes(chat.mode)) throw new Error('当前没有游玩对话')
+    if (!chat || !['story', 'script', 'writing'].includes(chat.mode)) throw new Error('当前没有游玩对话')
     if (agentRegistry.get(chat.sessionId)?.phase?.kind === 'running' || chat.regenInProgress) throw new Error('请等待正文生成完成后再运行插件任务')
     if (pluginTaskJobs.has(chat.id)) throw new Error('已有插件任务在运行，请等它完成')
     await pluginApi.manualTaskFor(chat.sessionId, key, input)
@@ -4203,15 +4204,13 @@ export async function apply(ctx) {
       case 'getConversationBackgroundConfig': {
         const chat = await backgroundConfigForSession(str(args?.sessionId))
         if (!chat || groupOfMode(chat.mode) !== 'play') throw new Error('请先打开游玩会话')
-        return { backgroundModel: chat.backgroundModelSelection || null, imageModel: chat.imageModelSelection || null, backgroundTasks: normalizeBackgroundTasks(chat.backgroundTasks), webSearchEnabled: chat.webSearchEnabled === true, sceneImagesEnabled: chat.sceneImagesEnabled === true, sceneImagesAvailable: chat.mode !== 'writing' && TAVERN_RELEASE_CAPABILITIES.sceneImages, modelCatalog: await tavernModelCatalog() }
+        return { backgroundModel: chat.backgroundModelSelection || null, imageModel: chat.imageModelSelection || null, backgroundTasks: normalizeBackgroundTasks(chat.backgroundTasks), webSearchEnabled: chat.webSearchEnabled === true, sceneImagesEnabled: chat.sceneImagesEnabled === true, sceneImagesAvailable: TAVERN_RELEASE_CAPABILITIES.sceneImages, modelCatalog: await tavernModelCatalog() }
       }
       case 'setConversationBackgroundModel':
       case 'setConversationBackgroundConfig': {
         const sessionId = str(args?.sessionId)
         const chat = await chatForSession(sessionId)
         if (!chat || groupOfMode(chat.mode) !== 'play') throw new Error('请先打开游玩会话')
-        // Writing has no card material for an illustration plan; never accept the switch.
-        if (chat.mode === 'writing' && args?.sceneImagesEnabled === true) throw new Error('写作模式不支持场景生图')
         async function checkModel(value, label) {
           const selection = normalizeBackgroundModel(value)
           if (value !== null && !selection) throw new Error(label + '配置无效')
@@ -4554,7 +4553,7 @@ export async function apply(ctx) {
       case 'setStatusBarPlacement': {
         if (!['sidebar', 'body'].includes(args?.placement)) throw new Error('无效的状态栏位置')
         const chat = await chatForSession(args.sessionId)
-        if (!chat || !['story', 'script'].includes(chat.mode || 'story')) throw new Error('请先打开游玩会话')
+        if (!chat || !['story', 'script', 'writing'].includes(chat.mode || 'story')) throw new Error('请先打开游玩会话')
         await updateChat(chat.id, current => ({ ...current, statusBarPlacement: args.placement }), { source: 'ui.status-bar-placement' })
         return { statusBarPlacement: args.placement }
       }

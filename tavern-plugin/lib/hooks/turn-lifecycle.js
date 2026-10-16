@@ -105,7 +105,8 @@ export function registerTurnLifecycleHooks({
       chat,
       cwd: agent.session.header && agent.session.header.cwd,
       workspaceProjection,
-      fixedSystemSections: chat && ['story', 'script'].includes(chat.mode || 'story')
+      // 正文模式（含写作）都把当轮常驻世界书换成最新读出的内容；写作会话只解析全局世界书。
+      fixedSystemSections: chat && ['story', 'script', 'writing'].includes(chat.mode || 'story')
         ? withCurrentWorldbook(sessionStablePrefixSections(agent.session), (await nativeWorldBookTemplateContext(chat, await readChatCard(chat))).prefixContext ?? '')
         : sessionStablePrefixSections(agent.session)
     })

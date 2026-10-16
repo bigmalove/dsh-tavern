@@ -13,7 +13,7 @@ await createChatJournalStore({ dataRoot: root }).update('writing-chat', () => ({
   id: 'writing-chat', _storageRevision: 1, sessionId: 's', mode: 'writing',
   cardPath: '', cardName: '写作',
   backgroundConfigVersion: 1, conversationFeaturesVersion: 1,
-  backgroundTasks: { posture: false, characterDesign: false, variables: true, variableFeedback: true },
+  backgroundTasks: { posture: true, characterDesign: false, variables: true, variableFeedback: true },
   sceneImagesEnabled: false, webSearchEnabled: false, storyToolCallEnabled: false,
   macroState: { userName: '你', local: {}, global: {} },
   mvu: { enabled: false },
@@ -37,12 +37,13 @@ try {
   assert.equal(row.cardPath, '')
 
   const background = await host.rpc('getConversationBackgroundConfig', { sessionId: 's' })
-  assert.equal(background.sceneImagesAvailable, false, '写作会话不生图')
-  assert.equal(background.backgroundTasks.posture, false, '写作会话默认不结算人物姿势')
-  assert.equal(background.backgroundTasks.characterDesign, false)
+  assert.equal(background.sceneImagesAvailable, true, '写作会话同样可以生图')
+  assert.equal(background.backgroundTasks.posture, true, '姿势结算跟随默认，不再被写作模式关闭')
+  assert.equal(background.backgroundTasks.variables, true)
 
-  // 生图开关在写作会话里必须被拒绝，而不是悄悄打开。
-  await assert.rejects(host.rpc('setConversationBackgroundConfig', { sessionId: 's', sceneImagesEnabled: true }), /写作模式不支持场景生图/)
+  // 生图开关在写作会话里同样可开，联网搜索照常。
+  const images = await host.rpc('setConversationBackgroundConfig', { sessionId: 's', sceneImagesEnabled: true })
+  assert.equal(images.sceneImagesEnabled, true, '写作会话可以打开本局场景生图')
   const webSearch = await host.rpc('setConversationBackgroundConfig', { sessionId: 's', webSearchEnabled: true })
   assert.equal(webSearch.webSearchEnabled, true, '联网搜索仍可为本局打开')
 
