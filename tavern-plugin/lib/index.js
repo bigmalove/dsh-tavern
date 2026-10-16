@@ -171,6 +171,7 @@ import { createPresetLibrary } from './domain/preset-library.js'
 import { createForegroundOrchestrationStrategies } from './domain/foreground-orchestration-strategies.js'
 import { clearFailedTurnSurface, rollbackAvailability, reshadowRolledBackRounds } from './domain/rollback-surface.js'
 import { assistantResultForTurn } from './domain/session-turn-result.js'
+import { activeStoryTurn, createStorySubmissionTool, STORY_SUBMIT_TOOL_NAME } from './domain/story-tool-submission.js'
 import { forkTurnsByMessageId as forkTargetsFromSession } from './domain/conversation-fork-targets.js'
 import { createTavernRetryLimiter } from './domain/tavern-retry-limiter.js'
 import { lastTavernHelperVariables, projectTavernHelperContext, hydrateTavernHelperMessages, replaceTavernHelperVariables, HELPER_MESSAGE_COLD_WINDOW } from './domain/tavern-helper-context.js'
@@ -1981,6 +1982,7 @@ export async function apply(ctx) {
       mode: chat.mode || 'story',
       requestMode: chat.requestMode === 'sillytavern' ? 'sillytavern' : 'dsh',
       playerName: str(chat.macroState && chat.macroState.userName).trim() || '你',
+      storyToolCallEnabled: chat.storyToolCallEnabled === true,
       userProfile: {
         enabled: chat.userProfileEnabled === true,
         revision: Math.max(0, Number(chat.userProfileRevision) || 0)
@@ -2680,7 +2682,7 @@ export async function apply(ctx) {
   const pluginApi = createTavernPluginApi({
     ctx,
     logger: console,
-    reservedToolNames: [...BACKGROUND_TOOLS, HISTORY_RECALL_TOOL].map(tool => tool?.name).concat(['character_design_finish', 'worldbook_search', 'web_search', 'skill']).filter(Boolean),
+    reservedToolNames: [...BACKGROUND_TOOLS, HISTORY_RECALL_TOOL].map(tool => tool?.name).concat([STORY_SUBMIT_TOOL_NAME, 'character_design_finish', 'worldbook_search', 'web_search', 'skill']).filter(Boolean),
     media: pluginMedia,
     data: pluginData,
     ...pluginTurns,
@@ -3048,6 +3050,17 @@ export async function apply(ctx) {
     else chat.macroState.userName = name
     await writeChat(chat, { source: 'player-name.set' })
     return name
+  }
+  async function setStoryToolCallEnabled(sessionId, enabled) {
+    if (typeof enabled !== 'boolean') throw new Error('正文走工具调用设置必须是布尔值')
+    const chat = await chatForSession(sessionId)
+    if (chat === undefined) throw new Error('当前会话没有绑定人物卡')
+    if (chat.mode === 'card') throw new Error('卡片工作台不使用正文工具提交')
+    const session = agentRegistry.get(sessionId)?.session || sessionStore.get(sessionId)
+    if (activeStoryTurn(session) !== null) throw new Error('请等待当前生成结束后再修改正文输出方式')
+    chat.storyToolCallEnabled = enabled
+    await writeChat(chat, { source: 'story-tool-call.set' })
+    return enabled
   }
   async function setRequestMode(sessionId, requestMode) {
     const chat = await chatForSession(sessionId)
@@ -4527,6 +4540,7 @@ export async function apply(ctx) {
         return { statusBarPlacement: args.placement }
       }
       case 'setPlayerName': return { playerName: await setPlayerName(args && args.sessionId, args && args.userName) }
+      case 'setStoryToolCallEnabled': return { storyToolCallEnabled: await setStoryToolCallEnabled(args && args.sessionId, args && args.enabled) }
       case 'setRequestMode': return { requestMode: await setRequestMode(args && args.sessionId, args && args.requestMode) }
       case 'ensureOpening': return { view: await ensureNativeOpening(args && args.sessionId) }
       case 'getChoices': return { candidates: await candidateGenerator.find({ sessionId: args && args.sessionId, messageId: args && args.messageId }) }
@@ -4873,7 +4887,7 @@ export async function apply(ctx) {
   }
 
   const skillGatedTools = createSkillGatedTools()
-  const controlledToolNames = new Set(['tavern_read_variables', ...CARD_MEMORY_TOOLS, 'bash', 'pwsh', ...dshFileToolNames, 'skill', 'tavern_read_skill_reference', 'web_search', 'tavern_save_skill', ...cordisToolNames, 'tavern_user_profile_read', 'tavern_user_profile_save', 'tavern_user_profile_confirm', 'tavern_read_card', 'tavern_read_card_raw', 'tavern_search_card', 'tavern_replace_card_text', 'tavern_mvu_overview', 'tavern_apply_mvu', 'tavern_read_play_chat', 'tavern_read_script', 'tavern_recall_history', 'worldbook_search', 'tavern_read_worldbook', 'tavern_update_worldbook', 'tavern_read_preset', 'tavern_update_preset', 'tavern_read_regex_library', 'tavern_copy_card', 'tavern_update_card', 'tavern_restore_card', 'tavern_validate_card', 'tavern_test_response'])
+  const controlledToolNames = new Set([STORY_SUBMIT_TOOL_NAME, 'tavern_read_variables', ...CARD_MEMORY_TOOLS, 'bash', 'pwsh', ...dshFileToolNames, 'skill', 'tavern_read_skill_reference', 'web_search', 'tavern_save_skill', ...cordisToolNames, 'tavern_user_profile_read', 'tavern_user_profile_save', 'tavern_user_profile_confirm', 'tavern_read_card', 'tavern_read_card_raw', 'tavern_search_card', 'tavern_replace_card_text', 'tavern_mvu_overview', 'tavern_apply_mvu', 'tavern_read_play_chat', 'tavern_read_script', 'tavern_recall_history', 'worldbook_search', 'tavern_read_worldbook', 'tavern_update_worldbook', 'tavern_read_preset', 'tavern_update_preset', 'tavern_read_regex_library', 'tavern_copy_card', 'tavern_update_card', 'tavern_restore_card', 'tavern_validate_card', 'tavern_test_response'])
   const foregroundStrategies = createForegroundOrchestrationStrategies({
     compatibility: {
       beforeTurn: async function (input) {
@@ -5005,6 +5019,10 @@ export async function apply(ctx) {
   // ---------- 模型可选工具 ----------
   const tools = ctx.get('tools')
   if (tools !== undefined) {
+    tools.register(defineTool(createStorySubmissionTool({
+      chatForSession,
+      isBackground: function (sessionId) { return backgroundAgentRunner.owns(sessionId) }
+    })))
     registerGameplayTools({
       activeTurnOf,
       cardResponseTest,

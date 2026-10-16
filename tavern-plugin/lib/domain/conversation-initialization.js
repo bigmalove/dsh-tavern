@@ -57,6 +57,7 @@ export function createConversationInitialization(options) {
       userProfileRevision: 0,
       userProfileContextSnapshot: '',
       webSearchEnabled: false,
+      storyToolCallEnabled: false,
       backgroundModelSelection: null,
       imageModelSelection: null,
       macroState: { userName: '你', local: {}, global: {} },

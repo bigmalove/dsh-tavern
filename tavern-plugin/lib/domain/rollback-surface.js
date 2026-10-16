@@ -378,11 +378,35 @@ export function planRegenerationSurface(input) {
   }
   if (finalAssistantSeq === null) throw new SurfaceRecoveryError('重新生成流程未在当前模型消息面中产生正文')
 
+  // A terminal submit_story leaves its receipt as the surface node after the
+  // assistant call it belongs to. Replace the call without consuming that
+  // receipt and the surface keeps a tool result whose call is gone.
+  const finalAssistantIndex = nodes.indexOf(finalAssistantSeq)
+  const finalTurn = Number(ownership.eventAt(finalAssistantSeq)?.data?.turn)
+  let replacedEndIndex = finalAssistantIndex
+  while (replacedEndIndex + 1 < nodes.length) {
+    const next = Number(nodes[replacedEndIndex + 1])
+    const receipt = ownership.eventAt(next)
+    if (receipt?.type !== 'tool/result' || Number(receipt.data?.turn) !== finalTurn || attempt(next) !== OWNED) break
+    replacedEndIndex += 1
+  }
+
   const failed = turnIntervals(events).filter(interval => interval.failed && interval.end < eventStart)
   const residue = ownership.classify(event => failed.some(interval => event.seq > interval.start && event.seq < interval.end))
-  const accepts = seq => seq === oldAssistantSeq || attempt(seq) === OWNED || residue(seq) === OWNED ||
+  // A tool result travels with the call message it belongs to, so the old reply's
+  // own receipt is replaced together with that call instead of splitting the run.
+  const callReceipts = new Set()
+  for (let index = oldAssistantIndex + 1; index < nodes.length; index += 1) {
+    const receipt = ownership.eventAt(Number(nodes[index]))
+    if (receipt?.type !== 'tool/result') continue
+    const callSeq = Number(nodes[index - 1])
+    const call = ownership.eventAt(callSeq)
+    if (call?.type !== 'assistant/message' || modelSourceOf(call) === null || Number(call.data?.turn) !== Number(receipt.data?.turn)) continue
+    if (callSeq === oldAssistantSeq || attempt(callSeq) === OWNED) callReceipts.add(Number(nodes[index]))
+  }
+  const accepts = seq => seq === oldAssistantSeq || attempt(seq) === OWNED || residue(seq) === OWNED || callReceipts.has(seq) ||
     isRollbackUserTombstone(ownership.eventAt(seq)) || isRollbackAssistantTombstone(ownership.eventAt(seq), events)
-  const between = nodes.slice(oldAssistantIndex, nodes.indexOf(finalAssistantSeq) + 1).map(Number)
+  const between = nodes.slice(oldAssistantIndex, replacedEndIndex + 1).map(Number)
   // Messages written between the old reply and this attempt by something else
   // (a card script's chat message, a context refresh) are not ours to remove.
   // Leave them where they are and replace our own runs around them; refusing
@@ -399,7 +423,7 @@ export function planRegenerationSurface(input) {
   }
   const [main, ...rest] = runs.filter(run => run.length).map(run => planSurfaceRange({ nodes, start: run[0], end: run.at(-1), accepts, message: '重新生成消息归属不一致，无法安全清理' }))
   // Replacing a saved round is never allowed to consume or precede newer story.
-  if (nodes.slice(nodes.indexOf(finalAssistantSeq) + 1).some(seq =>
+  if (nodes.slice(replacedEndIndex + 1).some(seq =>
     !isRollbackUserTombstone(ownership.eventAt(seq)) && !isRollbackAssistantTombstone(ownership.eventAt(seq), events))) {
     throw new SurfaceRecoveryError('重新生成后已有新的消息，无法安全清理')
   }

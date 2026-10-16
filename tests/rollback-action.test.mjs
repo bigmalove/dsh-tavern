@@ -80,6 +80,14 @@ test('开场白不显示正文重生成入口，正式玩家轮次完成后只�
   assert.deepEqual(h.buttons().map(button => button.children[0]), ['生成候选项'])
 })
 
+test('更多菜单第一项是当前对话的正文走工具调用开关', () => {
+  const h = harness()
+  const menu = h.more().children[1]
+  assert.equal(menu.props.role, 'menu')
+  assert.deepEqual(menu.children.map(child => child.type.name).slice(0, 2), ['TavernStoryToolCallSetting', 'TavernStopBackgroundAction'])
+  assert.equal(menu.children[0].props.key, 'session')
+})
+
 test('实际回退组件在前台、后台和重生成期间禁用，完成后允许点击', async () => {
   const h = harness()
   for (const phase of ['front', 'background', 'regen']) {

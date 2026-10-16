@@ -248,6 +248,16 @@ test('游戏前台按快照启用联网搜索，卡片工作台始终启用', as
   }
 })
 
+test('正文工具只在当前游玩对话启用，保留历史检索与搜索工具', async () => {
+  assert.deepEqual(await harness('story', { chatFields: { storyToolCallEnabled: true } }).orchestrator.visibleTools('session-1'),
+    ['tavern_read_variables', 'skill', 'tavern_read_skill_reference', 'tavern_recall_history', 'worldbook_search', 'submit_story'])
+  assert.deepEqual(await harness('script', { webSearchEnabled: true, chatFields: { storyToolCallEnabled: true } }).orchestrator.visibleTools('session-1'),
+    ['tavern_read_variables', 'skill', 'tavern_read_skill_reference', 'tavern_read_script', 'tavern_recall_history', 'worldbook_search', 'web_search', 'submit_story'])
+  for (const chatFields of [{ storyToolCallEnabled: true }, { storyToolCallEnabled: false }]) {
+    assert.equal((await harness('card', { chatFields }).orchestrator.visibleTools('session-1')).includes('submit_story'), false)
+  }
+})
+
 test('脚本提示实际走本轮准备、Frame 与一次性消费，重复准备不丢失', async () => {
   const run = harness('story', {
     planner: createContextPlanner({ prompt: () => '写作规则' }),

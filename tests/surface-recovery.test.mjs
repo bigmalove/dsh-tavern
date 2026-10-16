@@ -7,6 +7,22 @@ import { replaceSessionSurface } from '../tavern-plugin/lib/domain/session-surfa
 
 const user = (id, plugin) => ({ id, role: 'user', content: [{ type: 'text', text: id }], source: plugin ? { kind: 'plugin', plugin } : { kind: 'user' } })
 const body = (id, turn) => ({ turn, step: 1, message: { id, role: 'assistant', content: [{ type: 'text', text: id }], source: { kind: 'model', provider: 'test', model: 'test' } } })
+// The terminal submit_story shape: a model call that carries the body, the durable
+// call record, and the receipt whose text is the body the tool returned.
+const storyCall = (id, turn, callId, content) => ({ turn, step: 1, message: { id, role: 'assistant', content: [{ type: 'tool-call', id: callId, name: 'submit_story', arguments: JSON.stringify({ content }) }], source: { kind: 'model', provider: 'test', model: 'test' } } })
+const storyReceipt = (id, turn, callId, text) => ({ turn, step: 1, message: { id, role: 'user', content: [{ type: 'tool-result', toolCallId: callId, isError: false, content: [{ type: 'text', text }] }], source: { kind: 'tool', callId } } })
+const storyBody = (session, turn, callId, content) => {
+  const call = appendSessionEvent(session, 'assistant/message', storyCall('call-' + callId, turn, callId, content), { surfaceOp: 'append' })
+  appendSessionEvent(session, 'tool/call', { turn, step: 1, callId, name: 'submit_story', arguments: JSON.stringify({ content }) })
+  const receipt = appendSessionEvent(session, 'tool/result', storyReceipt('receipt-' + callId, turn, callId, content), { surfaceOp: 'append', sourceEventSeqs: [call.seq] })
+  return { call, receipt }
+}
+const storyTurn = (session, turn, callId, content) => {
+  appendSessionEvent(session, 'turn/start', { turn })
+  const result = storyBody(session, turn, callId, content)
+  appendSessionEvent(session, 'turn/end', { turn, reason: { kind: 'completed' } })
+  return result
+}
 function fixture() {
   const session = Session.create('surface-recovery')
   const context = appendSessionEvent(session, 'user/message', user('historical-context', 'context-provider'), { surfaceOp: 'append' })
@@ -84,6 +100,31 @@ test('旧正文与重新生成之间夹着别处写入的消息（如卡片脚�
   assert.throws(() => planRegenerationSurface({ events: sessionEvents(other), nodes: other.surface.nodes, oldAssistantSeq: first.seq, eventStart: start }), /归属不一致/)
 })
 
+test('中止工具正文重生成时，回执与调用一起转为中止标记', async () => {
+  const { clearRegenerationAttemptSurface, regenerationAttemptTurns, locateRollbackSurface } = await import('../tavern-plugin/lib/domain/rollback-surface.js')
+  const session = Session.create('regen-story-abort')
+  appendSessionEvent(session, 'turn/start', { turn: 1 })
+  const input = appendSessionEvent(session, 'user/message', user('input-1'), { surfaceOp: 'append' })
+  const old = storyTurn(session, 1, 'old', '旧正文')
+  const eventStart = sessionEvents(session).length
+  appendSessionEvent(session, 'turn/start', { turn: 2 })
+  const regen = appendSessionEvent(session, 'user/message', user('regen', 'dsh-tavern-regen'), { surfaceOp: 'append' })
+  const fresh = storyBody(session, 2, 'new', '草稿正文')
+  appendSessionEvent(session, 'turn/end', { turn: 2, reason: { kind: 'aborted' } })
+
+  assert.deepEqual(regenerationAttemptTurns({ events: sessionEvents(session), eventStart }), [2])
+  assert.equal(clearRegenerationAttemptSurface({ session, eventStart }), 3)
+  const visible = session.surface.nodes.map(seq => sessionEvents(session).find(event => event.seq === seq))
+  assert.deepEqual(visible.slice(0, 3).map(event => event.data.message?.id ?? event.data.id), ['input-1', 'call-old', 'receipt-old'])
+  assert.equal(visible[3].data.source?.plugin, 'dsh-tavern-regeneration-abort')
+  assert.deepEqual(visible[3].data.message?.content ?? visible[3].data.content, [])
+  for (const gone of [regen.seq, fresh.call.seq, fresh.receipt.seq]) assert.ok(!session.surface.nodes.includes(gone))
+  // The old round keeps a legal call/receipt pair and stays rollbackable.
+  const rollback = locateRollbackSurface({ events: sessionEvents(session), nodes: session.surface.nodes })
+  assert.equal(rollback.assistantSeq, old.call.seq)
+  assert.deepEqual(rollback.shadowedSeqs, [input.seq, old.call.seq, old.receipt.seq, session.surface.nodes[3]])
+})
+
 test('卡片脚本在正文后写入的消息不会让这一轮无法回退，也不会被当成本轮输入', async () => {
   const { locateRollbackSurface } = await import('../tavern-plugin/lib/domain/rollback-surface.js')
   const session = Session.create('rollback-helper')
@@ -96,4 +137,33 @@ test('卡片脚本在正文后写入的消息不会让这一轮无法回退，�
   assert.equal(target.userSeq, input.seq)
   assert.equal(target.assistantSeq, reply.seq)
   assert.deepEqual(target.shadowedSeqs, [input.seq, reply.seq, script.seq])
+})
+
+test('工具正文重新生成连同回执一起替换，不留下缺少调用的工具结果', async () => {
+  const { planRegenerationSurface, locateRollbackSurface, regenerationProjection, applyRegenerationProjection } = await import('../tavern-plugin/lib/domain/rollback-surface.js')
+  const session = Session.create('regen-story-receipt')
+  appendSessionEvent(session, 'turn/start', { turn: 1 })
+  const input = appendSessionEvent(session, 'user/message', user('input-1'), { surfaceOp: 'append' })
+  const old = storyTurn(session, 1, 'old', '旧正文')
+  const eventStart = sessionEvents(session).length
+  appendSessionEvent(session, 'turn/start', { turn: 2 })
+  const regen = appendSessionEvent(session, 'user/message', user('regen', 'dsh-tavern-regen'), { surfaceOp: 'append' })
+  const fresh = storyBody(session, 2, 'new', '新正文')
+  appendSessionEvent(session, 'turn/end', { turn: 2, reason: { kind: 'completed' } })
+  assert.deepEqual(session.surface.nodes, [input.seq, old.call.seq, old.receipt.seq, regen.seq, fresh.call.seq, fresh.receipt.seq])
+
+  const plan = planRegenerationSurface({ events: sessionEvents(session), nodes: session.surface.nodes, oldAssistantSeq: old.call.seq, eventStart })
+  assert.deepEqual([plan.start, plan.end], [old.call.seq, fresh.receipt.seq])
+  assert.equal(plan.finalAssistantSeq, fresh.call.seq)
+  assert.deepEqual(plan.shadowedSeqs, [old.call.seq, old.receipt.seq, regen.seq, fresh.call.seq, fresh.receipt.seq])
+  assert.deepEqual(plan.cleanups, [])
+  // The old body's own receipt is consumed with its call; nothing dangles after it.
+  const rollback = locateRollbackSurface({ events: sessionEvents(session), nodes: session.surface.nodes })
+  assert.equal(rollback.endSeq, fresh.receipt.seq)
+
+  const projection = regenerationProjection(plan, { turn: 1, step: 1, message: { id: 'tavern-regen:op', role: 'assistant', content: [{ type: 'text', text: '新正文' }], source: { kind: 'model', provider: 'test', model: 'test' } } }, 'op')
+  applyRegenerationProjection(session, projection)
+  const visible = session.surface.nodes.map(seq => sessionEvents(session).find(event => event.seq === seq))
+  assert.deepEqual(visible.map(event => event.data.message?.id ?? event.data.id), ['input-1', 'tavern-regen:op'])
+  for (const gone of [old.call.seq, old.receipt.seq, regen.seq, fresh.call.seq, fresh.receipt.seq]) assert.ok(!session.surface.nodes.includes(gone))
 })

@@ -18776,6 +18776,34 @@ function bindTavernFontZoom(node, win) {
                     h("div", { role: "status", className: "dsh-local-feedback" }, busy ? "保存中…" : ""));
         }
 
+		function TavernStoryToolCallSetting(props) {
+			const [busy, setBusy] = React.useState(false);
+			const running = props.useSession(function (snapshot) { return snapshot.running === true; });
+			const live = useLiveTavernView(props.sessionId, "story-tool-call:" + String(running));
+			const enabled = !!(live.view && live.view.storyToolCallEnabled === true);
+			const blocked = busy || running || !live.view;
+			React.useEffect(function () { setBusy(false); }, [props.sessionId]);
+			async function toggle() {
+				if (blocked) return;
+				setBusy(true);
+				try {
+					await rpc("setStoryToolCallEnabled", { enabled: !enabled }, props.sessionId);
+					liveTavernView.invalidate(props.sessionId);
+					notifyTavernDataChanged(["sessions"], "story-tool-call");
+				} catch (err) {
+					tavernErrorHub.report("正文走工具调用设置", err);
+				} finally { setBusy(false); }
+			}
+			return React.createElement("button", {
+				type: "button",
+				role: "menuitemcheckbox",
+				"aria-checked": enabled,
+				disabled: blocked,
+				title: "仅对当前对话生效，需模型支持工具调用；从下一轮生成生效，正文生成完成后一次性显示",
+				onClick: toggle
+			}, busy ? "正文走工具调用：设置中…" : (enabled ? "正文走工具调用：开" : "正文走工具调用：关"));
+		}
+
 		function TavernMoreActions(props) {
 			const [open, setOpen] = React.useState(false);
 			const [placement, setPlacement] = React.useState(null);
@@ -18807,6 +18835,7 @@ function bindTavernFontZoom(node, win) {
 			return React.createElement("div", { className: "dsh-tavern-more-actions", ref: root },
 				React.createElement("button", { ref: trigger, type: "button", className: "dsh-tavern-choice-trigger", "aria-haspopup": "menu", "aria-expanded": open, onClick: function () { setOpen(function (value) { return !value; }); } }, "更多 ▾"),
 				React.createElement("div", { className: "dsh-tavern-more-menu", role: "menu", hidden: !open, style: placement || undefined, onClick: function (event) { if (event.target && event.target.closest && event.target.closest("button:not(:disabled)")) setOpen(false); } },
+					React.createElement(TavernStoryToolCallSetting, Object.assign({}, props, { key: props.sessionId })),
                     React.createElement(TavernStopBackgroundAction, Object.assign({}, props, { inMenu: true })),
 					React.createElement(TavernEditBodyAction, props),
 					React.createElement(TavernRollbackAction, props),

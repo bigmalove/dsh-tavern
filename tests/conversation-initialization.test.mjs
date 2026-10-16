@@ -123,6 +123,17 @@ test('开局草稿世界书在第一次保存前固化，再次打开不覆盖�
   assert.deepEqual(reopened.openingWorldbookSnapshot, snapshot)
 })
 
+test('正文工具提交默认关闭、独立于全局设置，已有对话开启后重入保留', async () => {
+  const h = initializationFixture()
+  h.state.settings.storyToolCallEnabled = true
+  const created = await h.make().start(h.input)
+  assert.equal(created.storyToolCallEnabled, false)
+  const saved = h.saved.get(created.id)
+  saved.storyToolCallEnabled = true
+  h.saved.set(created.id, saved)
+  assert.equal((await h.make().start(h.input)).storyToolCallEnabled, true)
+})
+
 test('新局采用全局默认模型，重入不覆盖本局选择', async () => {
   const h = initializationFixture()
   const foreground = { provider: 'p', model: 'story', reasoningEffort: 'low' }
