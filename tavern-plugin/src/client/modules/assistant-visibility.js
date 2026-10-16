@@ -25,7 +25,7 @@ function installTavernAssistantVisibilityPatch(require) {
 		}
 		if (target !== "chat" || context.kind !== "assistant-step") return node;
 		const messageId = node.data && node.data.finalNode && node.data.finalNode.messageId;
-		if (/^tavern-seed-trajectory:v1:.+:2$/.test(String(messageId || ""))) {
+		if (/^tavern-seed-trajectory:v\d+:.+:2$/.test(String(messageId || ""))) {
 			return Object.assign({}, node, { visibility: "hidden" });
 		}
 		return node;

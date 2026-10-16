@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 export const SYSTEM_PROMPT_DEFINITIONS = Object.freeze([
   ['system-append', 'system附加指令', '默认开启，可按需关闭。内容会添加到前台、后台、卡片及文生图 Agent 的 system 提示词最前面（位于外部预设之前），修改后从下一次请求生效。'],
   ['story', '正文 Agent 核心提示词', '控制普通游玩正文的续写规则。'],
+  ['writing', '写作模式核心提示词', '控制写作模式（无人物卡、用户不扮演角色）的写作规则。'],
   ['script-story', '剧本模式正文补充', '控制绑定剧本时追加给正文 Agent 的规则。'],
   ['candidate-story', '普通剧情候选项', '控制普通剧情候选项的数量、类型和输出格式。'],
   ['candidate-script', '剧本候选项', '控制剧本模式候选项及剧本推进规则。'],

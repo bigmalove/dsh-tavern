@@ -33,7 +33,7 @@ export function regenerationTargetDiagnostic(chat, session, { reason, assistantI
   const indices = new Set(Array.from({length: Math.min(12, messages.length)}, (_, i) => messages.length - Math.min(12, messages.length) + i))
   for (let i = Math.max(0, assistantIndex - 2); i <= Math.min(messages.length - 1, assistantIndex + 2); i++) indices.add(i)
   return { version: 1, reason, chat: { id: diagnosticIdentity(chat?.id), revision: number(chat?._storageRevision),
-    timelineRevision: number(chat?.timeline?.revision), mode: label(chat?.mode, ['story', 'script']),
+    timelineRevision: number(chat?.timeline?.revision), mode: label(chat?.mode, ['story', 'script', 'writing']),
     regenInProgress: chat?.regenInProgress === true, settleStatus: label(chat?.settleStatus, ['idle', 'running', 'pending', 'done', 'failed']),
     messagesType: type(chat?.messages), messageCount: messages.length,
     messages: [...indices].sort((a,b) => a-b).map(i => message(messages[i], i)) },

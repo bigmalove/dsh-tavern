@@ -12,7 +12,8 @@ import { ensureSessionSeedTrajectory } from './session-seed-trajectory.js'
 import { defaultUserPreferenceProfile } from './user-preference-profile.js'
 
 function str(value) { return value === undefined || value === null ? '' : String(value) }
-function groupOfMode(mode) { return !mode || mode === 'story' || mode === 'script' ? 'play' : 'card' }
+function isBodyMode(mode) { return mode === 'story' || mode === 'script' || mode === 'writing' }
+function groupOfMode(mode) { return !mode || isBodyMode(mode) ? 'play' : 'card' }
 
 /** Owns initialization, repeat-entry and opening recovery; never generates a model turn. */
 export function createConversationInitialization(options) {
@@ -34,12 +35,14 @@ export function createConversationInitialization(options) {
   }
 
   function newChat(card, mode, requestMode) {
-    const chatMode = mode === 'card' ? 'card' : (mode === 'script' ? 'script' : 'story')
+    const chatMode = mode === 'card' ? 'card' : (mode === 'script' ? 'script' : (mode === 'writing' ? 'writing' : 'story'))
     const hasCard = card !== null && card !== undefined && str(card.path) !== ''
+    // Writing conversations own no card; the label keeps list and export names readable.
+    const cardName = hasCard ? card.name : (chatMode === 'writing' ? '写作' : '卡片工作台')
     const chat = {
       id: id('chat'),
       cardPath: hasCard ? card.path : '',
-      cardName: hasCard ? card.name : '卡片工作台',
+      cardName: cardName,
       mode: chatMode,
       requestMode: requestMode === 'sillytavern' && chatMode !== 'card' ? 'sillytavern' : 'dsh',
       scriptState: chatMode === 'script' ? { cursor: 0, recalledChunkIds: [], prepared: null, lastReference: null, totalChunks: 0, title: '', scriptVersion: 0 } : null,
@@ -89,11 +92,14 @@ export function createConversationInitialization(options) {
     const currentSettings = await settings()
     const defaults = normalizePlayDefaults(currentSettings.defaultPlaySettings)
     const effectiveRequestMode = requestMode === 'sillytavern' ? 'sillytavern' : 'dsh'
-    const requestedMode = mode === 'card' || mode === 'revision' || mode === 'extract' ? 'card' : (mode === 'script' ? 'script' : (mode === 'story' ? 'story' : null))
-    const card = str(cardPath) === '' && requestedMode === 'card' ? null : await cards.read(cardPath)
+    const requestedMode = mode === 'card' || mode === 'revision' || mode === 'extract' ? 'card' : (mode === 'script' ? 'script' : (mode === 'story' ? 'story' : (mode === 'writing' ? 'writing' : null)))
+    // Writing conversations own no character card: an empty path is their normal state,
+    // never a missing resource.
+    if (requestedMode === 'writing') cardPath = ''
+    const card = str(cardPath) === '' && (requestedMode === 'card' || requestedMode === 'writing') ? null : await cards.read(cardPath)
     if (card === undefined) throw new Error('人物卡不存在: ' + cardPath)
     // 游玩模式内部仍是 story/script 两类：人物卡已绑定剧本时必须走剧本（script）。
-    const script = card === null ? undefined : await cards.script(cardPath)
+    const script = card === null || requestedMode === 'writing' ? undefined : await cards.script(cardPath)
     const hasScript = script !== undefined && Array.isArray(script.chunks) && script.chunks.length > 0
     let chatMode = requestedMode
     if (chatMode === null || mode === 'play') chatMode = hasScript ? 'script' : 'story'
@@ -111,16 +117,18 @@ export function createConversationInitialization(options) {
     }
     const macroState = { userName: str(userName).trim().slice(0, 80) || defaults.playerName, local: {}, global: {} }
     const runtimePresetSnapshot = groupOfMode(chatMode) === 'play' ? await playPresetSnapshot() : null
-    // The card workbench opens empty: no greeting is shown or sent to the model.
-    let openingSourceText = chatMode === 'card' ? '' : resolveCardOpening(card, openingId)
-    const openingExtensions = chatMode === 'card' ? null : await cards.extensions(cardPath)
-    const openingChoices = chatMode === 'card' ? [] : cardOpeningChoices(card)
+    // The card workbench opens empty; a writing conversation starts from a blank
+    // page on purpose: no card opening exists to resolve and none is required.
+    const blankOpening = chatMode === 'card' || chatMode === 'writing'
+    let openingSourceText = blankOpening ? '' : resolveCardOpening(card, openingId)
+    const openingExtensions = blankOpening ? null : await cards.extensions(cardPath)
+    const openingChoices = blankOpening ? [] : cardOpeningChoices(card)
     const selectedOpeningIndex = str(openingId) === '' ? 0 : Math.max(0, openingChoices.findIndex(function (choice) { return choice.id === str(openingId) }))
-    const usesMvu = chatMode !== 'card' && (
+    const usesMvu = chatMode !== 'card' && chatMode !== 'writing' && (
       (Array.isArray(openingExtensions && openingExtensions.mvuResources) && openingExtensions.mvuResources.some(function (item) { return item.enabled !== false }))
       || openingChoices.some(function (choice) { return /<(?:initvar|json_?patch)>|_\.(?:set|insert|assign|remove|unset|delete|add)\(/i.test(choice.text) })
     )
-    if (preparation?.openingMessages && groupOfMode(chatMode) === 'play') {
+    if (preparation?.openingMessages && groupOfMode(chatMode) === 'play' && chatMode !== 'writing') {
       for (const choice of openingChoices) {
         const preparedText = preparation.openingMessages[choice.id];
         if (typeof preparedText === 'string') choice.text = preparedText;
@@ -130,8 +138,8 @@ export function createConversationInitialization(options) {
     const openingRegexScripts = (Array.isArray(openingExtensions && openingExtensions.regexScripts) ? openingExtensions.regexScripts : []).concat(
       Array.isArray(runtimePresetSnapshot && runtimePresetSnapshot.regexScripts) ? runtimePresetSnapshot.regexScripts : []
     )
-    const openingProjection = chatMode === 'card'
-      ? { agentText: openingSourceText, renderedText: openingSourceText, sessionText: openingSourceText, displayText: openingSourceText, displayMode: 'markdown', displayParts: [{ kind: 'markdown', text: openingSourceText }], warnings: [], macroState }
+    const openingProjection = blankOpening
+      ? { agentText: openingSourceText, renderedText: openingSourceText, sessionText: openingSourceText, displayText: openingSourceText, displayMode: 'markdown', displayParts: openingSourceText === '' ? [] : [{ kind: 'markdown', text: openingSourceText }], warnings: [], macroState }
       : projectOpeningCommit(openingSourceText, {
           charName: str(card.name),
           macroState,
@@ -166,14 +174,17 @@ export function createConversationInitialization(options) {
     chat.userProfileId = profile?.profileId || 'default'
     chat.userProfileEnabled = profile?.hasConfirmed === true && profile.defaultEnabled === true
     chat.webSearchEnabled = groupOfMode(chat.mode) === 'play' && defaults.webSearchEnabled
-    chat.sceneImagesEnabled = groupOfMode(chat.mode) === 'play' && defaults.sceneImagesEnabled
+    // No card means no scene material: illustration planning stays a play feature.
+    chat.sceneImagesEnabled = groupOfMode(chat.mode) === 'play' && chat.mode !== 'writing' && defaults.sceneImagesEnabled
     chat.statusBarPlacement = defaults.statusBarPlacement
     chat.conversationFeaturesVersion = 1
     chat.backgroundModelSelection = groupOfMode(chat.mode) === 'play' ? normalizeBackgroundModel(currentSettings.defaultBackgroundModel) : null
-    chat.imageModelSelection = groupOfMode(chat.mode) === 'play' ? normalizeBackgroundModel(currentSettings.defaultImageModel) : null
+    chat.imageModelSelection = groupOfMode(chat.mode) === 'play' && chat.mode !== 'writing' ? normalizeBackgroundModel(currentSettings.defaultImageModel) : null
     chat.disabledWritingSkills = groupOfMode(chat.mode) === 'play' ? [...(currentSettings.defaultDisabledWritingSkills || [])] : []
     chat.backgroundConfigVersion = 1
-    chat.backgroundTasks = normalizeBackgroundTasks(groupOfMode(chat.mode) === 'play' ? defaults.backgroundTasks : {})
+    // A writing conversation has no variables and no character posture to settle:
+    // its default background work is empty until the user turns something on.
+    chat.backgroundTasks = normalizeBackgroundTasks(chat.mode === 'writing' ? { posture: false, characterDesign: false } : (groupOfMode(chat.mode) === 'play' ? defaults.backgroundTasks : {}))
     chat.mvu = usesMvu ? {
       enabled: true,
       owner: 'official',
@@ -249,7 +260,7 @@ export function createConversationInitialization(options) {
 
 
   function openingText(chat, card) {
-    if ((chat.mode || 'story') === 'card') return ''
+    if ((chat.mode || 'story') === 'card' || chat.mode === 'writing') return ''
     if (typeof chat.openingText === 'string') return chat.openingText
     const greeting = Array.isArray(chat.messages) ? chat.messages.find(message => message && message.greeting === true && typeof message.text === 'string') : undefined
     if (greeting !== undefined) return greeting.text
@@ -319,7 +330,7 @@ export function createConversationInitialization(options) {
     const target = readyTarget || await native.wait(sessionId)
     if (groupOfMode(chat.mode) === 'play' && chat.requestMode !== 'sillytavern') {
       await native.ensurePrefix(target.session, await snapshots.ensure(chat, card))
-      await ensureSessionSeedTrajectory(target.session)
+      await ensureSessionSeedTrajectory(target.session, chat.mode)
       await native.flush(target.session)
     }
     if (groupOfMode(chat.mode) === 'card') {

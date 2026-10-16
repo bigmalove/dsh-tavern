@@ -8,7 +8,7 @@ import { diffJson } from './json-mutation.js'
 
 function latest(chat) {
   const message = chat.messages?.at(-1)
-  if (!['story', 'script'].includes(chat.mode || 'story') || message?.role !== 'assistant' || message.greeting) throw new Error('只能编辑最后一轮正文')
+  if (!['story', 'script', 'writing'].includes(chat.mode || 'story') || message?.role !== 'assistant' || message.greeting) throw new Error('只能编辑最后一轮正文')
   return message
 }
 function source(message) { return message.projectionText ?? message.sourceText ?? message.text ?? '' }

@@ -314,7 +314,7 @@
 		}
 
 		function tavernProjectionForTurn(view, turn) {
-			if (!view || !isPlayMode(view.mode) || !Array.isArray(view.replyProjections)) return null;
+			if (!view || !isBodyMode(view.mode) || !Array.isArray(view.replyProjections)) return null;
 			const lookup = createSessionViewReader.projectionLookup;
 			if (lookup?.has(view.replyProjections)) {
 				const projection = lookup.row(view.replyProjections,turn);

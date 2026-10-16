@@ -301,6 +301,8 @@
 				)
 			);
 			if (view.mode === "card") return null;
+			// 写作会话没有人物卡、世界书与姿势结算：只保留与正文有关的区块。
+			const writing = isWritingMode(view.mode);
 			const statusText = view.settleStatus === "running" ? "正在执行后台结算" : (view.settleStatus === "error" ? "后台结算失败" : "后台结算已完成");
 			const cardUpdateNotice = !view.cardUpdate ? "" : view.cardUpdate.error ? "检查更新失败：" + view.cardUpdate.error
 				: view.cardUpdate.worldbookSyncRequired || view.cardUpdate.legacy ? "旧存档需同步"
@@ -309,12 +311,12 @@
 				: view.cardUpdate.worldbookChanged ? "世界书有变化" : "";
 			return h("aside", { className: "dsh-tavern-status dsh-tavern-status-dashboard" },
 				h("div", { className: "dsh-tavern-status-head" },
-					h("div", { className: "dsh-tavern-status-role" }, view.card.name),
-                    h("nav", { className: "dsh-tavern-status-resource-links", "aria-label": "本局资料" },
+					h("div", { className: "dsh-tavern-status-role" }, writing ? "写作" : view.card.name),
+                    writing ? null : h("nav", { className: "dsh-tavern-status-resource-links", "aria-label": "本局资料" },
                         h("button", { type: "button", disabled: !view.card.path, onClick: () => props.openStyleTab("dsh-tavern:cards", { cardPath: view.card.path }) }, "打开人物卡 ↗"),
                         h("button", { type: "button", disabled: !view.card.path || resourceLinkBusy || !currentResourceBinding || noWorldBook || unavailableWorldBook, title: "打开本局人物卡绑定的世界书；多本绑定时打开主世界书", onClick: openWorldBookDetail }, resourceLinkBusy ? "正在打开…" : !currentResourceBinding ? "正在读取世界书…" : noWorldBook ? "未绑定世界书" : unavailableWorldBook ? "世界书不可用" : "打开世界书 ↗")),
                     resourceLinkError ? h("div", { className: "dsh-card-error", role: "status" }, resourceLinkError) : null,
-					(view.card.tags || []).length ? h("div", { className: "dsh-tavern-status-tags" }, (view.card.tags || []).slice(0, 8).map(function (tag) { return h("span", { key: tag, className: "dsh-tavern-status-tag" }, tag); })) : null,
+					(view.card.tags || []).length && !writing ? h("div", { className: "dsh-tavern-status-tags" }, (view.card.tags || []).slice(0, 8).map(function (tag) { return h("span", { key: tag, className: "dsh-tavern-status-tag" }, tag); })) : null,
 					h("div", { className: "dsh-tavern-status-settle" }, h("span", { className: "dsh-tavern-status-dot " + (view.settleStatus || "idle") }), statusText)
 				),
 					h("div", { className: "dsh-tavern-status-body" },
@@ -327,7 +329,7 @@
 						),
 						cardUpdateError ? h("p", { className: "dsh-card-error", role: "alert" }, "未应用更新：" + cardUpdateError) : null
 					) : null,
-					h(TavernCardAppDock, { sessionId: props.sessionId }),
+					writing ? null : h(TavernCardAppDock, { sessionId: props.sessionId }),
 					view.settleStatus === "error" ? h("div", { className: "dsh-card-error" },
 						h("div", null, view.settleError || "后台结算失败，请重试。"),
 						h("button", { className: "dsh-tavern-btn", disabled: settlementRetryBusy, onClick: retrySettlement }, settlementRetryBusy ? "重试中…" : "重试后台结算")
@@ -376,7 +378,7 @@
 						),
 						guideError ? h("div", { className: "dsh-card-error" }, guideError) : null
 					),
-					h("section", { className: "dsh-tavern-status-section" },
+					writing ? null : h("section", { className: "dsh-tavern-status-section" },
 						h("div", { className: "dsh-tavern-character-design-head" },
                             h("div", { className: "dsh-tavern-status-label" }, "人物设计档案（" + ((view.characterDesigns && view.characterDesigns.characters || []).length) + "）"),
                             h("button", { className: "dsh-tavern-btn", disabled: running || view.activity?.busy || view.characterDesignTask?.status === "running", onClick: () => designCharacter(view.characterDesignTask?.status === "failed" ? view.characterDesignTask.guidance : "") }, view.characterDesignTask?.status === "running" ? "设计中…" : view.characterDesignTask?.status === "failed" ? "重试设计" : "设计人物")),
@@ -408,8 +410,8 @@
 						)
 					),
 					h(TavernPluginTasks, { sessionId: props.sessionId, activity: view.activity, busy: running || view.activity?.busy || view.activity?.phase === "pending" }),
-					h(TavernLedger, { sessionId: props.sessionId, ledger: view.ledger, ledgerTask: view.ledgerTask, busy: running || view.activity?.busy }),
-					h("section", { className: "dsh-tavern-status-section" },
+					writing ? null : h(TavernLedger, { sessionId: props.sessionId, ledger: view.ledger, ledgerTask: view.ledgerTask, busy: running || view.activity?.busy }),
+					writing ? null : h("section", { className: "dsh-tavern-status-section" },
 						h("div", { className: "dsh-tavern-status-label" }, "人物姿势"),
 						view.posture ? h("div", { className: "dsh-tavern-status-now" }, view.posture) : h("div", { className: "dsh-tavern-status-empty" }, "等待第一轮状态结算")
 					)
@@ -639,10 +641,12 @@
 			}
 			const h = React.createElement;
 			const isScript = sessionMode === "script";
+			// 候选项围绕人物行为展开，属于游玩（含剧本）能力；写作会话只保留重新生成正文。
+			const candidatesEnabled = isPlayMode(sessionMode);
 			const hasReadyPanel = candidatePanelState !== null && candidatePanelState.sessionId === props.sessionId && candidatePanelState.messageId === props.messageId && candidatePanelState.phase === "ready";
-			if (!isPlayMode(sessionMode) || latestMessageId !== props.messageId) return null;
+			if (!isBodyMode(sessionMode) || latestMessageId !== props.messageId) return null;
 			return h(React.Fragment, null,
-				h("button", { className: "dsh-tavern-choice-trigger", disabled: busy || taskBusy || activity.busy || settlementActive || regenBusy, title: settlementActive ? "当前正文正在后台结算，请等待完成" : (activity.busy ? activity.blockReason : (hasReadyPanel ? "重新生成候选项（可先填写意见）" : (isScript ? "手动生成候选项；由于跟随剧本，只有一个推荐候选项" : "手动生成候选项"))), onClick: function () {
+				candidatesEnabled ? h("button", { className: "dsh-tavern-choice-trigger", disabled: busy || taskBusy || activity.busy || settlementActive || regenBusy, title: settlementActive ? "当前正文正在后台结算，请等待完成" : (activity.busy ? activity.blockReason : (hasReadyPanel ? "重新生成候选项（可先填写意见）" : (isScript ? "手动生成候选项；由于跟随剧本，只有一个推荐候选项" : "手动生成候选项"))), onClick: function () {
 					setRegenPanel(null);
 					if (hasReadyPanel) {
 						const previous = candidatePanelState;
@@ -651,7 +655,7 @@
 					} else {
 						generate(false);
 					}
-				} }, settlementActive ? "后台结算中…" : (activity.busy ? activity.label : ((busy || taskBusy) ? "生成中…" : (hasReadyPanel ? "重新生成候选项" : "生成候选项")))),
+				} }, settlementActive ? "后台结算中…" : (activity.busy ? activity.label : ((busy || taskBusy) ? "生成中…" : (hasReadyPanel ? "重新生成候选项" : "生成候选项")))) : null,
 				(canReplayFailed || canRollback) ? h("button", { className: "dsh-tavern-choice-trigger", disabled: frontRunning || (!canReplayFailed && activity.busy && !settlementActive) || regenBusy || replayBusy, title: canReplayFailed ? "移除被中断的回复并原样重放本轮请求（复用模型缓存）" : (settlementActive ? "重新生成将取消当前正文的后台结算" : (activity.busy ? activity.blockReason : "可选择填写意见，再重新生成并替换当前正文")), onClick: canReplayFailed ? replayFailed : openRegeneration }, replayBusy ? "重放中…" : regenBusy ? "重生成中…" : canReplayFailed ? "重新生成本轮" : "重新生成正文") : null
 			);
 		}
@@ -962,13 +966,15 @@
             const h = React.createElement;
             const owner = props.sessions.subagentAddress(props.sessionId)?.parentSessionId || props.sessionId;
             const mode = useTavernSessionMode(owner);
+            // 写作会话没有玩家称呼、状态栏位置和世界书；预设与长期偏好仍然是文风来源。
+            const writing = isWritingMode(mode);
             return h("aside", { className: "dsh-tavern-status dsh-local-settings", "aria-label": "本局设置" },
                 h("div", { className: "dsh-tavern-status-head" }, h("strong", null, "本局设置")),
-                h("div", { className: "dsh-tavern-status-body" }, isPlayMode(mode) ? h(React.Fragment, null,
-                    h("p", { className: "dsh-local-intro" }, "仅影响本局，修改后自动保存。已有对话和变量会保留。"),
+                h("div", { className: "dsh-tavern-status-body" }, isBodyMode(mode) ? h(React.Fragment, null,
+                    h("p", { className: "dsh-local-intro" }, writing ? "仅影响本局，修改后自动保存。写作会话不需要人物卡和开场白。" : "仅影响本局，修改后自动保存。已有对话和变量会保留。"),
                     h("section", { className: "dsh-local-section" }, h("h3", null, "基本信息"),
-                        h(TavernLocalPlayerName, { key: owner + ":name", sessionId: owner }),
-                        h(TavernStatusBarSetting, { key: owner + ":status", sessionId: owner }),
+                        writing ? null : h(TavernLocalPlayerName, { key: owner + ":name", sessionId: owner }),
+                        writing ? null : h(TavernStatusBarSetting, { key: owner + ":status", sessionId: owner }),
                         h(TavernConversationPreset, { key: owner + ":preset", sessionId: owner }),
                         h(UserPreferenceProfileTab, { key: owner + ":profile", scope: { sessionId: owner }, conversationOnly: true }),
                         h("p", { className: "dsh-local-warning" }, "切换预设或长期偏好会使提示词缓存失效，首次请求会增加耗时和费用。")),
@@ -979,7 +985,7 @@
         function TavernConversationSettingsAction(props) {
             const owner = props.sessions.subagentAddress(props.sessionId)?.parentSessionId || props.sessionId;
             const mode = useTavernSessionMode(owner);
-            if (!isPlayMode(mode)) return null;
+            if (!isBodyMode(mode)) return null;
             return React.createElement("button", { type: "button", className: "dsh-tavern-btn dsh-tavern-header-settings", "aria-label": "酒馆状态", title: "查看本局酒馆状态", onClick: () => props.open(owner) },
                 React.createElement("svg", { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round", "aria-hidden": "true" },
                     React.createElement("path", { d: "M4 7h3m4 0h9M4 17h9m4 0h3" }),
@@ -1001,6 +1007,7 @@
             const [reasoning, setReasoning] = React.useState({ key: "", value: null, error: "" });
             const [imageSelection, setImageSelection] = React.useState(null);
             const [imageReasoning, setImageReasoning] = React.useState({ key: "", value: null });
+            const sessionMode = useTavernSessionMode(props.sessionId);
             const key = selection ? JSON.stringify({ provider: selection.provider, model: selection.model }) : "";
             const imageKey = imageSelection ? JSON.stringify({ provider: imageSelection.provider, model: imageSelection.model }) : "";
             async function load() {
@@ -1062,7 +1069,7 @@
                         modelOptions())),
                     imageKey ? h("label", null, "推理强度", h("select", { "aria-label": "本局生图 Agent 推理强度", className: "dsh-tavern-settings-select", value: imageSelection?.reasoningEffort || "", disabled: !imageEfforts.length || busy, onChange: event => { const next = { ...imageSelection }; if (event.target.value) next.reasoningEffort = event.target.value; else delete next.reasoningEffort; return save({ imageModel: next }); } },
                         h("option", { value: "" }, "模型默认"), imageEfforts.map(item => h("option", { key: item.id, value: item.id }, item.name || item.id)))) : null
-                    ) : null, h("section", { className: "dsh-local-section" }, h("h3", null, "后台结算"), h("p", { className: "dsh-local-help" }, "从下一次后台任务生效，正在运行的任务不变。"),
+                    ) : null, isWritingMode(sessionMode) ? null : h("section", { className: "dsh-local-section" }, h("h3", null, "后台结算"), h("p", { className: "dsh-local-help" }, "从下一次后台任务生效，正在运行的任务不变。"),
                     [["variables", "变量结算", "MVU 卡建议开启，否则变量和状态栏可能不再同步。普通卡不执行此任务。"], ["posture", "人物姿势结算", "总结本轮结束时人物的位置、动作和姿势。"], ["variableFeedback", "变量回灌前台", "每轮把上一轮变化的变量最新值告诉前台（单项最多 100 字），减少时间、地点、数值前后不一致。"]].map(([name, title, description]) => h("label", { key: name, className: "dsh-tavern-background-task" },
                         h("span", null, title, h("span", { className: "dsh-tavern-settings-desc" }, description)),
                         h("input", { type: "checkbox", role: "switch", "aria-label": title, checked: tasks[name], disabled: !loaded || busy, onChange: event => { return save({ backgroundTasks: { [name]: event.target.checked } }); } }))),
@@ -1158,9 +1165,9 @@
 				h(TavernStopBackgroundAction, { sessionId: ownerSessionId }),
 				h(TavernImageAgentUndoAction, { parentSessionId: ownerSessionId, agentSessionId: props.sessionId, running })) : null;
 			return h("div", { className: "dsh-tavern-dock-actions" },
-				isPlayMode(sessionMode) && latestMessageId ? React.createElement(CandidateAction, Object.assign({}, props, { messageId: latestMessageId })) : null,
+				isBodyMode(sessionMode) && latestMessageId ? React.createElement(CandidateAction, Object.assign({}, props, { messageId: latestMessageId })) : null,
 				isPlayMode(sessionMode) && live.view && !live.view.canClearIncompleteReply ? React.createElement(TavernPluginComposerActions, { sessionId: props.sessionId, turn: imageTurn, running: running }) : null,
-				isPlayMode(sessionMode) ? React.createElement(TavernMoreActions, props) : React.createElement(TavernCompactionAction, props),
+				isBodyMode(sessionMode) ? React.createElement(TavernMoreActions, props) : React.createElement(TavernCompactionAction, props),
                 live.view && live.view.contextCompaction && live.view.contextCompaction.operation && live.view.contextCompaction.operation.status === "running" ? h("span", { role: "status", className: "dsh-tavern-settings-desc" }, "正在压缩前后台上下文…")
                     : live.view && live.view.contextCompaction && live.view.contextCompaction.warning ? h("span", { role: "status", className: "dsh-tavern-settings-desc" }, live.view.contextCompaction.warning,
                         h("button", { type: "button", className: "dsh-tavern-notice-dismiss", "aria-label": "关闭压缩提示", title: "关闭", onClick: function () { rpc("dismissCompactionWarning", {}, ownerSessionId).catch(function (err) { tavernErrorHub.report("关闭压缩提示", err); }); } }, "×")) : null
@@ -1516,7 +1523,7 @@
 			const opened = panel && panel.sessionId === props.sessionId && panel.phase === "input";
 			React.useEffect(function () { if (opened) setGuidance(regenGuidance.get(props.sessionId) || ""); }, [opened, props.sessionId]);
 			const h = React.createElement;
-			if (!isPlayMode(sessionMode) || running || !panel || panel.sessionId !== props.sessionId) return null;
+			if (!isBodyMode(sessionMode) || running || !panel || panel.sessionId !== props.sessionId) return null;
 			async function generate() {
 				const guide = guidance.trim();
 				if (guide) regenGuidance.set(props.sessionId, guide); else regenGuidance.delete(props.sessionId);

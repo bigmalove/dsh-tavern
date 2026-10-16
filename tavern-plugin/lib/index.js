@@ -538,7 +538,8 @@ export async function apply(ctx) {
   }
   function groupOfMode(mode) {
     const m = mode || 'story'
-    return m === 'story' || m === 'script' ? 'play' : 'card'
+    // Writing is a card-less body mode: it shares the play pipeline.
+    return m === 'story' || m === 'script' || m === 'writing' ? 'play' : 'card'
   }
   function renderCardText(text, card, macroState = {}) {
     const result = projectAgentContent(text, {
@@ -703,6 +704,9 @@ export async function apply(ctx) {
     return card
   }
   async function readCardExtensions(cardPath, chat) {
+    // A writing conversation has no card workspace; only the profile-owned global
+    // regex rules (and no helper scripts) apply to its bodies.
+    if (chat?.mode === 'writing') return withGlobalRegexScripts({}, await tavernExtensionSettings.read())
     const workspace = chat?.cardDefinitionSnapshot || await readCardWorkspace(cardPath)
     if (workspace === undefined) return undefined
     const extensions = cardPreparation.present({ card: workspace, as: 'card-extensions' })
@@ -997,7 +1001,7 @@ export async function apply(ctx) {
     const chat = await chatForSession(sessionId)
     if (chat === undefined) throw new Error('当前 Session 没有对应的 Tavern Chat')
     const mode = chat.mode || 'story'
-    if (mode !== 'story' && mode !== 'script') throw new Error('历史正文只能在游玩模式中检索')
+    if (!['story', 'script', 'writing'].includes(mode)) throw new Error('历史正文只能在正文对话中检索')
     let result
     await updateChat(chat.id, current => {
       const previousCooldowns = current.historyRecallCooldowns
@@ -1017,7 +1021,16 @@ export async function apply(ctx) {
       remove: async function () { await profileData.remove('resource-graph-operation.json') }
     }
   })
+  // Writing conversations own no card file. The whole pipeline still asks for a card
+  // object, so reads answer with a stable empty card instead of a missing resource;
+  // every place that would show or send card material checks the mode explicitly.
+  const WRITING_CARD = Object.freeze({
+    path: '', name: '写作', description: '', personality: '', scenario: '', first_mes: '',
+    mes_example: '', system_prompt: '', post_history_instructions: '', creator_notes: '',
+    tags: [], alternate_greetings: [], character_book: null
+  })
   async function readChatCard(chat) {
+    if (chat.mode === 'writing') return copyJsonTree(WRITING_CARD)
     if (chat.mode !== 'card' && chat.cardDefinitionSnapshot) return copyJsonTree(chat.cardDefinitionSnapshot)
     const card = await readCard(chat.cardPath)
     if (card === undefined) throw new Error('人物卡不存在: ' + chat.cardPath)
@@ -1922,7 +1935,7 @@ export async function apply(ctx) {
       : null
     let replyDisplay = { projections: replyProjectionsOf(chat), presentation: null, latestSourceBacked: false }
     let cardExtensions = { regexScripts: [], helperScripts: [] }
-    if ((chat.mode || 'story') === 'story' || (chat.mode || 'story') === 'script') {
+    if (['story', 'script', 'writing'].includes(chat.mode || 'story')) {
       cardExtensions = await requestPerformance.stage('cardExtensions', () => readCardExtensions(chat.cardPath, chat)) || cardExtensions
       const pinnedExtensions = await requestPerformance.stage('remoteAssets', () => tavernRemoteAssets.pinExtensions(cardExtensions))
       cardExtensions = Object.assign({}, cardExtensions, {
@@ -2107,8 +2120,9 @@ export async function apply(ctx) {
   }
   async function startChat(cardPath, sessionId, mode, openingId, userName, requestMode, preparationId, cardTask) {
     // Plain greetings have no interactive preview draft, but need the same
-    // game-local worldbook snapshot as scripted openings.
-    if (!preparationId && groupOfMode(mode || 'story') === 'play') {
+    // game-local worldbook snapshot as scripted openings. A writing conversation
+    // has neither a card nor an opening: no preparation draft is resolved.
+    if (!preparationId && groupOfMode(mode || 'story') === 'play' && mode !== 'writing') {
       preparationId = (await requestPerformance.stage('openingDraft', () => openingPreparation.create(cardPath, { userName }))).id
     }
     const preparation = preparationId ? openingPreparation.resolve(preparationId, cardPath, openingId) : undefined
@@ -2202,7 +2216,7 @@ export async function apply(ctx) {
       regexScripts: previous.tavernHelper.regexScripts
     })
     delete next.tavernHelper.messagesPending
-    if (mode === 'story' || mode === 'script') {
+    if (mode === 'story' || mode === 'script' || mode === 'writing') {
       let cardExtensions = { regexScripts: [], helperScripts: [] }
       try { cardExtensions = await readCardExtensions(chat.cardPath, chat) || cardExtensions } catch (_error) { cardExtensions = { regexScripts: [], helperScripts: [] } }
       const activePresetSnapshot = groupOfMode(chat.mode) === 'play' && chat.runtimePresetSnapshot && typeof chat.runtimePresetSnapshot === 'object'
@@ -2248,7 +2262,7 @@ export async function apply(ctx) {
     const window = await readRecentWindow(chatPersistence.readWindow,chatId,{limit:HELPER_MESSAGE_COLD_WINDOW,from:historyFrom,requirePartial:true})
     if (!window || window.from===0 || window.chat.sessionId!==sessionId
       || window.chat.backgroundConfigVersion!==1 || window.chat.conversationFeaturesVersion!==1
-      || !['story','script'].includes(window.chat.mode || 'story')
+      || !['story','script','writing'].includes(window.chat.mode || 'story')
       || window.chat.messages.some(message=>message.role==='assistant' && !Number.isSafeInteger(message.turn))) return null
     return window
   }
@@ -2895,9 +2909,9 @@ export async function apply(ctx) {
   ctx.on('agent/pre-step', async (payload, next) => {
     const id = payload.agent.session.id, background = backgroundAgentRunner.requestContext(id)
     const chat = background ? null : await sessionStateForSession(id)
-    if (chat && ['story', 'script'].includes(chat.mode)) await retireOldForegroundFrames(payload.agent, payload.turn)
+    if (chat && ['story', 'script', 'writing'].includes(chat.mode)) await retireOldForegroundFrames(payload.agent, payload.turn)
     if (background && ['image', 'phone'].includes(background.task)) return next()
-    if (background || chat && ['story', 'script'].includes(chat.mode)) {
+    if (background || chat && ['story', 'script', 'writing'].includes(chat.mode)) {
       const engine = await configureAgentCompaction(payload.agent)
       pendingCompactionMessages.set(payload.agent, payload.messages || [])
       try {
@@ -3135,6 +3149,8 @@ export async function apply(ctx) {
   }
   // What recall, world book search and screening read: the bound book plus plugin entries (tavern.worldbookEntries).
   async function playWorldBook(chat, card) {
+    // Writing conversations bind no worldbook at all: answer with an empty read.
+    if (!chat || str(chat.cardPath) === '' || str(chat.mode) === 'writing') return null
     const record = await worldBooks.bound(chat.cardPath, card, chat)
     if (!chat?.sessionId) return record
     const turn = Number([...(chat.messages || [])].reverse().find(message => message?.role === 'assistant')?.turn) || 0
@@ -3820,7 +3836,7 @@ export async function apply(ctx) {
     waitReconcile: async sessionId => { await reconciling.get(str(sessionId))?.catch(() => {}) },
     clearFailedTurns: async function (sessionId) {
       const mode = await turnOrchestrator.modeFor(sessionId)
-      if (mode !== 'story' && mode !== 'script') return 0
+      if (!['story', 'script', 'writing'].includes(mode)) return 0
       const session = sessionStore.get(sessionId) || agentRegistry.get(sessionId)?.session
       const chat = session && await chatForSession(sessionId)
       if (!chat) return 0
@@ -3833,7 +3849,7 @@ export async function apply(ctx) {
     },
     cleanupFailedTurn: async function (input) {
       const mode = await turnOrchestrator.modeFor(input.sessionId)
-      if (mode !== 'story' && mode !== 'script') return 0
+      if (!['story', 'script', 'writing'].includes(mode)) return 0
       const liveAgent = agentRegistry.get(input.sessionId)
       const liveSession = sessionStore.get(input.sessionId) || (liveAgent && liveAgent.session)
       return clearFailedTurnSurface({ session: liveSession, turn: input.turn })
@@ -4186,13 +4202,15 @@ export async function apply(ctx) {
       case 'getConversationBackgroundConfig': {
         const chat = await backgroundConfigForSession(str(args?.sessionId))
         if (!chat || groupOfMode(chat.mode) !== 'play') throw new Error('请先打开游玩会话')
-        return { backgroundModel: chat.backgroundModelSelection || null, imageModel: chat.imageModelSelection || null, backgroundTasks: normalizeBackgroundTasks(chat.backgroundTasks), webSearchEnabled: chat.webSearchEnabled === true, sceneImagesEnabled: chat.sceneImagesEnabled === true, sceneImagesAvailable: TAVERN_RELEASE_CAPABILITIES.sceneImages, modelCatalog: await tavernModelCatalog() }
+        return { backgroundModel: chat.backgroundModelSelection || null, imageModel: chat.imageModelSelection || null, backgroundTasks: normalizeBackgroundTasks(chat.backgroundTasks), webSearchEnabled: chat.webSearchEnabled === true, sceneImagesEnabled: chat.sceneImagesEnabled === true, sceneImagesAvailable: chat.mode !== 'writing' && TAVERN_RELEASE_CAPABILITIES.sceneImages, modelCatalog: await tavernModelCatalog() }
       }
       case 'setConversationBackgroundModel':
       case 'setConversationBackgroundConfig': {
         const sessionId = str(args?.sessionId)
         const chat = await chatForSession(sessionId)
         if (!chat || groupOfMode(chat.mode) !== 'play') throw new Error('请先打开游玩会话')
+        // Writing has no card material for an illustration plan; never accept the switch.
+        if (chat.mode === 'writing' && args?.sceneImagesEnabled === true) throw new Error('写作模式不支持场景生图')
         async function checkModel(value, label) {
           const selection = normalizeBackgroundModel(value)
           if (value !== null && !selection) throw new Error(label + '配置无效')
@@ -4505,7 +4523,7 @@ export async function apply(ctx) {
       case 'sendPhoneMessage': return { phoneChat: await phoneChat.send(args || {}) }
       case 'runCompaction': {
         const id = str(args && args.sessionId), chat = await chatForSession(id)
-        if (chat && ['story', 'script'].includes(chat.mode)) return { result: await autoCompaction.run(id, { manual: true, signal: compactionAbort.signal }) }
+        if (chat && ['story', 'script', 'writing'].includes(chat.mode)) return { result: await autoCompaction.run(id, { manual: true, signal: compactionAbort.signal }) }
         const result = await withCompactionSession(id, async agent => (await agentCompaction(agent)).compactNow(agent, compactionAbort.signal))
         return { result: { status: 'completed', foreground: { status: 'succeeded', message: result ? '压缩完成' : '没有可压缩的历史' }, background: { status: 'skipped' } } }
       }

@@ -99,7 +99,7 @@ export function registerModelStreamHooks({
       // as that game's background requests so 完整上下文 can show them.
       const child = options.purpose === undefined && !backgroundContext && !chat ? await gameChildSession(sessionId) : null
       if (child) requestRecord = await modelRequestLog.record({ chat: child.chat, context: child.context, coordinates: {}, options })
-      else if (options.purpose === undefined && chat !== undefined && ['story', 'script', 'card'].includes(chat.mode)) {
+      else if (options.purpose === undefined && chat !== undefined && ['story', 'script', 'card', 'writing'].includes(chat.mode)) {
         const coordinates = requestCoordinates.get(sessionId) || {}
         requestRecord = await modelRequestLog.record({ chat, context: backgroundContext, coordinates, options })
         if (!backgroundContext && ['story', 'script'].includes(chat.mode)) {

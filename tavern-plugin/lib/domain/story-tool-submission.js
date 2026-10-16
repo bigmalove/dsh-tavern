@@ -10,7 +10,7 @@ export const STORY_SUBMIT_PROMPT = [
 ].join('\n')
 
 export function storyToolCallEnabled(chat) {
-  return !!chat && (!chat.mode || chat.mode === 'story' || chat.mode === 'script') && chat.storyToolCallEnabled === true
+  return !!chat && (!chat.mode || ['story', 'script', 'writing'].includes(chat.mode)) && chat.storyToolCallEnabled === true
 }
 
 function validContent(content) {

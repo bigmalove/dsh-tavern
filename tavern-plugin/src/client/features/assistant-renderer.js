@@ -282,6 +282,8 @@
 		function createTavernAssistantRendererFeatureModule() {
 			function TavernUserNodeView(props) {
 				const data = props.node.data;
+				// 模型专用的种子契约不属于玩家可见历史；Session 历史与请求仍然保留它们。
+				if (data && data.source && data.source.form === "synthetic-trajectory") return null;
 				const location = props.node.location;
 				const turnRef = location && (location.kind === "turn" || location.kind === "step") ? location.turn : null;
 				const turn = turnRef ? Number(turnRef.turn) : 0;
@@ -620,7 +622,7 @@
 				}, [turnRef, data.finalNode, tail, props.openFile]);
 				const mentions = React.useMemo(function () { return owner === undefined ? undefined : props.fileMentions(owner); }, [owner, props.fileMentions]);
 				const waitingForHistory = Boolean(currentView?.historyWindow && !projection && settled && storyTurn>0 && storyTurn<latestProjectionTurn);
-				const playView = isPlayMode(liveState.view && liveState.view.mode) && storyTurn > 0 && !sessionTransitioning;
+				const playView = isBodyMode(liveState.view && liveState.view.mode) && storyTurn > 0 && !sessionTransitioning;
 				useTavernUiExtensions();
 				const pluginMedia = useTavernPluginMedia(props.sessionId, storyTurn, playView && settled);
 				const sceneImagesEnabled = Boolean(liveState.view && liveState.view.releaseCapabilities && liveState.view.releaseCapabilities.sceneImages);
@@ -705,7 +707,7 @@
 				const [forking, setForking] = React.useState(false);
 				const view = liveState.view;
 				const forkTurn = Number(view && view.forkTurnsByMessageId && view.forkTurnsByMessageId[String(props.messageId || "")]) || 0;
-				const canFork = view && isPlayMode(view.mode) && forkTurn > 0;
+				const canFork = view && isBodyMode(view.mode) && forkTurn > 0;
 				if (!canFork) return null;
 				async function fork() {
 					if (forking) return;
@@ -744,7 +746,7 @@
 						priority: -1
 					}, function (props) {
 						// Hide only our model-facing seed; keep it in Session history and requests.
-						if (props.node.data.finalNode && /^tavern-seed-trajectory:v1:.+:2$/.test(String(props.node.data.finalNode.messageId || ""))) return null;
+						if (props.node.data.finalNode && /^tavern-seed-trajectory:v\d+:.+:2$/.test(String(props.node.data.finalNode.messageId || ""))) return null;
 						return React.createElement(TavernAssistantNodeView, Object.assign({}, props, { executeSlash: executeSlash }));
 					}); });
 				}, "dsh-tavern: inline assistant renderer");

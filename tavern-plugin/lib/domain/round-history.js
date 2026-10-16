@@ -577,7 +577,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
     chat = await readChat(chat.id)
     const originalChat = structuredClone(chat)
     const mode = chat.mode || 'story'
-    if (mode !== 'story' && mode !== 'script') throw new Error('仅游玩模式支持回退本轮')
+    if (!['story', 'script', 'writing'].includes(mode)) throw new Error('仅游玩模式支持回退本轮')
     const card = await readChatCard(chat)
     const agent = sessions.get(chat.sessionId) || (restoredAgent?.session?.id === chat.sessionId ? restoredAgent : undefined)
     const session = agent?.session || sessions.getSession?.(chat.sessionId)
@@ -723,7 +723,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
   async function rollbackRecent(reference, requestedTurn, restoredAgent) {
     if (![chats.readRecent, chats.patch, chats.changedSince, chats.rowsAt].every(fn => typeof fn === 'function')) return undefined
     const chat = await chats.readRecent(reference.id)
-    if (!chat || !isScopedMessages(chat.messages) || !['story', 'script'].includes(chat.mode || 'story')) return undefined
+    if (!chat || !isScopedMessages(chat.messages) || !['story', 'script', 'writing'].includes(chat.mode || 'story')) return undefined
     const agent = sessions.get(chat.sessionId) || (restoredAgent?.session?.id === chat.sessionId ? restoredAgent : undefined)
     const session = agent?.session || sessions.getSession?.(chat.sessionId)
     if (!session) return undefined

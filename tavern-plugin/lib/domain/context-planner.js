@@ -29,6 +29,8 @@ export function createContextPlanner(options = {}) {
 
   function cardSections(input, projectText) {
     const sections = []
+    // Writing conversations carry no character card: there is nothing to project.
+    if (input.card === null || input.card === undefined) return sections
     const projectedWorldBook = projectText(input.worldBookContext)
     const worldBookLabel = str(input.worldBookLabel) || '本轮世界书上下文'
     const worldBookSection = projectedWorldBook === '' ? null : { kind: 'world-book', required: false, text: '【' + worldBookLabel + '】\n' + projectedWorldBook }
@@ -107,7 +109,7 @@ export function createContextPlanner(options = {}) {
       const projectText = playProjector(input, warnings)
       const sections = [{
         kind: 'base', required: true,
-        text: prompt('story')
+        text: prompt(str(input.chat && input.chat.mode) === 'writing' ? 'writing' : 'story')
       }]
       sections.push.apply(sections, cardSections({
         card: input.card,
@@ -123,7 +125,7 @@ export function createContextPlanner(options = {}) {
         includeSystemPrompt: false,
         includePostHistory: true
       }, projectText))
-      const systemPromptText = projectText(input.card.system_prompt)
+      const systemPromptText = input.card === null || input.card === undefined ? '' : projectText(input.card.system_prompt)
       if (input.scriptReference !== null && input.scriptReference !== undefined && str(input.scriptReference.text) !== '') {
         const order = Number(input.scriptReference.order)
         const position = Number.isInteger(order) && order >= 0 ? ' · 第 ' + (order + 1) + ' 块' : ''
@@ -169,9 +171,9 @@ export function createContextPlanner(options = {}) {
           candidateScriptWindow = { text, heading: text.split('\n')[0], positions: window.chunks.map((_, index) => window.cursor + index + 1) }
         }
       }
-      const systemPromptText = projectText(input.card.system_prompt)
+      const systemPromptText = input.card === null || input.card === undefined ? '' : projectText(input.card.system_prompt)
       if (systemPromptText.trim()) stableSections.push({ kind: 'card-system-prompt', required: true, text: cardSystemPromptText(systemPromptText) })
-      const postHistoryText = projectText(input.card.post_history_instructions)
+      const postHistoryText = input.card === null || input.card === undefined ? '' : projectText(input.card.post_history_instructions)
       const instructionSections = [
         ...(postHistoryText ? [{ kind: 'card-post-history', required: true, text: '【人物卡历史后指令】\n' + postHistoryText }] : [])
       ]

@@ -84,7 +84,7 @@ export function forkConversationChat(source, options = {}) {
 
 export function assertConversationForkable(chat, options = {}) {
   if (!chat) throw new Error('找不到要分叉的对话')
-  if (!['story', 'script'].includes(str(chat.mode) || 'story')) throw new Error('只有游玩对话可以分叉')
+  if (!['story', 'script', 'writing'].includes(str(chat.mode) || 'story')) throw new Error('只有游玩对话可以分叉')
   // A historical snapshot may have been saved while the source was regenerating a later
   // turn (its pre-regeneration checkpoint). Its content up to the fork turn is settled; only
   // the live source's in-flight work blocks forking.

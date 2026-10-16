@@ -1,7 +1,7 @@
 import { sessionEvents } from './session-events.js'
 
 export function usesStoryCompaction(chat) {
-  return chat !== null && typeof chat === 'object' && (chat.mode === 'story' || chat.mode === 'script')
+  return chat !== null && typeof chat === 'object' && ['story', 'script', 'writing'].includes(chat.mode)
 }
 
 export function createStoryCompactionRequest(options, instruction) {

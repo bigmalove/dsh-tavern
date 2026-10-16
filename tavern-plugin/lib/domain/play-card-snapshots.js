@@ -8,9 +8,12 @@ export function cardContentDigest(card) { return createHash('sha256').update(JSO
 
 const VERSION = 7
 function str(value) { return value === undefined || value === null ? '' : String(value) }
-function usesFixedContext(chat) { return chat && (!chat.mode || ['story', 'script', 'card'].includes(chat.mode)) }
+function usesFixedContext(chat) { return chat && (!chat.mode || ['story', 'script', 'card', 'writing'].includes(chat.mode)) }
 function cardAgent(chat) { return chat.mode === 'card' && chat.cardEditContext?.version !== 1 }
 function preferenceOnly(chat) { return cardAgent(chat) && chat.cardReferenceContext?.version !== 1 }
+// A writing conversation has no card and no worldbook; its fixed background is the
+// user preference alone, and that empty snapshot is still a settled snapshot.
+function writingChat(chat) { return chat?.mode === 'writing' }
 
 /** Owns snapshot preparation, migration, persistence and concurrent build sharing. */
 export function createPlayCardSnapshots({ worldBooks, planner, readCard, writeChat, captureSceneWorldbook, userPreferenceProfile, logger = console }) {
@@ -23,11 +26,12 @@ export function createPlayCardSnapshots({ worldBooks, planner, readCard, writeCh
   }
 
   async function build(chat, card, preservePreferences = false, resolvedWorldBook) {
+    const writing = writingChat(chat)
     let worldBook = resolvedWorldBook ?? null
-    try { if (!preferenceOnly(chat) && resolvedWorldBook === undefined) worldBook = await worldBooks.bound(chat.cardPath, card, chat) }
+    try { if (!writing && !preferenceOnly(chat) && resolvedWorldBook === undefined) worldBook = await worldBooks.bound(chat.cardPath, card, chat) }
     catch (error) { logger.warn('dsh-tavern: 常驻世界书读取失败，已跳过:', str(error && error.message || error)) }
-    const worldBookContext = constantWorldBookContext({ worldBook }).context
-    const planned = preferenceOnly(chat) ? '' : sanitizeAgentProjectionText((await planner.plan({ purpose: 'play-card-snapshot', card, chat, worldBookContext, worldBookLabel: '常驻世界书' })).text)
+    const worldBookContext = writing ? '' : constantWorldBookContext({ worldBook }).context
+    const planned = preferenceOnly(chat) || writing ? '' : sanitizeAgentProjectionText((await planner.plan({ purpose: 'play-card-snapshot', card, chat, worldBookContext, worldBookLabel: '常驻世界书' })).text)
     let preference = null
     if (preservePreferences) {
       if (chat.userProfileContextSnapshot) preference = { text: chat.userProfileContextSnapshot, revision: chat.userProfileRevision, profileId: chat.userProfileId }
@@ -45,6 +49,9 @@ export function createPlayCardSnapshots({ worldBooks, planner, readCard, writeCh
     // Card Agents edit the card itself: keep only the reference text, never a
     // definition snapshot that later reads would prefer over the live card.
     if (cardAgent(chat)) return patch
+    // Writing conversations freeze no card definition and own no worldbook: the
+    // preference text above is the whole fixed background.
+    if (writing) return patch
     Object.assign(patch, {
       cardDefinitionSnapshot: structuredClone(card),
       cardContentDigest: cardContentDigest(card),
@@ -69,7 +76,7 @@ export function createPlayCardSnapshots({ worldBooks, planner, readCard, writeCh
   function settled(header) {
     if (!usesFixedContext(header)) return ''
     const existing = str(header.cardContextSnapshot)
-    if ((existing !== '' || preferenceOnly(header)) && Number(header.cardContextSnapshotVersion) >= VERSION
+    if ((existing !== '' || preferenceOnly(header) || writingChat(header)) && Number(header.cardContextSnapshotVersion) >= VERSION
       && sanitizeAgentProjectionText(existing) === existing && !pending.has(header.id)) return existing
     return undefined
   }
@@ -86,7 +93,7 @@ export function createPlayCardSnapshots({ worldBooks, planner, readCard, writeCh
     const operation = (async function () {
       const existing = str(chat.cardContextSnapshot)
       let patch, source
-      if ((existing !== '' || preferenceOnly(chat)) && Number(chat.cardContextSnapshotVersion) >= VERSION) {
+      if ((existing !== '' || preferenceOnly(chat) || writingChat(chat)) && Number(chat.cardContextSnapshotVersion) >= VERSION) {
         const sanitized = sanitizeAgentProjectionText(existing)
         patch = { cardContextSnapshot: sanitized, cardContextSnapshotVersion: chat.cardContextSnapshotVersion }
         if (sanitized === existing) return patch
@@ -173,7 +180,9 @@ export function createPlayCardSnapshots({ worldBooks, planner, readCard, writeCh
     const preference = enabled ? await userPreferenceProfile?.stableContext(profileId || chat.userProfileId) : null
     if (enabled && !preference) throw new Error('请先建立并确认用户画像')
     let base = str(chat.cardContextSnapshot)
-    if (!base) throw new Error('当前游戏缺少人物卡快照，请先恢复会话后重试')
+    // Writing conversations legitimately have no card snapshot: the preference is
+    // their entire fixed background.
+    if (!base && !writingChat(chat)) throw new Error('当前游戏缺少人物卡快照，请先恢复会话后重试')
     const previous = sanitizeAgentProjectionText(str(chat.userProfileContextSnapshot))
     if (previous) {
       if (base === previous) base = ''

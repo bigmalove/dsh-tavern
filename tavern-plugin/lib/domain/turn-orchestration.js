@@ -321,7 +321,7 @@ export function createTurnOrchestrator(options) {
       chatChanged = true
     }
 
-    if (mode === 'story' || mode === 'script') {
+    if (mode === 'story' || mode === 'script' || mode === 'writing') {
       // body.begin (including legacy timeline normalization) only edits metadata.
       // Keep the history already detached by chatForSession; full timeline.apply
       // remains deeply isolated for callers that edit or restore message bodies.
@@ -354,7 +354,9 @@ export function createTurnOrchestrator(options) {
     // Workbench tools must remain available when the file being repaired is invalid.
     const card = cardPath === '' ? null : mode === 'card' ? { name: chat.cardName } : await store.readCard(cardPath, chat)
     if (cardPath !== '' && card === undefined) throw new Error('人物卡不存在: ' + cardPath)
-    if ((mode === 'story' || mode === 'script') && !reusedRuntimeInput) {
+    if ((mode === 'story' || mode === 'script' || mode === 'writing') && !reusedRuntimeInput) {
+      // A writing conversation has no card file; the store answers with the global
+      // regex rules every conversation inherits.
       const extensions = typeof store.readCardExtensions === 'function'
         ? await store.readCardExtensions(cardPath, chat)
         : null
@@ -411,20 +413,22 @@ export function createTurnOrchestrator(options) {
       return { ready: true, mode, cardName: card === null ? (str(state.draft && state.draft.name) || '卡片工作台') : card.name, text: plan.text }
     }
 
+    // A writing conversation owns no card and no worldbook: recall stays off.
+    const useForegroundWorldbook = typeof options.projectForegroundWorldbook === 'function' && cardPath !== ''
     // Screening can persist a shared background task. Save the pending body and
     // input first, then continue from its latest timeline instead of overwriting it.
-    if (typeof options.projectForegroundWorldbook === 'function') await savePreparation({ source: 'foreground.prepare-worldbook' })
-    const foregroundWorldBook = typeof options.projectForegroundWorldbook === 'function'
+    if (useForegroundWorldbook) await savePreparation({ source: 'foreground.prepare-worldbook' })
+    const foregroundWorldBook = useForegroundWorldbook
       ? await options.projectForegroundWorldbook({ chat, card, turn, userText: runtimeUserText }) : null
-    if (typeof options.projectForegroundWorldbook === 'function') {
+    if (useForegroundWorldbook) {
       chat = await contextForSession(input.sessionId)
       if (chat && store.writeChatHeader) preparationBase = captureChatHeader(chat)
       const current = chat && timeline.inspect({ chat })
       if (!current || current.branchId !== foregroundOperation.basedOn.branchId || current.revision !== foregroundOperation.basedOn.revision ||
           current.operations[foregroundOperation.operationId]?.status !== 'running') throw new Error('剧情已变化，本次正文准备已过期')
     }
-    const templateWorldBook = foregroundWorldBook || await projectWorldBookTemplates({ chat, card, turn, userText: runtimeUserText })
-    const scriptWorldBook = !foregroundWorldBook && typeof options.projectScriptPromptWorldbook === 'function' ? await options.projectScriptPromptWorldbook({ chat, card, turn }) : null
+    const templateWorldBook = foregroundWorldBook || (mode === 'writing' ? null : await projectWorldBookTemplates({ chat, card, turn, userText: runtimeUserText }))
+    const scriptWorldBook = !foregroundWorldBook && mode !== 'writing' && typeof options.projectScriptPromptWorldbook === 'function' ? await options.projectScriptPromptWorldbook({ chat, card, turn }) : null
     const worldBookContext = foregroundWorldBook ? str(foregroundWorldBook.context) : [str(chat.preparedWorldBookContext).trim(), str(scriptWorldBook && scriptWorldBook.context).trim(), templateWorldBook?.dynamicConstants ? '' : str(templateWorldBook && templateWorldBook.context).trim()].filter(Boolean).join('\n\n')
     if (foregroundWorldBook) {
       if (foregroundWorldBook.randomState) chat.worldBookRandomState = foregroundWorldBook.randomState
@@ -434,7 +438,7 @@ export function createTurnOrchestrator(options) {
       chat.lastWorldBookRecall = clone(chat.preparedWorldBook)
       chat.worldBookError = foregroundWorldBook.error
     }
-    const sceneWorldbook = typeof options.captureSceneWorldbook === 'function' ? await options.captureSceneWorldbook(chat, card, undefined, turn) : null
+    const sceneWorldbook = mode !== 'writing' && typeof options.captureSceneWorldbook === 'function' ? await options.captureSceneWorldbook(chat, card, undefined, turn) : null
     const plan = await planner.plan({ purpose: 'body', card, chat: templateWorldBook?.macroState ? { ...chat, macroState: templateWorldBook.macroState } : chat, userText: runtimeUserText, sessionId: input.sessionId, nativeTurn: turn, scriptReference, worldBookContext })
     // Seam to the plugin layer; it never throws and drops a failing plugin's part.
     const pluginSections = typeof options.pluginTurnContext === 'function'
@@ -453,7 +457,7 @@ export function createTurnOrchestrator(options) {
       turn,
       inputs: foregroundFrameInputs(plan, userText, runtimeUserText,
         Object.hasOwn(input, 'runtimePresetSnapshot') ? input.runtimePresetSnapshot
-          : resolveRuntimePresetMacros(chat.runtimePresetSnapshot, { charName: card.name, macroState: chat.macroState }).snapshot, chat, pluginSections),
+          : resolveRuntimePresetMacros(chat.runtimePresetSnapshot, { charName: str(card && card.name), macroState: chat.macroState }).snapshot, chat, pluginSections),
       source: { ...source, ...(sceneWorldbook ? { sceneWorldbook } : {}) }
     }
     let frame = frameBuilder.build(frameInput)
@@ -469,7 +473,7 @@ export function createTurnOrchestrator(options) {
     rememberFrame(chat, frame)
     chatChanged = true
     if (chatChanged) await savePreparation({ source: 'foreground.prepare' })
-    return { ready: true, mode, cardName: card.name, userText: runtimeUserText, frame }
+    return { ready: true, mode, cardName: card === null ? str(chat.cardName) : card.name, userText: runtimeUserText, frame }
   }
 
   async function beginCompatibility(input) {
@@ -686,12 +690,15 @@ export function createTurnOrchestrator(options) {
       displayParts: [{ kind: 'markdown', text: sourceText }],
       warnings: []
     }
-    if (mode === 'story' || mode === 'script') {
+    if (mode === 'story' || mode === 'script' || mode === 'writing') {
       if (renderMacros !== null && assistantText.includes('{{')) assistantText = renderMacros(assistantText, chat)
-      previousMvuVariables = chat.promptTemplateInput?.turn === turn ? lastTavernHelperVariables([chat.promptTemplateInput.message])
-        : history ? await history.previousVariables() : lastTavernHelperVariables(chat.messages)
+      const finalCardPath = cardPathOf(chat)
+      if (mode !== 'writing') {
+        previousMvuVariables = chat.promptTemplateInput?.turn === turn ? lastTavernHelperVariables([chat.promptTemplateInput.message])
+          : history ? await history.previousVariables() : lastTavernHelperVariables(chat.messages)
+      }
       const extensions = typeof store.readCardExtensions === 'function'
-        ? await store.readCardExtensions(cardPathOf(chat), chat)
+        ? await store.readCardExtensions(finalCardPath, chat)
         : null
       const presetRegexScripts = await resolvePresetRegexScripts(chat)
       const projectionText = assistantText
@@ -890,7 +897,7 @@ export function createTurnOrchestrator(options) {
         chat.workspace.prepared = null
         changed = true
       }
-      if ((chat.mode || 'story') === 'story' || (chat.mode || 'story') === 'script') {
+      if (['story', 'script', 'writing'].includes(chat.mode || 'story')) {
         const operation = Object.values(timeline.inspect({ chat }).operations).find(function (item) {
           return item.kind === 'body' && item.status === 'running' && Number(item.turn) === turn
         })
@@ -912,6 +919,8 @@ export function createTurnOrchestrator(options) {
     const webTools = chat.webSearchEnabled === true ? ['web_search'] : []
     const storyTools = storyToolCallEnabled(chat) ? [STORY_SUBMIT_TOOL_NAME] : []
     if (mode === 'script') return ['tavern_read_variables', 'skill', 'tavern_read_skill_reference', 'tavern_read_script', 'tavern_recall_history', 'worldbook_search', ...webTools, ...storyTools]
+    // Writing has no card, variables or worldbook: writing skills, history recall and the submission contract remain.
+    if (mode === 'writing') return ['skill', 'tavern_read_skill_reference', 'tavern_recall_history', ...webTools, ...storyTools]
     if (mode === 'card') return [...CARD_MEMORY_TOOLS, 'web_search', shellToolName, ...dshFileToolNames, 'skill', 'tavern_read_skill_reference', 'tavern_save_skill', ...cordisToolNames, 'tavern_user_profile_read', 'tavern_user_profile_save', 'tavern_read_card', 'tavern_read_card_raw', 'tavern_search_card', 'tavern_replace_card_text', 'tavern_mvu_overview', 'tavern_apply_mvu', 'tavern_read_play_chat', 'tavern_read_worldbook', 'tavern_update_worldbook', 'tavern_read_preset', 'tavern_update_preset', 'tavern_read_regex_library', 'tavern_copy_card', 'tavern_update_card', 'tavern_restore_card', 'tavern_validate_card', 'tavern_test_response']
     return ['tavern_read_variables', 'skill', 'tavern_read_skill_reference', 'tavern_recall_history', 'worldbook_search', ...webTools, ...storyTools]
   }
