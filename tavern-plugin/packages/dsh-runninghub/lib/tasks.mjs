@@ -56,7 +56,7 @@ function publicJob(job) {
     if (job[key] === undefined) continue;
     if (key === 'binding') {
       result.binding = {};
-      for (const name of ['gameId', 'turn', 'textVersion', 'mediaId']) {
+      for (const name of ['gameId', 'turn', 'textVersion', 'mediaId', 'generationId', 'anchor']) {
         const value = job.binding?.[name];
         if (['string', 'number', 'boolean'].includes(typeof value)) {
           const cleaned = publicValue(value);

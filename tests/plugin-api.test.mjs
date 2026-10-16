@@ -106,6 +106,22 @@ async function harness(t, overrides = {}) {
   return { root, api, media, published, setLatest(value) { latest = value } }
 }
 
+test('tavern 服务：生成身份接口按宿主解析并签发确切正文版本', { skip: !cordis }, async t => {
+  const generationId = 'a'.repeat(64)
+  const h = await harness(t, {
+    captureGeneration: async gameId => ({ gameId, generationId }),
+    resolveGeneration: async (_gameId, id) => id === generationId ? turnMaterial() : null,
+  })
+  let tavern
+  await h.root.plugin({ name: 'generation-plugin', inject: ['tavern'], apply(ctx) { tavern = ctx.tavern } })
+  await tick()
+  assert.deepEqual(await tavern.captureGeneration({ gameId: 'game-1' }), { gameId: 'game-1', generationId })
+  assert.equal(await tavern.resolveGeneration({ gameId: 'game-1', generationId: 'wrong-id' }), null)
+  assert.deepEqual(await tavern.resolveGeneration({ gameId: 'game-1', generationId }), { gameId: 'game-1', turn: 3, textVersion: 'key-3' })
+  const { id } = await tavern.attach({ gameId: 'game-1', turn: 3, textVersion: 'key-3', item: { kind: 'video', attachment: { attachmentId: 'v1', name: 'clip.mp4' } } })
+  assert.ok(id)
+})
+
 test('tavern 服务：按调用插件识别归属，插件卸载后自动撤销监听与提示词段落', { skip: !cordis }, async t => {
   const h = await harness(t)
   const seen = []

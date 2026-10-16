@@ -369,6 +369,8 @@ describe('submit: concurrent requestId submits once; retry does not rebind turn'
       host.dispatch({ action: 'submit', requestId: 'req-dup', input: { model: 'demo', prompt: 'x' }, bindToTurn: false }),
       host.dispatch({ action: 'submit', requestId: 'req-dup', input: { model: 'demo', prompt: 'x' }, bindToTurn: false }),
     ])
+    // submit returns a durable preparing job; remote acceptance is asynchronous.
+    await waitForJob(host, a.id, job => Boolean(job.remoteTaskId))
     assert.equal(gateway.generations(), 1, 'gateway /v1/images/generations must be called exactly once')
     assert.equal(a.id, b.id, 'both calls must return the same job')
     const jobs = await host.store.list()

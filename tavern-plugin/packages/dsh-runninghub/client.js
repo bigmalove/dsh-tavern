@@ -114,6 +114,9 @@ window.__ModuleLoader__.load({
       const [baseURL, setBaseURL] = useState(DEFAULT_BASE)
       const [apiKey, setApiKey] = useState('')
       const [configBusy, setConfigBusy] = useState(false)
+      const [autoInsertBusy, setAutoInsertBusy] = useState(false)
+      const [autoInsertError, setAutoInsertError] = useState('')
+      const autoInsertLock = useRef(false)
       const [configError, setConfigError] = useState('')
       const [configNotice, setConfigNotice] = useState('')
       const [configVersion, setConfigVersion] = useState(0)
@@ -192,7 +195,7 @@ window.__ModuleLoader__.load({
               throw new Error('宿主状态格式无效：缺少 jobs 或 workflows')
             }
             setSummary({ configured: data.configured, baseURL: data.baseURL,
-              adapter: data.adapter, model: data.model, jobs: data.jobs, workflows: data.workflows,
+              autoInsert: data.autoInsert === true, adapter: data.adapter, model: data.model, jobs: data.jobs, workflows: data.workflows,
               gatewayError: data.gatewayError || '' })
             if (!baseInitialized.current) {
               if (!baseDirty.current) setBaseURL(data.baseURL || DEFAULT_BASE)
@@ -263,6 +266,27 @@ window.__ModuleLoader__.load({
           controllers.current.delete(current)
           configLock.current = false
           if (alive.current) setConfigBusy(false)
+        }
+      }
+
+      async function saveAutoInsert(value) {
+        if (autoInsertLock.current) return
+        autoInsertLock.current = true
+        setAutoInsertBusy(true)
+        setAutoInsertError('')
+        const current = controller()
+        try {
+          const data = await request({ action: 'preferences', autoInsert: value }, current.signal)
+          if (alive.current) {
+            setSummary(previous => ({ ...(previous || {}), autoInsert: data.autoInsert === true }))
+            setRefreshVersion(previous => previous + 1)
+          }
+        } catch (error) {
+          if (alive.current && error.name !== 'AbortError') setAutoInsertError(message(error))
+        } finally {
+          autoInsertLock.current = false
+          controllers.current.delete(current)
+          if (alive.current) setAutoInsertBusy(false)
         }
       }
 
@@ -505,6 +529,8 @@ window.__ModuleLoader__.load({
           job.remoteTaskId ? note('远端任务 ID：' + job.remoteTaskId) : null,
           job.queryError ? alert('查询错误：' + message(job.queryError)) : null,
           job.error ? alert(message(job.error)) : null,
+          job.binding?.generationId ? note('自动插入：已锁定提交时的正文生成回合。') : null,
+          job.insertionError ? alert('正文插入失败（媒体已保留，将重试插入）：' + message(job.insertionError)) : null,
           job.status === 'submit_unknown' ? note('远端提交结果未知，请先核对任务，不要重复生成。') : null,
           ...(job.attachments || []).map(renderAttachment),
           job.status === 'download_failed' ? button(retrying[job.id] ? '正在重试下载…' : '仅重试下载（不重新生成）',
@@ -525,6 +551,12 @@ window.__ModuleLoader__.load({
               onChange: event => setApiKey(event.target.value) }))),
           h('div', { style: styles.row }, button(configBusy ? '保存中…' : '保存连接设置', saveConfig, locked)),
           alert(configError), configNotice ? note(configNotice) : null),
+        h('section', { style: styles.box },
+          h('strong', null, '正文视频'),
+          checkbox('视频完成后自动插入对应正文', summary?.autoInsert === true, saveAutoInsert, autoInsertBusy || !summary),
+          note('全局选项，默认关闭。开启后，AI 在正文前提交的任务会锁定本次生成；先显示正文，视频后台完成后补入，不等待出片。'),
+          note('要求模型按正文提交三个分镜任务；不会仅因打开开关自动生成或收费。anchor 指定正文原句时插在该句后，否则放在正文末尾。关闭只影响新任务，已提交任务仍按原约定插入。'),
+          alert(autoInsertError)),
         h('section', { style: styles.box },
           h('strong', null, '工作流与生成参数'),
           field('工作流', h('select', { style: styles.input, value: model, disabled: locked,

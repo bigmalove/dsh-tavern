@@ -1,9 +1,10 @@
 import { sceneTarget, projectedSceneText } from './scene-illustration.js'
 import { sceneWorldbookBinding } from './scene-worldbook.js'
 import { projectAgentContent } from './runtime-content-projection.js'
+import { capturePluginGeneration, pluginGenerationEvidence } from './plugin-generations.js'
 
 const storyTurnOf = message => Number(message?.turn || (message?.greeting ? 1 : 0))
-const isPlay = chat => ['story', 'script'].includes(chat?.mode || 'story')
+const isPlay = chat => ['story', 'script', 'writing'].includes(chat?.mode || 'story')
 
 /**
  * Read-only turn material for the public plugin API. Uses the bounded session
@@ -82,7 +83,31 @@ export function createPluginTurnReader(deps) {
     return { description: project(card?.description), personality: project(card?.personality), scenario: project(card?.scenario), lore }
   }
 
+  async function resolveGeneration(sessionId, generationId) {
+    const evidence = pluginGenerationEvidence(await deps.sessionFor?.(sessionId), generationId)
+    if (!evidence) return null
+    const header = await deps.header(sessionId, ['regenInProgress', 'regeneratedDshTurns'])
+    if (!header || header.regenInProgress) return null
+    const mappings = header.regeneratedDshTurns || {}
+    const adopted = Object.keys(mappings).find(turn => Number(mappings[turn]) === evidence.turn)
+    if (evidence.kind === 'regenerate' && !adopted) return null
+    const turn = adopted ? Number(adopted) : evidence.turn
+    // An original attempt cannot claim a newly adopted version of the same floor.
+    if (!adopted && Number(mappings[turn]) > 0) return null
+    const value = await material(sessionId, turn)
+    if (!value) return null
+    const row = await turnRow(value)
+    if (!row || row.bodyEdit || Number(row.swipeId || 0) !== 0 || String(row.sourceText ?? row.text ?? '').trim() !== evidence.result.text.trim()) return null
+    if (!adopted && (row.nativeAnchor?.turn !== evidence.turn || row.nativeAnchor?.input !== evidence.input.seq || row.nativeAnchor?.reply !== evidence.result.event.seq)) return null
+    return value
+  }
+
   return Object.freeze({
+    captureGeneration: async sessionId => {
+      if (!await resolveGame(sessionId)) return null
+      return capturePluginGeneration(await deps.sessionFor?.(sessionId))
+    },
+    resolveGeneration,
     resolveGame: async sessionId => {
       const game = await resolveGame(sessionId)
       return game ? { chatId: game.chatId, sessionId: game.sessionId } : null

@@ -67,6 +67,11 @@ export async function createRunningHubHost(ctx, config = {}, options = {}) {
   try { settings = JSON.parse(await readFile(settingsFile, 'utf8')) }
   catch (error) { if (error.code !== 'ENOENT') throw fail('RunningHub 连接配置损坏', 'STORE_ERROR') }
   let baseURL = validateBaseURL(settings?.baseURL ?? config.baseURL ?? DEFAULT_BASE).href.replace(/\/$/, '')
+  let autoInsert = settings?.autoInsert === true
+  const linksDirectory = path.join(directory, 'bindings')
+  await mkdir(linksDirectory, { recursive: true, mode: 0o700 })
+  const insertionErrors = new Map()
+  let reconcileTimer
   let engine, client, clientIdentity, disposed = false, workflows = [], workflowError = ''
   let queue = Promise.resolve()
   const serial = operation => { const result = queue.then(operation); queue = result.catch(() => {}); return result }
@@ -79,15 +84,55 @@ export async function createRunningHubHost(ctx, config = {}, options = {}) {
     bindingQueues.set(job.id, next)
     return next.finally(() => { if (bindingQueues.get(job.id) === next) bindingQueues.delete(job.id) })
   }
-  async function bindMedia(job, media) {
-    if (!job.binding?.gameId) return
+  async function resolvedBinding(job) {
+    if (!job.binding?.generationId) return job.binding
+    const file = path.join(linksDirectory, job.id + '.json')
+    try { return JSON.parse(await readFile(file, 'utf8')) }
+    catch (error) { if (error.code !== 'ENOENT') throw error }
+    const value = await ctx.tavern.resolveGeneration(job.binding)
+    if (!value) return null
+    const binding = { ...value, anchor: job.binding.anchor || '' }
+    await atomicJSON(file, binding)
+    return binding
+  }
+  async function insert(job, media, outputIndex = 0) {
+    const binding = await resolvedBinding(job)
+    if (!binding?.gameId) return
+    const items = await ctx.tavern.list({ gameId: binding.gameId, turn: binding.turn })
+    const existing = items.find(item => item.textVersion === binding.textVersion && item.data?.runninghubJob === job.id && item.data?.outputIndex === outputIndex)
+    const failed = ['failed', 'submit_unknown', 'download_failed'].includes(job.status)
+    const changes = { kind: media?.kind || 'video', status: media ? 'ready' : failed ? 'failed' : 'pending',
+      ...(media ? { attachment: media.attachment } : {}), error: media ? '' : failed ? job.error || '生成未完成' : '',
+      anchor: binding.anchor || '', caption: `RunningHub · ${job.model}` }
+    if (existing) {
+      if (existing.status !== 'ready' || media && existing.attachment?.attachmentId !== media.attachment?.attachmentId) await ctx.tavern.update(existing.id, changes)
+    } else await ctx.tavern.attach({ ...binding, item: { ...changes, data: { runninghubJob: job.id, outputIndex } } })
+  }
+  async function reconcileJob(job) {
+    if (!job.binding?.gameId || disposed) return
     return bindingSerial(job, async () => {
-      const binding = job.binding
-      const items = await ctx.tavern.list({ gameId: binding.gameId, turn: binding.turn })
-      const existing = items.find(item => item.data?.runninghubJob === job.id && item.data?.outputIndex === job.outputIndex)
-      const changes = { kind: media.kind, status: 'ready', attachment: media.attachment, error: '', caption: `RunningHub · ${job.model}` }
-      if (existing) await ctx.tavern.update(existing.id, changes)
-      else await ctx.tavern.attach({ ...binding, item: { ...changes, data: { runninghubJob: job.id, outputIndex: job.outputIndex } } })
+      try {
+        if (job.attachments?.length) {
+          for (let index = 0; index < job.attachments.length; index++) await insert(job, job.attachments[index], index)
+        } else if (job.binding.generationId) await insert(job)
+        insertionErrors.delete(job.id)
+      } catch (error) { insertionErrors.set(job.id, sanitizeMessage(error.message)) }
+    })
+  }
+  let reconcileQueue = Promise.resolve()
+  function reconcile() {
+    const next = reconcileQueue.catch(() => {}).then(async () => {
+      if (disposed) return
+      // Submission order, not download completion order, establishes media order.
+      for (const job of (await store.list()).reverse()) await reconcileJob(job)
+    })
+    reconcileQueue = next
+    return next
+  }
+  async function bindMedia(job, media) {
+    if (!job.binding?.gameId || job.binding.generationId) return
+    return bindingSerial(job, () => insert(job, media, job.outputIndex)).catch(error => {
+      insertionErrors.set(job.id, sanitizeMessage(error.message))
     })
   }
   async function onMedia(job, media) {
@@ -102,14 +147,8 @@ export async function createRunningHubHost(ctx, config = {}, options = {}) {
     return saved
   }
   async function onChange(job) {
-    if (!job.binding?.gameId) return
-    if (['failed', 'submit_unknown', 'download_failed'].includes(job.status)) {
-      await bindingSerial(job, async () => {
-        const items = await ctx.tavern.list({ gameId: job.binding.gameId, turn: job.binding.turn })
-        const pending = items.find(item => item.data?.runninghubJob === job.id && item.data?.outputIndex === 0)
-        if (pending && pending.status !== 'ready') await ctx.tavern.update(pending.id, { status: 'failed', error: job.error || '生成未完成' })
-      })
-    }
+    if (job.binding?.generationId) await reconcile()
+    else await reconcileJob(job)
   }
   async function connect() {
     if (disposed) throw fail('插件已停止', 'DISPOSED')
@@ -132,7 +171,9 @@ export async function createRunningHubHost(ctx, config = {}, options = {}) {
       try { const active = await connect(); workflows = await active.client.listWorkflows(); workflowError = '' }
       catch (error) { workflowError = sanitizeMessage(error.message) }
     }
-    return { configured, baseURL, adapter: 'gateway', model: 'h3参考', jobs: await store.list(), workflows, ...(workflowError ? { gatewayError: workflowError } : {}) }
+    await reconcile()
+    return { configured, baseURL, autoInsert, adapter: 'gateway', model: 'h3参考', jobs: (await store.list()).map(job => ({ ...job,
+      ...(insertionErrors.has(job.id) ? { insertionError: insertionErrors.get(job.id) } : {}) })), workflows, ...(workflowError ? { gatewayError: workflowError } : {}) }
   }
   async function configure(input) {
     keys(input, ['action', 'baseURL', 'apiKey'])
@@ -147,7 +188,7 @@ export async function createRunningHubHost(ctx, config = {}, options = {}) {
       if (previous?.source === 'env' || info?.source === 'env' || info?.writable === false) throw fail('网关 Key 来自只读凭据，请修改凭据来源')
       await ctx.credentials.set(ref, supplied)
     }
-    await atomicJSON(settingsFile, { baseURL: nextBase })
+    await atomicJSON(settingsFile, { baseURL: nextBase, autoInsert })
     engine?.dispose(); engine = undefined; client = undefined; clientIdentity = undefined
     baseURL = nextBase; workflows = []; workflowError = ''
     return { configured: true, baseURL, adapter: 'gateway' }
@@ -162,9 +203,17 @@ export async function createRunningHubHost(ctx, config = {}, options = {}) {
     if (!turn || turn.textVersion !== state.textVersion) throw fail('当前正文版本已变化，请刷新后提交')
     return { gameId: turn.gameId, turn: turn.turn, textVersion: turn.textVersion }
   }
-  async function dispatch(input = { action: 'list' }) {
+  async function dispatch(input = { action: 'list' }, exec) {
     return serial(async () => {
       if (!object(input)) throw fail('请求格式无效')
+      if (disposed) throw fail('插件已停止', 'DISPOSED')
+      if (input.action === 'preferences') {
+        keys(input, ['action', 'autoInsert'])
+        if (typeof input.autoInsert !== 'boolean') throw fail('autoInsert 必须是布尔值')
+        await atomicJSON(settingsFile, { baseURL, autoInsert: input.autoInsert })
+        autoInsert = input.autoInsert
+        return { autoInsert }
+      }
       if (input.action === 'configure') return configure(input)
       if (input.action === 'list') { keys(input, ['action']); return summary() }
       const active = await connect()
@@ -177,7 +226,7 @@ export async function createRunningHubHost(ctx, config = {}, options = {}) {
         return active.engine.retryDownload(input.id)
       }
       if (input.action === 'submit') {
-        keys(input, ['action', 'input', 'gameId', 'bindToTurn', 'requestId'])
+        keys(input, ['action', 'input', 'gameId', 'bindToTurn', 'requestId', 'anchor'])
         validateRequestId(input.requestId)
         // Deduplicate before looking at the now-current turn or schema: an uncertain browser retry
         // must return the original job even if the game moved on since it was accepted.
@@ -185,7 +234,17 @@ export async function createRunningHubHost(ctx, config = {}, options = {}) {
         if (existing) return existing
         const description = await active.client.describe(input.input?.model)
         const clean = validateInput(input.input, description)
-        const binding = await bindingOf(input)
+        if (input.anchor !== undefined && (typeof input.anchor !== 'string' || input.anchor.length > 500)) throw fail('anchor 必须是最多 500 字的正文原句')
+        let binding
+        const sessionId = exec?.agent?.session?.id
+        if (autoInsert && sessionId) {
+          exec.signal?.throwIfAborted()
+          if (input.gameId && input.gameId !== sessionId) throw fail('game_id 与当前工具调用会话不一致')
+          const generation = await ctx.tavern.captureGeneration?.({ gameId: sessionId })
+          exec.signal?.throwIfAborted()
+          if (!generation?.generationId) throw fail('当前宿主尚未就绪或不是前台正文生成，请重启 Tavern 后再试')
+          binding = { ...generation, anchor: input.anchor || '' }
+        } else binding = await bindingOf(input)
         return active.engine.submit(clean, { binding, requestId: input.requestId })
       }
       throw fail('未知 RunningHub 操作')
@@ -247,8 +306,10 @@ export async function createRunningHubHost(ctx, config = {}, options = {}) {
       if ((await ctx.credentials.resolve(credentialName(baseURL)))?.value) await connect()
     })
   }
-  function dispose() { disposed = true; engine?.dispose() }
-  return { dispatch, route, store, resume, dispose }
+  function dispose() { disposed = true; clearInterval(reconcileTimer); engine?.dispose() }
+  reconcileTimer = setInterval(() => { void reconcile().catch(() => {}) }, options.reconcileMs ?? 5000)
+  reconcileTimer.unref?.()
+  return { dispatch, route, store, resume, dispose, reconcile, get autoInsert() { return autoInsert } }
 }
 
 export async function apply(ctx, config = {}) {
@@ -257,6 +318,12 @@ export async function apply(ctx, config = {}) {
   for (const route of [API, MEDIA]) ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: route, handler: host.route }))
   ctx.tavern.handle('dsh-runninghub/list', () => host.dispatch({ action: 'list' }))
   ctx.tavern.handle('dsh-runninghub/describe', ({ model }) => host.dispatch({ action: 'describe', model }))
+  if (ctx.tavern.onTurnSettled) ctx.tavern.onTurnSettled(() => host.reconcile())
+  if (ctx.tavern.promptSection) ctx.tavern.promptSection({ name: 'auto-insert', text: () => host.autoInsert ? [
+    'RunningHub 自动插入已开启。仅在玩家要求生成视频时：先构思完整正文并拆成三个分镜，读取 runninghub_describe 后分别调用 runninghub_generate 提交三个任务，再提交正文（开启正文工具时最后调用 submit_story）。',
+    '每段使用独立 request_id，重试保持原 ID；可用 anchor 指定该段正文中的原句，成片插在原句之后，省略则附在正文末尾。game_id 可省略，由宿主取得当前会话；bind_to_turn=false 不会阻止此自动插入选项。',
+    '只需提交，不等待出片，不循环等待状态；视频后台完成后自动补入本次正文。preparing 仅表示本地受理，不代表远端已接收；不明提交先查询，禁止重新生成。'
+  ].join('\n') : '' })
   // Large base64 inputs use the bounded same-origin HTTP route, not the 256KB callHost RPC.
   ctx.inject(['tools'], toolsCtx => {
     const specs = [
@@ -267,8 +334,10 @@ export async function apply(ctx, config = {}) {
         { type: 'object', properties: {
           request_id: { type: 'string' }, input: { type: 'object', additionalProperties: true },
           game_id: { type: 'string' }, bind_to_turn: { type: 'boolean' },
+          anchor: { type: 'string', description: 'Exact sentence in the forthcoming story; insert video after it. Omit to append below the story.', maxLength: 500 },
         }, required: ['request_id', 'input'], additionalProperties: false },
-        args => host.dispatch({ action: 'submit', requestId: args.request_id, input: args.input, gameId: args.game_id, bindToTurn: args.bind_to_turn ?? false })],
+        (args, exec) => host.dispatch({ action: 'submit', requestId: args.request_id, input: args.input, gameId: args.game_id,
+          bindToTurn: args.bind_to_turn ?? false, anchor: args.anchor }, exec)],
       ['runninghub_status', 'Read local RunningHub job history; only queries state, never submits or regenerates.',
         { type: 'object', properties: {}, additionalProperties: false }, () => host.dispatch({ action: 'list' })],
     ]

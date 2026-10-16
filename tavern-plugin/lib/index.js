@@ -2619,6 +2619,7 @@ export async function apply(ctx) {
   const pluginMedia = createPluginMedia({ store: profileData })
   const pluginData = createPluginData({ store: profileData })
   const pluginTurns = createPluginTurnReader({
+    sessionFor: sessionId => agentRegistry.get(str(sessionId))?.session,
     sessionState: sessionStateForSession,
     sceneState: (sessionId, turns) => sessionChats.readSceneImageState(sessionId, { turns }),
     header: chatHeaderForSession,

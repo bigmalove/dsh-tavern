@@ -290,6 +290,22 @@ export function createTavernPluginApi(deps) {
       return await snapshotOf(material)
     },
 
+    async captureGeneration({ gameId } = {}) {
+      const game = await requireGame(gameId)
+      if ((await choicesFor(game.sessionId)).disabled.has(ownerOf(this))) throw new Error('本局已关闭该插件')
+      return await deps.captureGeneration?.(game.sessionId) ?? null
+    },
+
+    async resolveGeneration({ gameId, generationId } = {}) {
+      const owner = ownerOf(this)
+      const game = await requireGame(gameId)
+      if ((await choicesFor(game.sessionId)).disabled.has(owner)) return null
+      const material = await deps.resolveGeneration?.(game.sessionId, generationId)
+      if (!material) return null
+      await deps.media.issue(material.chatId, material.turn, material.key)
+      return { gameId: material.sessionId, turn: material.turn, textVersion: material.key }
+    },
+
     async getTurnState({ gameId } = {}) {
       return await turnState(gameId)
     },
