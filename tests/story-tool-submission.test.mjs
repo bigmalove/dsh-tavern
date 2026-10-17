@@ -172,3 +172,54 @@ test('折叠后上下文只剩一条普通正文，回合结果、回退都按�
   assert.deepEqual(rollback.shadowedSeqs, [input.seq, visible[1].seq])
 })
 
+function foldFixture(tools) {
+  const session = Session.create('fold-' + tools.join('-'))
+  appendSessionEvent(session, 'turn/start', { turn: 1 })
+  const input = appendSessionEvent(session, 'user/message', { id: 'input-1', role: 'user', content: [{ type: 'text', text: '玩家输入' }], source: { kind: 'user' } }, { surfaceOp: 'append' })
+  const raw = JSON.stringify({ content: '原始正文' })
+  const call = appendSessionEvent(session, 'assistant/message', { turn: 1, step: 1, message: { id: 'call-1', role: 'assistant', source: { kind: 'model', provider: 'test', model: 'test' }, content: tools.map(name => ({ type: 'tool-call', id: name + '-1', name, arguments: name === 'submit_story' ? raw : '{"query":"背景"}' })) } }, { surfaceOp: 'append' })
+  const receipts = []
+  for (const name of tools) {
+    const args = name === 'submit_story' ? raw : '{"query":"背景"}'
+    appendSessionEvent(session, 'tool/call', { turn: 1, step: 1, callId: name + '-1', name, arguments: args })
+    receipts.push(appendSessionEvent(session, 'tool/result', { turn: 1, step: 1, message: { id: name + '-receipt', role: 'user', source: { kind: 'tool', callId: name + '-1' }, content: [{ type: 'tool-result', toolCallId: name + '-1', isError: false, content: [{ type: 'text', text: name === 'submit_story' ? '原始正文' : '背景资料' }] }] } }, { surfaceOp: 'append', sourceEventSeqs: [call.seq] }))
+  }
+  appendSessionEvent(session, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+  return { session, input, call, receipts }
+}
+
+test('一步并行调用多个工具时，折叠区间覆盖中间回执', () => {
+  const { session } = foldFixture(['tavern_recall_history', 'submit_story'])
+  const result = assistantResultForTurn(session, 1)
+  assert.equal(result.storyToolSubmission, true)
+  foldStorySubmission(session, result, '保存后的正文')
+  const visible = session.surface.nodes.map(seq => sessionEvents(session).find(event => event.seq === seq))
+  // A non-submission receipt rides the same step; replacing only three seqs
+  // leaves it unmatched and the host refuses the whole replacement.
+  assert.deepEqual(visible.map(event => event.type), ['user/message', 'assistant/message'])
+  assert.equal(assistantResultForTurn(session, 1).text, '保存后的正文')
+})
+
+test('调用位置按事件 seq 定位，不依赖事件数组下标', () => {
+  const { session, call, receipts } = foldFixture(['submit_story'])
+  // assistantResultForTurn reports the events-array position; a filtered or
+  // compacted log numbers its seq differently, so only the seq is trustworthy.
+  foldStorySubmission(session, { index: 0, event: call, receiptIndex: receipts[0].seq, text: '正文', content: '正文', toolCallId: 'submit_story-1', storyToolSubmission: true }, '正文')
+  const visible = session.surface.nodes.map(seq => sessionEvents(session).find(event => event.seq === seq))
+  assert.deepEqual(visible.map(event => event.type), ['user/message', 'assistant/message'])
+  assert.deepEqual(visible[1].data.message.content, [{ type: 'text', text: '正文' }])
+})
+
+test('追加的可见正文与替换后的正文是同一条消息', () => {
+  const { session } = foldFixture(['submit_story'])
+  foldStorySubmission(session, assistantResultForTurn(session, 1), '保存后的正文')
+  const projections = sessionEvents(session).filter(event => event.type === 'assistant/message' &&
+    event.data.message.source?.model === 'reply-projection')
+  assert.equal(projections.length, 2)
+  // The chat view keys a round's actions by the rendered message id and the fork
+  // map reads the newest projection's id; two ids hide "从这一轮分叉".
+  assert.equal(projections[0].data.message.id, projections[1].data.message.id)
+  assert.equal(projections[1].surfaceOp.op, 'replace')
+  assert.deepEqual(projections[1].sourceEventSeqs.slice(-1), [projections[0].seq])
+})
+
