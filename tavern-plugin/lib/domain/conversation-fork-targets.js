@@ -109,6 +109,7 @@ export function floorsIndex(chat, session, { busy = false } = {}) {
   const orderedInputs = inputNodes.length === chatInputCount
   const byMessageId = {}
   const bySeq = {}
+  const expansions = []
   const latestIndex = messages.findLastIndex(message => message?.role === 'assistant')
   messages.forEach(function (message, index) {
     if (!message || typeof message !== 'object') return
@@ -158,10 +159,22 @@ export function floorsIndex(chat, session, { busy = false } = {}) {
       ...(greeting ? { greeting: true } : {})
     }
     byMessageId[messageId] = floor
-    // 同一回合里换过的节点（原始 / 正文编辑替换 / 重新生成）都指向这同一楼。
+    // 同一 seq 只对应一个楼层，重复写入说明映射错位，保留首次的即可。
+    if (!Object.hasOwn(bySeq, String(located.seq))) bySeq[String(located.seq)] = floor
+    // 同一回合里换过的节点（原始 / 正文编辑替换 / 重新生成）也要指向这一楼，
+    // 但留到所有楼层都认领完自己的节点之后再展开（见下面第二轮）。
     // 只对仍在上下文里的回合展开：被压缩掉的回合不该留下控件入口。
-    const candidateIds = message.role === 'user' ? inputIdsByTurn : replyIdsByTurn
-    if (inContext) for (const turn of [storyTurn, nativeTurn]) {
+    // 顺序配对已经把玩家输入逐条对上了，这时不能再按 turn 展开：一个回合里可能
+    // 有好几条输入（导入的聊天记录会把它们全记在同一个 native turn 上），按 turn
+    // 展开会让第一条楼层把后面几条的节点一并吃掉。
+    if (inContext && !(message.role === 'user' && orderedInputs)) {
+      expansions.push({ floor, candidateIds: message.role === 'user' ? inputIdsByTurn : replyIdsByTurn, storyTurn, nativeTurn })
+    }
+  })
+  // 第二轮：楼层自己的节点永远优先。先到先得只在"没有楼层认领过它"的节点之间生效，
+  // 否则同回合里靠前的楼层会抢走靠后楼层的节点，页面上点后一条就打开了前一条。
+  for (const { floor, candidateIds, storyTurn, nativeTurn } of expansions) {
+    for (const turn of [storyTurn, nativeTurn]) {
       for (const candidate of candidateIds.get(turn) || []) {
         const id = typeof candidate === 'string' ? candidate : candidate.id
         if (!Object.hasOwn(byMessageId, id)) byMessageId[id] = floor
@@ -169,9 +182,7 @@ export function floorsIndex(chat, session, { busy = false } = {}) {
         if (typeof candidate !== 'string' && !Object.hasOwn(bySeq, String(candidate.seq))) bySeq[String(candidate.seq)] = floor
       }
     }
-    // 同一 seq 只对应一个楼层，重复写入说明映射错位，保留首次的即可。
-    if (!Object.hasOwn(bySeq, String(located.seq))) bySeq[String(located.seq)] = floor
-  })
+  }
   return { byMessageId, bySeq }
 }
 
