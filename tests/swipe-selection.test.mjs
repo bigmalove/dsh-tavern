@@ -309,6 +309,35 @@ test('楼层映射覆盖助手、玩家与开场白，窗口外楼层没有条�
   assert.match(busyFloors.a3.reason, /等待/)
 })
 
+test('连续两条玩家输入各自成楼，前一条不漏', () => {
+  const session = Session.create('consecutive-inputs')
+  round(session, 1, '先来一句', '第一轮回复')
+  // 同回合里的两次输入：中间没有回复，按「下一条消息的 turn」反查会漏掉前一条。
+  appendSessionEvent(session, 'user/message', { id: 'u2a', turn: 2, role: 'user', content: [{ type: 'text', text: '继续推进剧情' }], source: { kind: 'user' } }, { surfaceOp: 'append' })
+  appendSessionEvent(session, 'user/message', { id: 'u2b', turn: 2, role: 'user', content: [{ type: 'text', text: '继续推进剧情' }], source: { kind: 'user' } }, { surfaceOp: 'append' })
+  appendSessionEvent(session, 'assistant/message', { turn: 2, step: 1, message: { id: 'a2', role: 'assistant', content: [{ type: 'text', text: '第二轮回复' }], source: { kind: 'model', provider: 'fixture', model: 'fixture' } } }, { surfaceOp: 'append', sourceEventSeqs: [] })
+  const chat = {
+    id: 'chat', sessionId: session.id, mode: 'story', _storageRevision: 3,
+    timeline: { schemaVersion: 1, branchId: 'b1', revision: 1, checkpoints: [], participants: {}, operations: {}, updatedAt: 0 },
+    posture: '', settleStatus: 'idle',
+    messages: [
+      { role: 'user', text: '先来一句' },
+      { role: 'assistant', turn: 1, text: '第一轮回复', sourceText: '第一轮回复' },
+      { role: 'user', text: '继续推进剧情' },
+      { role: 'user', text: '继续推进剧情' },
+      { role: 'assistant', turn: 2, text: '第二轮回复', sourceText: '第二轮回复' }
+    ]
+  }
+  const floors = floorsByMessageId(chat, session, { busy: false })
+  assert.equal(Object.keys(floors).length, 5, '五个楼层都应映射到消息 id')
+  assert.equal(floors.u1.index, 0)
+  assert.equal(floors.a1.index, 1)
+  assert.equal(floors.u2a.index, 2)
+  assert.equal(floors.u2b.index, 3)
+  assert.equal(floors.a2.index, 4)
+  for (const floor of Object.values(floors)) assert.equal(floor.editable, true)
+})
+
 test('纯函数：追加、删除、插入版本时三个数组始终对齐', () => {
   const legacy = { role: 'assistant', turn: 2, text: '旧正文', sourceText: '旧正文' }
   assert.equal(swipeCount(legacy), 1)

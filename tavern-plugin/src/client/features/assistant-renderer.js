@@ -737,7 +737,10 @@
 				const view = liveState.view;
 				const floor = view && view.floorsByMessageId ? view.floorsByMessageId[String(props.messageId || "")] : null;
 				const [busy, setBusy] = React.useState(false);
-				if (!floor || !isBodyMode(view && view.mode) || floor.editable !== true) return null;
+				if (!floor || !isBodyMode(view && view.mode)) return null;
+				// 不可编辑（后台结算、上下文已压缩、救援导入）时保留按钮但禁用：
+				// 隐藏会让整排操作在结算期间凭空消失，玩家以为功能没了。
+				const blocked = floor.editable !== true;
 				async function open() {
 					if (busy) return;
 					setBusy(true);
@@ -750,8 +753,8 @@
 				}
 				const label = floor.greeting === true ? "编辑开场白" : floor.role === "user" ? "编辑这条输入" : "编辑这段正文";
 				const className = props.variant === "user" ? "dsh-tavern-user-copy dsh-tavern-message-edit" : "dsh-tavern-message-edit";
-				return React.createElement(DshUi.Tooltip, { label: label, side: "bottom" },
-					React.createElement("button", { type: "button", className: className, "aria-label": label, disabled: busy, onClick: open },
+				return React.createElement(DshUi.Tooltip, { label: blocked && floor.reason ? floor.reason : label, side: "bottom" },
+					React.createElement("button", { type: "button", className: className, "aria-label": label, disabled: busy || blocked, onClick: open },
 						React.createElement("svg", { width: 15, height: 15, viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: 1.4, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true },
 							React.createElement("path", { d: "M11.2 2.6l2.2 2.2-8.2 8.2-2.9.7.7-2.9z" }),
 							React.createElement("path", { d: "M9.7 4.1l2.2 2.2" }))));
@@ -765,7 +768,8 @@
 				const view = liveState.view;
 				const floor = view && view.floorsByMessageId ? view.floorsByMessageId[String(props.messageId || "")] : null;
 				const [busy, setBusy] = React.useState(false);
-				if (!floor || !isBodyMode(view && view.mode) || floor.editable !== true) return null;
+				if (!floor || !isBodyMode(view && view.mode)) return null;
+				const blocked = floor.editable !== true;
 				async function remove() {
 					if (busy) return;
 					const ok = await askConfirm("删除这条消息？只会移除这一条，玩家输入与其它楼层都保留，之后可以用「撤销删除」恢复。");
@@ -781,8 +785,8 @@
 				}
 				const label = floor.greeting === true ? "删除开场白" : floor.role === "user" ? "删除这条输入" : "删除这条回复";
 				const className = props.variant === "user" ? "dsh-tavern-user-copy dsh-tavern-message-edit" : "dsh-tavern-message-edit";
-				return React.createElement(DshUi.Tooltip, { label: label, side: "bottom" },
-					React.createElement("button", { type: "button", className: className, "aria-label": label, disabled: busy, onClick: remove },
+				return React.createElement(DshUi.Tooltip, { label: blocked && floor.reason ? floor.reason : label, side: "bottom" },
+					React.createElement("button", { type: "button", className: className, "aria-label": label, disabled: busy || blocked, onClick: remove },
 						React.createElement(DshUi.IconTrashOutline16, null)));
 			}
 			function TavernSwipeControl(props) {

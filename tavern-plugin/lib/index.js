@@ -2021,6 +2021,9 @@ export async function apply(ctx) {
       debugTurns,
       latestAssistantMessageId,
       forkTurnsByMessageId,
+      // 完整投影与增量投影必须带同一份楼层事实：客户端只在带这个字段的视图上
+      // 才渲染换版本/编辑/删除按钮，缺了就是整排按钮消失。
+      floorsByMessageId: floorsForChat(chat, activity),
       latestAssistantTurn: latestStoryTurn,
       inputSources,
       inputTemplateDisplays,

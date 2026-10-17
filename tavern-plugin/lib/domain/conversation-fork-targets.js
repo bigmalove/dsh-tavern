@@ -57,6 +57,9 @@ export function floorsByMessageId(chat, session, { busy = false } = {}) {
   }
   const lastReply = new Map()
   const lastInput = new Map()
+  // 玩家输入按 surface 顺序收集：连续两条输入（例如两次"继续推进剧情"）时，
+  // 只看 turn 的映射会把先出现的那条漏掉，而按顺序配对能逐条对上。
+  const inputIds = []
   const visibleTurns = new Set()
   // A player input may carry no turn of its own; the enclosing turn/start says
   // which round it belongs to.
@@ -68,6 +71,9 @@ export function floorsByMessageId(chat, session, { busy = false } = {}) {
       continue
     }
     if (!nodes.has(event.seq)) continue
+    // 顺序收集先做：首条玩家输入可能排在它所属回合的 turn/start 之前，
+    // 按 turn 反查会漏掉它，但它在 surface 上的次序仍然有效。
+    if (event.type === 'user/message' && event.data?.id && isTurnInput(event.data)) inputIds.push(String(event.data.id))
     const stamped = Number(event.data?.turn)
     const turn = Number.isSafeInteger(stamped) && stamped > 0 ? stamped : currentTurn
     if (!Number.isSafeInteger(turn) || turn < 1) continue
@@ -78,24 +84,40 @@ export function floorsByMessageId(chat, session, { busy = false } = {}) {
       lastInput.set(turn, String(event.data.id))
     }
   }
+  const chatInputCount = messages.filter(message => message && message.role === 'user').length
+  // 只在数量完全一致时按顺序配对；数量不一致说明有一侧被裁剪或抢救导入
+  // 改造过，宁可退回按 turn 查表，也不能把按钮挂到别的楼层上。
+  let inputCursor = 0
+  const orderedInputs = inputIds.length === chatInputCount
   const result = {}
   const latestIndex = messages.findLastIndex(message => message?.role === 'assistant')
   messages.forEach(function (message, index) {
     if (!message || typeof message !== 'object') return
     const greeting = message.greeting === true
     // A player input carries no turn of its own; it belongs to the round of
-    // the reply that follows it (both are committed together).
+    // the reply that follows it (both are committed together). Consecutive
+    // inputs have no reply between them, so look past the run for its turn.
+    let nextReply = messages[index + 1]
+    if (message.role === 'user') {
+      for (let cursor = index + 1; cursor < messages.length; cursor++) {
+        const candidate = messages[cursor]
+        if (!candidate || typeof candidate !== 'object') continue
+        if (candidate.role === 'assistant') { nextReply = candidate; break }
+      }
+    }
     const storyTurn = message.role === 'user'
-      ? Math.max(0, Number(messages[index + 1]?.turn) || (messages[index + 1]?.greeting === true ? 1 : 0))
+      ? Math.max(0, Number(nextReply?.turn) || (nextReply?.greeting === true ? 1 : 0))
       : Math.max(0, Number(message.turn) || (greeting ? 1 : 0))
     const nativeTurn = nativeByStory.get(storyTurn) ?? storyTurn
     // Regeneration projects the new body back onto the original story turn;
     // older saves can still expose the synthetic turn instead.
+    const ordered = message.role === 'user' && orderedInputs ? inputIds[inputCursor++] : undefined
     const messageId = message.role === 'user'
-      ? (lastInput.get(storyTurn) ?? lastInput.get(nativeTurn))
+      ? (ordered ?? lastInput.get(storyTurn) ?? lastInput.get(nativeTurn))
       : (lastReply.get(storyTurn) ?? lastReply.get(nativeTurn))
     if (messageId === undefined) return
-    const inContext = visibleTurns.has(storyTurn) || visibleTurns.has(nativeTurn)
+    // 顺序配对取到的 id 本身就在 surface 上，不需要再按 turn 反查。
+    const inContext = ordered !== undefined || visibleTurns.has(storyTurn) || visibleTurns.has(nativeTurn)
     const rescued = isRescuedHistoryMessage(chat, message)
     const editable = inContext && !busy && !rescued
     const reason = rescued ? '存档救援导入的历史不可操作，请发送新消息继续'
