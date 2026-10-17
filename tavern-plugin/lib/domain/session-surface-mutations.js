@@ -72,6 +72,11 @@ export function isTavernSurfaceEdit(session, event, priorNodes, resolvePreset) {
   if (source.provider === 'dsh-tavern' && source.model === 'synthetic-trajectory' &&
       message.id?.startsWith('tavern-seed-trajectory:')) return true
   const owned = source.provider === 'dsh-tavern' && source.model === 'reply-projection'
+  // A tool submission appends visible prose after step/end, before shadowing
+  // the tool pair. It is injected text, never another provider response/usage.
+  if (owned && event.surfaceOp === 'append' && event.data.usage === undefined &&
+      Array.isArray(message.content) && message.content.length === 1 &&
+      message.content[0]?.type === 'text' && typeof message.content[0].text === 'string') return true
   const replacement = event.surfaceOp
   const refs = event.sourceEventSeqs
   if (replacement?.op !== 'replace' || !Array.isArray(refs) || refs.length === 0) return false

@@ -1,22 +1,40 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import vm from 'node:vm'
-import { createStorySubmissionTool, storySubmissionForTurn, activeStoryTurn, storyToolCallEnabled } from '../tavern-plugin/lib/domain/story-tool-submission.js'
+import { createStorySubmissionTool, storySubmissionForTurn, storySubmissionSurfaceRange, activeStoryTurn, storyToolCallEnabled } from '../tavern-plugin/lib/domain/story-tool-submission.js'
 import { assistantResultForTurn } from '../tavern-plugin/lib/domain/session-turn-result.js'
+import { replaceSessionSurface } from '../tavern-plugin/lib/domain/session-surface-mutations.js'
+import { appendSessionEvent } from '../tavern-plugin/lib/domain/session-events.js'
 import { createNativePlayOrchestrationStrategy } from '../tavern-plugin/lib/domain/foreground-orchestration-strategies.js'
 
 function fixture(content = '<game>正文\\引号"\n新行</game>', { error = false, result = content, turn = 2 } = {}) {
   const raw = JSON.stringify({ content })
-  return { id: 'game', events: [
-    { type: 'turn/start', data: { turn } },
-    { type: 'assistant/message', data: { turn, message: { id: 'model-1', source: { kind: 'model' }, content: [
+  const session = { id: 'game', surface: { nodes: [] }, events: [
+    { seq: 0, type: 'turn/start', data: { turn } },
+    { seq: 1, type: 'assistant/message', data: { turn, message: { id: 'model-1', source: { kind: 'model' }, content: [
       { type: 'reasoning', text: '思考' }, { type: 'text', text: '不应覆盖提交的杂话' },
       { type: 'tool-call', id: 'submit-1', name: 'submit_story', arguments: raw }
     ] } } },
-    { type: 'tool/call', data: { turn, callId: 'submit-1', name: 'submit_story', arguments: raw } },
-    { type: 'tool/result', data: { turn, message: { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'submit-1', isError: error, content: [{ type: 'text', text: result }] }] } } }
+    { seq: 2, type: 'tool/call', data: { turn, callId: 'submit-1', name: 'submit_story', arguments: raw } },
+    { seq: 3, type: 'tool/result', data: { turn, message: { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'submit-1', isError: error, content: [{ type: 'text', text: result }] }] } } }
   ] }
+  session.surface.nodes = session.events.map(event => event.seq)
+  // The host owns the surface: an append extends it, a replace splices its range in place.
+  session.append = function (type, data, intent) {
+    const event = { seq: this.events.length, type, data, ...intent }
+    this.events.push(event)
+    const op = intent && intent.surfaceOp
+    if (op && typeof op === 'object' && op.op === 'replace') {
+      const from = this.surface.nodes.indexOf(op.start ?? op.startSeq)
+      const to = this.surface.nodes.indexOf(op.end ?? op.endSeq)
+      if (from >= 0 && to >= from) this.surface.nodes.splice(from, to - from + 1, event.seq)
+      else this.surface.nodes.push(event.seq)
+    } else this.surface.nodes.push(event.seq)
+    return event
+  }
+  return session
 }
 
 test('只消费同回合已执行成功且匹配模型调用的提交，保留正文格式', () => {
@@ -47,6 +65,38 @@ test('回滚或重新生成遮蔽的旧工具提交不会重新成为正文', ()
   session.events.push({ type: 'assistant/message', data: { turn: 2, message: { source: { kind: 'model' }, content: [{ type: 'text', text: '重新生成的正文' }] } } })
   assert.equal(storySubmissionForTurn(session, 2), null)
   assert.equal(assistantResultForTurn(session, 2).text, '重新生成的正文')
+})
+
+test('提交区间覆盖调用消息到回执之间的全部 surface 节点', () => {
+  const direct = fixture('正文')
+  assert.deepEqual(storySubmissionSurfaceRange(direct, storySubmissionForTurn(direct, 2)), { start: 1, end: 3, sourceEventSeqs: [1, 2, 3] })
+
+  // A second tool call rides the same model message; its receipt lands between
+  // the call and the submission's receipt and is replaced together with them.
+  const raw = JSON.stringify({ content: '正文' })
+  const between = { id: 'game', events: [
+    { seq: 0, type: 'turn/start', data: { turn: 2 } },
+    { seq: 1, type: 'assistant/message', data: { turn: 2, message: { id: 'model-1', source: { kind: 'model' }, content: [
+      { type: 'tool-call', id: 'recall-1', name: 'tavern_recall_history', arguments: '{"query":"背景"}' },
+      { type: 'tool-call', id: 'submit-1', name: 'submit_story', arguments: raw }
+    ] } } },
+    { seq: 2, type: 'tool/call', data: { turn: 2, callId: 'recall-1', name: 'tavern_recall_history', arguments: '{"query":"背景"}' } },
+    { seq: 3, type: 'tool/result', data: { turn: 2, message: { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'recall-1', isError: false, content: [{ type: 'text', text: '背景资料' }] }] } } },
+    { seq: 4, type: 'tool/call', data: { turn: 2, callId: 'submit-1', name: 'submit_story', arguments: raw } },
+    { seq: 5, type: 'tool/result', data: { turn: 2, message: { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'submit-1', isError: false, content: [{ type: 'text', text: '正文' }] }] } } }
+  ] }
+  between.surface = { nodes: between.events.map(event => event.seq) }
+  const riding = storySubmissionForTurn(between, 2)
+  assert.equal(riding.receiptSeq, 5)
+  assert.deepEqual(storySubmissionSurfaceRange(between, riding), { start: 1, end: 5, sourceEventSeqs: [1, 2, 3, 4, 5] })
+
+  // A receipt outside the surface, or one preceding its call, has no range to replace.
+  const hidden = fixture('正文')
+  hidden.surface.nodes = [0, 1, 2]
+  assert.equal(storySubmissionSurfaceRange(hidden, { storyToolSubmission: true, index: 1, event: hidden.events[1], receiptSeq: 3 }), null)
+  assert.equal(storySubmissionSurfaceRange(fixture('正文'), { storyToolSubmission: true, index: 3, event: { seq: 3 }, receiptSeq: 1 }), null)
+  assert.equal(storySubmissionSurfaceRange(fixture('正文'), null), null)
+  assert.equal(storySubmissionSurfaceRange({ events: [] }, { storyToolSubmission: true, index: 0, event: { seq: 0 }, receiptSeq: 0 }), null)
 })
 
 test('Session 快照重放和结束事件仍可提取正文，不依赖内存提交状态', () => {
@@ -116,6 +166,13 @@ test('会话状态投影保留正文工具开关，工具可见性判定不受�
 const server = await readFile(new URL('../tavern-plugin/lib/index.js', import.meta.url), 'utf8')
 const hooks = await readFile(new URL('../tavern-plugin/lib/hooks/turn-lifecycle.js', import.meta.url), 'utf8')
 const client = await readFile(new URL('../tavern-plugin/src/client/features/play-controls.js', import.meta.url), 'utf8')
+// The production rewrite helper, extracted with its real collaborators.
+const replaceAssistantReplyContext = { storySubmissionSurfaceRange, replaceSessionSurface, appendSessionEvent, randomUUID }
+vm.runInNewContext(
+  server.slice(server.indexOf('  function replaceAssistantReply('), server.indexOf('  // A game keeps a snapshot of its preset')) + '; this.replace = replaceAssistantReply',
+  replaceAssistantReplyContext
+)
+const replaceAssistantReply = replaceAssistantReplyContext.replace
 
 test('真实 setter 独立保存当前对话，拒绝错误参数、工作台和运行中修改', async () => {
   const chats = new Map([['a', { mode: 'story' }], ['b', { mode: 'script' }], ['card', { mode: 'card' }]])
@@ -138,8 +195,8 @@ test('真实 setter 独立保存当前对话，拒绝错误参数、工作台和
   assert.match(server, /storyToolCallEnabled: chat.storyToolCallEnabled === true/)
 })
 
-test('真实收尾 hook 将工具正文交给现有保存链路，不替换或破坏工具调用历史', async () => {
-  let hook, saved, replacements = 0
+test('真实收尾 hook 把工具提交回合改写为普通文字回复', async () => {
+  let hook, saved
   const session = fixture('最终正文')
   const context = { ctx: { on(_name, handler) { hook = handler } }, clearRuntimePresetRequestState() {},
     backgroundAgentRunner: { owns: () => false, requestContext: () => undefined }, fullTemplateRuntime: { cancel() {} },
@@ -149,15 +206,55 @@ test('真实收尾 hook 将工具正文交给现有保存链路，不替换或�
     requestIdForTurn: () => 'rpc-1', roundAnchor: () => null, inputEventForTurn: () => null,
     assistantResultForTurn, turnOrchestrator: { recordFailure() { throw new Error('不应误判空正文') } },
     foregroundHandoff: { async finalize(input) { saved = input; return { reply: { sessionText: '正则投影正文' } } } },
-    replaceAssistantReply() { replacements++ } }
+    replaceAssistantReply }
   const start = hooks.indexOf("  ctx.on('agent/turn-stopping'")
   const end = hooks.indexOf("  ctx.on('agent/error'", start)
   vm.runInNewContext(hooks.slice(start, end), context)
+  const assistant = assistantResultForTurn(session, 2)
+  assert.equal(assistant.storyToolSubmission, true)
   await hook({ agent: { session }, turn: 2 })
   assert.equal(saved.assistantText, '最终正文')
   assert.equal(saved.requestId, 'rpc-1')
-  assert.equal(replacements, 0)
+  // The call message through its receipt is replaced by one plain text reply.
+  const surfaceEvents = session.surface.nodes.map(seq => session.events.find(event => event.seq === seq))
+  const projections = surfaceEvents.filter(event => event.type === 'assistant/message')
+  assert.equal(projections.length, 1)
+  const projectionMessage = projections[0].data.message
+  assert.equal(projectionMessage.source.model, 'reply-projection')
+  assert.equal(projectionMessage.content.length, 1)
+  assert.equal(projectionMessage.content[0].type, 'text')
+  assert.equal(projectionMessage.content[0].text, '正则投影正文')
+  assert.ok(!surfaceEvents.some(event => JSON.stringify(event).includes('submit_story')), 'surface 上不应再留下 submit_story 的调用或回执')
+  const read = assistantResultForTurn(session, 2)
+  assert.equal(read.text, '正则投影正文')
+  assert.notEqual(read.storyToolSubmission, true)
+  // Replaying the same replacement is a no-op, never an error.
+  replaceAssistantReply(session, assistant, '正则投影正文')
+  assert.deepEqual(session.surface.nodes, [0, 5])
+  assert.equal(session.events.length, 6)
+})
+
+test('正文未被正则改变时仍消除工具调用与回执，普通文字回复保持不动', () => {
+  const session = fixture('原样正文')
+  const assistant = assistantResultForTurn(session, 2)
+  replaceAssistantReply(session, assistant, assistant.text)
+  const replies = session.surface.nodes.map(seq => session.events.find(event => event.seq === seq))
+    .filter(event => event.type === 'assistant/message')
+  assert.equal(replies.length, 1)
+  assert.equal(replies[0].data.message.content[0].type, 'text')
+  assert.equal(replies[0].data.message.content[0].text, '原样正文')
+  const count = session.events.length
+  replaceAssistantReply(session, assistantResultForTurn(session, 2), '原样正文')
+  assert.equal(session.events.length, count, '普通文字的相同正文不再追加事件')
+})
+
+test('工具回执已不在 surface 时不会追加孤立文字', () => {
+  const session = fixture('原样正文')
+  const assistant = assistantResultForTurn(session, 2)
+  session.surface.nodes = [0]
+  replaceAssistantReply(session, assistant, assistant.text)
   assert.equal(session.events.length, 4)
+  assert.deepEqual(session.surface.nodes, [0])
 })
 
 test('菜单开关携带 sessionId，加载或生成中禁用，失败不改变服务端值', async () => {

@@ -56,6 +56,28 @@ test('原生 Token Meter 在闭合回合后统计后台回退和正文替换', n
   assert.ok(ctx.tokenMeter.measure(session).totalTokens < before)
 })
 
+test('工具正文的收尾追加与替换均可计量，伪造带 usage 的追加仍被拒绝', native, async t => {
+  const { ctx, Session } = await harness(t)
+  const { replaceSessionSurface } = await import('../tavern-plugin/lib/domain/session-surface-mutations.js')
+  const session = Session.create('submitted-body')
+  const original = completed(session)
+  t.after(installTavernTokenMeter(ctx.tokenMeter))
+  const reply = { turn: 1, step: 1, message: { id: 'submitted-projection', role: 'assistant',
+    source: { kind: 'model', provider: 'dsh-tavern', model: 'reply-projection' }, content: [{ type: 'text', text: '唯一正文。' }] } }
+  const appended = appendSessionEvent(session, 'assistant/message', reply, { surfaceOp: 'append' })
+  assert.doesNotThrow(() => ctx.tokenMeter.measure(session), '追加本身即应可计量，不依赖未来 replace')
+  replaceSessionSurface(session, 'assistant/message', reply, { start: original.seq, end: appended.seq, sourceEventSeqs: session.surface.nodes.slice() })
+  const before = JSON.stringify(session.snapshotEvents())
+  const measured = ctx.tokenMeter.measure(session)
+  assert.equal(measured.nodes.length, 1)
+  assert.ok(measured.totalTokens > 0)
+  assert.equal(JSON.stringify(session.snapshotEvents()), before)
+  const restored = Session.create(session.id, session.snapshotEvents(), session.header)
+  assert.equal(ctx.tokenMeter.measure(restored).totalTokens, measured.totalTokens)
+  appendSessionEvent(session, 'assistant/message', { ...reply, usage: { inputTokens: 100, outputTokens: 10, totalTokens: 110 } }, { surfaceOp: 'append' })
+  assert.throws(() => ctx.tokenMeter.measure(session), /no matching step\/start/)
+})
+
 test('前后台固定系统背景连续压缩三次仍不变，原事件和恢复后的背景完整', native, async t => {
   const { ctx, Session } = await harness(t)
   const { ensureSessionStablePrefix, sessionStablePrefixSections } = await import('../tavern-plugin/lib/domain/session-stable-prefix.js')

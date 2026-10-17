@@ -162,6 +162,12 @@ export function apply(ctx) {
           presetA: text.includes('E2E_PRESET_A_ACTIVE'), presetB: text.includes('E2E_PRESET_B_ACTIVE'),
           settlement: tools.has('mvu_submit_update') || tools.has('posture_submit') }) + '\n')
       }
+      // Story submitted through submit_story: the body travels as the tool argument.
+      if (tools.has('submit_story') && blocks.length === 1 && blocks[0].type === 'text') {
+        const content = blocks[0].text
+        blocks[0] = { type: 'tool-call', id: 'e2e-story-' + input.messages.length + '-' + Date.now(), name: 'submit_story', arguments: JSON.stringify({ content }) }
+        if (process.env.TAVERN_E2E_STORY_TOOL_LOG) await appendFile(process.env.TAVERN_E2E_STORY_TOOL_LOG, JSON.stringify({ content }) + '\n')
+      }
       // Put the state-changing call first so cancellation is tested against an MVU write.
       if (heldAttempt !== undefined) blocks.sort((a, b) => Number(b.name === 'mvu_submit_update') - Number(a.name === 'mvu_submit_update'))
       for (const [index, block] of blocks.entries()) {

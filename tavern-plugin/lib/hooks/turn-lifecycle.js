@@ -67,8 +67,8 @@ export function registerTurnLifecycleHooks({
       assistantText: assistant === null ? '' : assistant.text,
       nativeAnchor: roundAnchor(payload.turn, inputEventForTurn(session, payload.turn), assistant.event)
     })
-    // Preserve the canonical tool-call/result pair; Tavern renders its saved reply projection.
-    if (saved.reply && !assistant?.storyToolSubmission) replaceAssistantReply(session, assistant, saved.reply.sessionText)
+    // A submitted body is rewritten into an ordinary text reply like any other turn.
+    if (saved.reply) replaceAssistantReply(session, assistant, saved.reply.sessionText)
   })
 
   ctx.on('agent/error', function (payload) {

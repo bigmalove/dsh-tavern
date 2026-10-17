@@ -36,6 +36,8 @@ import { createChatJournalStore } from '../../tavern-plugin/lib/domain/chat-jour
 const displayScenario = process.argv.includes('--display-regression')
 const recoveryScenario = process.argv.includes('--surface-recovery')
 const helperApiScenario = process.argv.includes('--helper-api')
+// Story body submitted through the submit_story tool (per-conversation toggle, off by default).
+const storyToolScenario = process.argv.includes('--story-tool')
 const compactionScenario = process.argv.find(arg => arg.startsWith('--compaction='))?.split('=')[1]
 const source = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const runtime = resolve(process.env.TAVERN_E2E_RUNTIME || join(homedir(), '.dsh-tavern/runtime'))
@@ -205,6 +207,7 @@ try {
           TAVERN_PERF_BODY_REPEATS: process.env.TAVERN_PERF_BODY_REPEATS || '',
           TAVERN_E2E_BACKGROUND_DIR: (process.argv.includes('--background-lifecycle') || process.argv.includes('--background-failure')) ? output : '',
           TAVERN_E2E_REQUEST_AUDIT: join(output, 'preset-requests.jsonl'),
+          TAVERN_E2E_STORY_TOOL_LOG: storyToolScenario ? join(output, 'story-tool.jsonl') : '',
           TAVERN_E2E_MEMORY_AUDIT: process.argv.includes('--card-memory') ? join(output, 'memory-requests.jsonl') : '',
           TAVERN_E2E_SCENE_AUDIT: process.argv.includes('--scene-add') ? join(output, 'scene-requests.jsonl') : '',
           TAVERN_E2E_LLM_MODULE: join(modules, '@deepseek-ai/dsh-llm/lib/index.js'),
@@ -255,7 +258,7 @@ try {
       return {bootMs,openStarted,openSessionStarted}
     }
     browser = await chromium.launch({ headless: true })
-    context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, ...(recoveryScenario ? { hasTouch: true } : {}) })
+    context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, ...(recoveryScenario ? { hasTouch: true } : {}), ...(storyToolScenario ? { permissions: ['clipboard-read', 'clipboard-write'] } : {}) })
     context.setDefaultTimeout(timeout)
     if (!process.argv.includes('--settlement-performance')) await context.tracing.start({ screenshots: true, snapshots: true, sources: true })
     page = await context.newPage()
@@ -470,6 +473,13 @@ try {
   } else if (recoveryScenario) {
     await surfaceRecoveryChecks({ page, step, savedChat, output, report, root, restartServer })
   } else {
+  if (storyToolScenario) await step('开启正文走工具调用', async () => {
+    await page.getByRole('button', { name: '更多 ▾', exact: true }).click()
+    await page.getByRole('menuitemcheckbox', { name: '正文走工具调用：关', exact: true }).click()
+    await page.getByRole('button', { name: '更多 ▾', exact: true }).click()
+    await page.getByRole('menuitemcheckbox', { name: '正文走工具调用：开', exact: true }).waitFor()
+    await page.getByRole('button', { name: '更多 ▾', exact: true }).click()
+  })
   await step('玩一轮，确认正文、金币与人物姿势', async () => {
     const composer = page.getByRole('textbox', { name: /发消息|Message/ })
     await composer.fill('领取任务奖励')
@@ -477,6 +487,28 @@ try {
     await inspectScreen()
     report.beforeReload = inspectSaved(await savedChat())
     await page.screenshot({ path: join(output, 'before-reload.png'), fullPage: true })
+  })
+  if (storyToolScenario) await step('工具提交的回复下操作行与状态栏可用', async () => {
+    const tail = page.locator('[data-chat-flow-kind="turn-tail"][data-chat-turn="2"]')
+    await tail.scrollIntoViewIfNeeded()
+    await tail.getByRole('button', { name: 'Copy', exact: true }).waitFor()
+    await tail.getByRole('button', { name: '从这一轮分叉', exact: true }).waitFor()
+    await tail.getByRole('button', { name: 'Copy', exact: true }).click()
+    await page.waitForFunction(async () => (await navigator.clipboard.readText()).includes('你获得了十枚金币。'))
+    assert.match(await tail.innerText(), /Ran for|耗时/)
+    await page.evaluate(async () => {
+      // Enable only the icon with a localhost fixture channel; no image request is made.
+      for (const settings of [{ provider: 'openai', baseURL: 'http://127.0.0.1:1/v1', model: 'e2e-image', apiKey: 'e2e-image-key' }, { provider: 'openai', enabled: true }]) {
+        const response = await fetch('/api/dsh-tavern/saveSceneImageSettings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(settings) })
+        const result = await response.json()
+        if (!response.ok || result.ok === false) throw new Error(result.error || '开启生图图标失败')
+      }
+      window.dispatchEvent(new CustomEvent('dsh-tavern-image-settings-changed'))
+    })
+    await tail.getByRole('button', { name: '为这一轮生成插图', exact: true }).waitFor()
+    report.storyToolActions = { copy: true, fork: true, runTime: true, illustration: true }
+    await page.screenshot({ path: join(output, 'story-tool-actions.png'), fullPage: true })
+    await page.frameLocator('.dsh-tavern-status-runtime iframe:not([aria-hidden="true"])').locator('#e2e-gold').filter({ hasText: /^金币：10$/ }).waitFor()
   })
   await step('刷新后确认同一局、正文和状态均保留', async () => {
     await page.reload({ waitUntil: 'domcontentloaded' })
@@ -800,6 +832,11 @@ try {
     report.nativeFormat.restart=true
   })
   // Every scenario ends with the story save agreeing with what the model sees (#196).
+  if (storyToolScenario) await step('正文均经 submit_story 提交', async () => {
+    const submitted = (await readFile(join(output, 'story-tool.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line).content)
+    report.storyToolSubmissions = submitted.length
+    for (const text of ['你获得了十枚金币。', '你再次领取了奖励，金币累计二十枚。', '雨夜里，你重新领取了奖励。']) assert.ok(submitted.some(content => content.startsWith(text)), text)
+  })
   if (process.env.TAVERN_E2E_BROKEN_STOP !== '1' && !['--settlement-performance', '--display-regression', '--text-colors', '--opening-only'].some(flag => process.argv.includes(flag))) await step('存档与模型上下文一致', async () => {
     const chat = await savedChat().catch(() => null)
     if (!chat?.sessionId) return

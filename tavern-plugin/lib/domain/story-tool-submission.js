@@ -50,10 +50,23 @@ export function storySubmissionForTurn(session, turn) {
       try { content = validContent(JSON.parse(model.block.arguments).content) } catch { continue }
       const resultText = (block.content || []).filter(part => part?.type === 'text').map(part => part.text).join('')
       if (resultText !== content) continue
-      return { index: model.index, event: model.event, text: content.trim(), content, toolCallId: block.toolCallId, storyToolSubmission: true }
+      return { index: model.index, event: model.event, receiptIndex: index, receiptSeq: Number(event.seq ?? index), text: content.trim(), content, toolCallId: block.toolCallId, storyToolSubmission: true }
     }
   }
   return null
+}
+
+/** Surface range that replaces a submission's call message through its receipt. */
+export function storySubmissionSurfaceRange(session, submission) {
+  if (!submission?.storyToolSubmission) return null
+  const start = Number(submission.event?.seq ?? submission.index)
+  const end = Number(submission.receiptSeq)
+  const nodes = Array.isArray(session?.surface?.nodes) ? session.surface.nodes.map(Number) : null
+  if (!nodes) return null
+  const from = nodes.indexOf(start)
+  const to = nodes.indexOf(end)
+  if (from < 0 || to < from) return null
+  return { start, end, sourceEventSeqs: nodes.slice(from, to + 1) }
 }
 
 export function activeStoryTurn(session) {
