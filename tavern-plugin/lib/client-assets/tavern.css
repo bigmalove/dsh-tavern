@@ -2771,3 +2771,6 @@ body.dsh-tavern-shell-active [data-turn-tail] [data-slot="conversation.chat.assi
 .dsh-tavern-message-edit:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); }
 .dsh-tavern-message-edit:disabled { cursor: wait; opacity: .5; }
 .dsh-tavern-user-actions .dsh-tavern-message-edit { width: 24px; height: 24px; padding: 4px; border-radius: 6px; }
+/* 旧楼层的操作条默认 hover 才出现；编辑/删除/换版本是正文操作的主入口，
+   放在这里常显，否则旧楼层看起来根本没有这些按钮。 */
+body.dsh-tavern-shell-active [data-turn-tail][data-actions-reveal="hover"]:has(.dsh-tavern-message-edit, .dsh-tavern-message-swipe) > :last-child { opacity: 1; }

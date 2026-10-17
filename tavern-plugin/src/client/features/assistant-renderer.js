@@ -744,7 +744,7 @@
 					try {
 						const result = await rpc("getBodyEdit", { index: floor.index, turn: floor.turn, role: floor.role }, props.sessionId);
 						const edit = result.edit;
-						setBodyEditPanel({ sessionId: props.sessionId, edit: edit, texts: edit.parts.filter(function (part) { return part.kind === "text"; }).map(function (part) { return part.text; }), busy: false, error: "" });
+						setTavernBodyEditPanel({ sessionId: props.sessionId, edit: edit, texts: edit.parts.filter(function (part) { return part.kind === "text"; }).map(function (part) { return part.text; }), busy: false, error: "" });
 					} catch (error) { tavernErrorHub.report("编辑正文", error); }
 					finally { setBusy(false); }
 				}

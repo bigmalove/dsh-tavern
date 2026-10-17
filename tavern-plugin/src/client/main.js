@@ -732,6 +732,19 @@ window.__ModuleLoader__.load({
 
 // @include ui/message-frame.js
 
+		// 正文编辑面板的跨模块状态：楼层按钮（assistant-renderer）打开它，
+		// 输入区面板（play-controls）渲染它——两个 feature 不在同一闭包里。
+		const tavernBodyEditPanel = { value: null, listeners: new Set() };
+		function setTavernBodyEditPanel(value) {
+			tavernBodyEditPanel.value = value;
+			tavernBodyEditPanel.listeners.forEach(function (listener) { listener(value); });
+		}
+		function useTavernBodyEditPanel() {
+			const [value, setValue] = React.useState(tavernBodyEditPanel.value);
+			React.useEffect(function () { tavernBodyEditPanel.listeners.add(setValue); return function () { tavernBodyEditPanel.listeners.delete(setValue); }; }, []);
+			return value;
+		}
+
 // @include features/assistant-renderer.js
 
 // @include features/card-list.js

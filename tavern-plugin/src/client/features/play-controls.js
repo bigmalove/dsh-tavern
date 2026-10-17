@@ -743,16 +743,9 @@
                 title: "把刚刚删除的" + kind + "放回去；新的操作会使此恢复点失效" }, busy ? "恢复中…" : "撤销删除（" + kind + "）");
         }
 
-		const bodyEditPanel = { value: null, listeners: new Set() };
-		function setBodyEditPanel(value) {
-			bodyEditPanel.value = value;
-			bodyEditPanel.listeners.forEach(function (listener) { listener(value); });
-		}
-		function useBodyEditPanel() {
-			const [value, setValue] = React.useState(bodyEditPanel.value);
-			React.useEffect(function () { bodyEditPanel.listeners.add(setValue); return function () { bodyEditPanel.listeners.delete(setValue); }; }, []);
-			return value;
-		}
+		// 面板状态定义在客户端模块作用域（main.js）：楼层按钮在另一个闭包里打开它。
+		const setBodyEditPanel = setTavernBodyEditPanel;
+		const useBodyEditPanel = useTavernBodyEditPanel;
 		function TavernEditBodyAction(props) {
 			const [busy, setBusy] = React.useState(false);
 			const running = props.useSession(function (snapshot) { return snapshot.running === true; });
