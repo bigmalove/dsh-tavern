@@ -721,14 +721,14 @@
                 title: "恢复第 " + turn + " 轮正文和状态；新的操作会使此恢复点失效" }, busy ? "恢复中…" : "撤销回退（恢复第 " + turn + " 轮）");
         }
 
-        // 撤销上一次删除（版本或整轮）。较早回合的删除不能撤销，此时不显示入口。
+        // 撤销上一次删除（一个版本或一条消息）；新的回合开始时失效。
         function TavernUndoDeletionAction(props) {
             const [busy, setBusy] = React.useState(false);
             const running = props.useSession(function (state) { return state.running === true; });
             const live = useLiveTavernView(props.sessionId, "undo-delete:" + String(running));
             const view = live.view;
             if (!view || !view.canUndoDeletion || view.deletionUndoable === false) return null;
-            const kind = view.deletionUndoKind === "round" ? "整轮" : "版本";
+            const kind = view.deletionUndoKind === "message" ? "消息" : "版本";
             async function undo() {
                 if (busy || running) return;
                 setBusy(true);
@@ -780,7 +780,7 @@
 			async function save() {
 				setBodyEditPanel(Object.assign({}, panel, { busy: true, error: "" }));
 				try {
-					const result = await rpc("saveBodyEdit", { token: panel.edit.token, index: panel.edit.index, turn: panel.edit.turn, role: panel.edit.role, texts: panel.texts }, props.sessionId);
+					const result = await rpc("saveBodyEdit", { token: panel.edit.token, index: panel.edit.index, turn: panel.edit.turn, role: panel.edit.role, latest: panel.edit.latest === true, texts: panel.texts }, props.sessionId);
 					liveTavernView.setView(props.sessionId, result.view);
 					notifyTavernDataChanged(["sessions"], "play-controls");
 					tavernCoordination.invalidate(props.sessionId);

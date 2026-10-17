@@ -543,6 +543,7 @@ export function createStoryTimeline(options = {}) {
       chat.settleError = null
       rewindParticipants(chat)
       chat.candidateAgent = null
+      delete chat.deletionUndo
       value = { status: 'edited', revision: chat.timeline.revision }
     }
     else if (intent.kind === 'body.floor') {
@@ -564,6 +565,7 @@ export function createStoryTimeline(options = {}) {
       rewindParticipants(chat)
       chat.candidateAgent = null
       chat.candidates = null
+      delete chat.deletionUndo
       value = { status: 'edited', revision: chat.timeline.revision }
     }
     else if (intent.kind === 'body.swipe') {
@@ -616,28 +618,31 @@ export function createStoryTimeline(options = {}) {
       chat.timeline.updatedAt = now()
       value = { status: 'swiped', revision: chat.timeline.revision }
     }
-    else if (intent.kind === 'round.delete') {
-      // Removing a committed round takes its player input and reply together.
-      // The newest round also owns the scene's variables and settlement: after
-      // deleting it the previous round's own snapshot takes over.
+    else if (intent.kind === 'message.delete') {
+      // Deleting removes exactly one message: the reply, the player input or the
+      // greeting it names. Neighbouring floors stay where they are.
       const index = Number(intent.index)
-      const count = Number(intent.count) || 0
-      if (!Number.isSafeInteger(index) || index < 0 || !Number.isSafeInteger(count) || count < 1
-        || index + count > chat.messages.length) throw new Error('要删除的回合不存在')
-      const removed = chat.messages.splice(index, count)
+      const message = chat.messages[index]
+      const role = intent.role === 'user' ? 'user' : 'assistant'
+      if (!Number.isSafeInteger(index) || index < 0 || !message || message.role !== role) throw new Error('要删除的消息不存在')
+      const turn = role === 'user'
+        ? Number(chat.messages[index + 1]?.turn) || Number(intent.turn) || 0
+        : Number(message.turn) || (message.greeting === true ? 1 : 0)
+      if (!Number.isSafeInteger(turn) || turn < 1 || turn !== Number(intent.turn)) throw new Error('要删除的消息不存在或已变化')
+      const lastAssistant = chat.messages.findLastIndex(item => item?.role === 'assistant')
+      const removed = chat.messages.splice(index, 1)
       chat.timeline.revision++
       chat.timeline.updatedAt = now()
-      const last = chat.messages.findLastIndex(item => item?.role === 'assistant')
-      if (last < 0) {
-        chat.posture = ''
-        chat.ledger = null
-        chat.lastSettle = null
-        chat.settleStatus = 'idle'
-        delete chat.variables
-      } else {
-        const previous = chat.messages[last]
-        const swipeId = Math.max(0, Number(previous.swipeId) || 0)
-        const restored = Array.isArray(previous.swipeStates) ? object(previous.swipeStates[swipeId]) : null
+      // The greeting doubles as the header's opening text; keep them in step.
+      if (role === 'assistant' && message.greeting === true) chat.openingText = ''
+      // Only the newest reply carries the scene state. Removing it hands that
+      // state back to the previous reply's own snapshot; removing anything else
+      // leaves the current scene untouched.
+      if (role === 'assistant' && index === lastAssistant) {
+        const previousIndex = chat.messages.findLastIndex(item => item?.role === 'assistant')
+        const previous = previousIndex < 0 ? null : chat.messages[previousIndex]
+        const swipeId = previous === null ? 0 : Math.max(0, Number(previous.swipeId) || 0)
+        const restored = previous === null || !Array.isArray(previous.swipeStates) ? null : object(previous.swipeStates[swipeId])
         if (restored !== null && str(restored.settleStatus) === 'done') {
           chat.posture = str(restored.posture)
           chat.ledger = clone(restored.ledger || null)
@@ -649,10 +654,12 @@ export function createStoryTimeline(options = {}) {
           chat.lastSettle = null
           chat.settleStatus = 'idle'
         }
-        const variables = Array.isArray(previous.variables) ? previous.variables[swipeId] : undefined
+        const variables = previous === null || !Array.isArray(previous.variables) ? undefined : previous.variables[swipeId]
         if (variables !== undefined) chat.variables = clone(variables)
+        chat.settleError = null
       }
-      chat.settleError = null
+      // Whatever was removed, the native context shrank: offer no stale
+      // candidates and let the resident background Agents rewind to it.
       chat.candidates = null
       rewindParticipants(chat)
       chat.candidateAgent = null
@@ -660,19 +667,22 @@ export function createStoryTimeline(options = {}) {
       else if (intent.deletionUndo !== undefined) chat.deletionUndo = clone(intent.deletionUndo)
       value = { status: 'deleted', revision: chat.timeline.revision, removed }
     }
-    else if (intent.kind === 'round.restore') {
-      // Undo of a round deletion: the rows come back at their old position and
-      // the header returns to the state the deleted round had produced.
+    else if (intent.kind === 'message.restore') {
+      // Undo of a single-message deletion: the row returns at its old position
+      // and the header goes back to the state it had before the deletion.
       const index = Number(intent.index)
-      const messages = Array.isArray(intent.messages) ? intent.messages : []
-      if (!Number.isSafeInteger(index) || index < 0 || !messages.length) throw new Error('没有可恢复的回合')
-      chat.messages.splice(index, 0, ...clone(messages))
+      const message = object(intent.message)
+      if (!Number.isSafeInteger(index) || index < 0 || Object.keys(message).length === 0
+        || index > chat.messages.length) throw new Error('没有可恢复的消息')
+      chat.messages.splice(index, 0, clone(message))
+      if (message.greeting === true) chat.openingText = str(message.text)
       const state = object(intent.state)
       chat.posture = str(state.posture)
       chat.ledger = clone(state.ledger === undefined ? null : state.ledger)
       chat.lastSettle = clone(state.lastSettle === undefined ? null : state.lastSettle)
       chat.settleStatus = str(state.settleStatus) || 'idle'
-      if (Object.hasOwn(state, 'variables')) chat.variables = clone(state.variables)
+      if (state.hasVariables === true) chat.variables = clone(state.variables)
+      else if (state.hasVariables === false) delete chat.variables
       chat.settleError = null
       chat.candidates = null
       chat.timeline.revision++

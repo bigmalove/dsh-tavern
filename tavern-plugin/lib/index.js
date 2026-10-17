@@ -3949,12 +3949,16 @@ export async function apply(ctx) {
     sessionPatch,
   })
 
+  // 楼层操作（切换/编辑/删除）按需带上一楼：分页存档里默认窗口只有最新几轮，
+  // 不点名的旧楼层在窗口之外就只是一处空洞。
+  const floorChatForSession = async (sessionId, { index } = {}) => {
+    const need = { lastAssistant: true, lastVariables: true, ...(Number.isSafeInteger(index) ? { include: [index] } : {}) }
+    const selected = await boundedHistory.forSession(sessionId, need)
+    return selected ? normalizeChat(selected.chat) : chatForSession(sessionId)
+  }
+
   const bodyEditor = createBodyEditor({
-    chats: { forSession: async (sessionId, { index } = {}) => {
-      const need = { lastAssistant: true, lastVariables: true, ...(Number.isSafeInteger(index) ? { include: [index] } : {}) }
-      const selected = await boundedHistory.forSession(sessionId, need)
-      return selected ? normalizeChat(selected.chat) : chatForSession(sessionId)
-    }, update: updateChat, patch: patchChat },
+    chats: { forSession: floorChatForSession, update: updateChat, patch: patchChat },
     sessions: { get: id => ctx.get('agents')?.get(id), flush: session => sessionStore.flush(session) },
     timeline: storyTimeline,
     activity: chat => backgroundTasks.activity(chat),
@@ -3969,7 +3973,7 @@ export async function apply(ctx) {
 
   // 切换某一楼正文的版本（swipe）：文字、变量与结算随最新楼层一起切换。
   const swipeSelection = createSwipeSelection({
-    chats: { forSession: hookChatForSession, update: updateChat, patch: patchChat },
+    chats: { forSession: floorChatForSession, update: updateChat, patch: patchChat },
     sessions: { get: id => ctx.get('agents')?.get(id), flush: session => sessionStore.flush(session) },
     timeline: storyTimeline,
     activity: chat => backgroundTasks.activity(chat),
@@ -3985,13 +3989,9 @@ export async function apply(ctx) {
     initializeOpeningVariables: async (chat, swipeId) => liveCardUpdate.openingVariables(chat, await readChatCard(chat), swipeId),
   })
 
-  // 删除某一楼的版本或整轮；只保留一个撤销点。
+  // 删除某一楼的版本或一条消息；只保留一个撤销点。
   const historyDeletion = createHistoryDeletion({
-    chats: { forSession: async (sessionId, { index } = {}) => {
-      const need = { lastAssistant: true, lastVariables: true, ...(Number.isSafeInteger(index) ? { include: [index] } : {}) }
-      const selected = await boundedHistory.forSession(sessionId, need)
-      return selected ? normalizeChat(selected.chat) : chatForSession(sessionId)
-    }, update: updateChat, patch: patchChat },
+    chats: { forSession: floorChatForSession, update: updateChat, patch: patchChat },
     sessions: { get: id => ctx.get('agents')?.get(id), flush: session => sessionStore.flush(session) },
     timeline: storyTimeline,
     activity: chat => backgroundTasks.activity(chat),
@@ -4677,9 +4677,9 @@ export async function apply(ctx) {
         notifyPluginTimeline(args && args.sessionId, 'delete', { turn: args && args.turn })
         return { view }
       }
-      case 'deleteFloorRound': {
+      case 'deleteFloorMessage': {
         await reconcileStory(args && args.sessionId)
-        const view = await historyDeletion.deleteRound(args && args.sessionId, args)
+        const view = await historyDeletion.deleteMessage(args && args.sessionId, args)
         notifyPluginTimeline(args && args.sessionId, 'delete', { turn: args && args.turn })
         return { view }
       }

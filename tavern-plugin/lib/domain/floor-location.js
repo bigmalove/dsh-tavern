@@ -29,7 +29,9 @@ export function locateFloor({ chat, session, index, turn, role = 'assistant' }) 
 /**
  * Where one player input lives in the current model context. A user floor
  * belongs to the round of the reply that follows it, so `turn` names that
- * story turn; the native event is the last turn input of the same native turn.
+ * story turn; the native event is the last visible turn input of that turn.
+ * Native user messages often carry no turn of their own — the enclosing
+ * turn/start names their round, exactly as in the floor map.
  */
 export function locateInputFloor({ chat, session, index, turn }) {
   const messages = Array.isArray(chat && chat.messages) ? chat.messages : []
@@ -39,15 +41,21 @@ export function locateInputFloor({ chat, session, index, turn }) {
   if (!Number.isSafeInteger(expected) || expected < 1) return null
   const nodes = session && session.surface && Array.isArray(session.surface.nodes) ? session.surface.nodes : null
   if (nodes === null) return null
-  const bySeq = new Map(sessionEvents(session).map(event => [event.seq, event]))
-  for (let at = nodes.length - 1; at >= 0; at--) {
-    const seq = Number(nodes[at])
-    const event = bySeq.get(seq)
-    if (!event || event.type !== 'user/message' || !event.data?.id || !isTurnInput(event.data)) continue
-    if (Number(event.data.turn) !== expected) continue
-    return { seq, turn: expected }
+  const visible = new Set(nodes.map(Number))
+  let currentTurn = 0
+  let found = null
+  for (const event of sessionEvents(session)) {
+    if (event.type === 'turn/start') {
+      currentTurn = Math.max(0, Number(event.data?.turn) || 0)
+      continue
+    }
+    if (event.type !== 'user/message' || !event.data?.id || !isTurnInput(event.data)) continue
+    const stamped = Number(event.data?.turn)
+    const eventTurn = Number.isSafeInteger(stamped) && stamped > 0 ? stamped : currentTurn
+    if (eventTurn !== expected || !visible.has(Number(event.seq))) continue
+    found = { seq: Number(event.seq), turn: expected }
   }
-  return null
+  return found
 }
 
 /**

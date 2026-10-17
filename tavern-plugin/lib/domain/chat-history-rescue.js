@@ -28,9 +28,14 @@ export function rescueHistoryInput(source) {
 export function isRescuedHistoryMessage(chat, message) {
   return Boolean(chat.importHistory?.rescue && message?.importSource?.operationId === chat.importHistory.operationId)
 }
-export function assertRescueHistoryEditable(chat) {
-  if (isRescuedHistoryMessage(chat, (chat.messages || []).findLast(m => m.role === 'assistant'))) {
-    throw new Error('存档救援导入的历史仅供接续剧情，不能回退或重新生成；请发送新消息继续')
+/** Rescued history is read-only for history mutations. `message` names the floor
+ * being changed; without it the latest reply is checked (the rollback contract). */
+export function assertRescueHistoryEditable(chat, message) {
+  const target = message && typeof message === 'object'
+    ? message
+    : (chat.messages || []).findLast(m => m.role === 'assistant')
+  if (isRescuedHistoryMessage(chat, target)) {
+    throw new Error('存档救援导入的历史仅供接续剧情，不能回退、修改或删除；请发送新消息继续')
   }
 }
 

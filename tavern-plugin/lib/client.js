@@ -12108,7 +12108,7 @@ function bindTavernFontZoom(node, win) {
 				const time = Number.isFinite(Number(data.time)) ? new Date(Number(data.time)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
 				return React.createElement("div", { className: "dsh-tavern-user-row" },
 					React.createElement("div", { className: "dsh-tavern-user-stack" }, renderedImages, (text !== "" || extras.length > 0) ? React.createElement("div", { className: "dsh-tavern-user-bubble" }, liveState.view?.inputTemplateDisplays?.[turn] ? React.createElement(TavernMessageFrame, {content:liveState.view.inputTemplateDisplays[turn],sessionId:props.sessionId,turn:turn,partIndex:"user-template",frameOwner:props.frameOwner,eager:true}) : React.createElement("div", { style: { whiteSpace: "pre-wrap" } }, text), extras) : null),
-					React.createElement("div", { className: "dsh-tavern-user-actions" }, time ? React.createElement("span", null, time) : null, React.createElement(TavernFloorEditButton, { sessionId: props.sessionId, messageId: data.id, variant: "user" }), React.createElement(DshUi.Tooltip, { label: copied ? "已复制" : "复制", side: "bottom" }, React.createElement("button", { type: "button", className: "dsh-tavern-user-copy", "aria-label": copied ? "已复制" : "复制", onClick: copy }, React.createElement(copied ? DshUi.IconCheckOutline16 : DshUi.IconCopyOutline16, null))))
+					React.createElement("div", { className: "dsh-tavern-user-actions" }, time ? React.createElement("span", null, time) : null, React.createElement(TavernFloorEditButton, { sessionId: props.sessionId, messageId: data.id, variant: "user" }), React.createElement(TavernDeleteMessageAction, { sessionId: props.sessionId, messageId: data.id, variant: "user" }), React.createElement(DshUi.Tooltip, { label: copied ? "已复制" : "复制", side: "bottom" }, React.createElement("button", { type: "button", className: "dsh-tavern-user-copy", "aria-label": copied ? "已复制" : "复制", onClick: copy }, React.createElement(copied ? DshUi.IconCheckOutline16 : DshUi.IconCopyOutline16, null))))
 				);
 			}
 			// While a picture is being made: a placeholder frame where it will appear
@@ -12556,8 +12556,8 @@ function bindTavernFontZoom(node, win) {
 							React.createElement("path", { d: "M11.2 2.6l2.2 2.2-8.2 8.2-2.9.7.7-2.9z" }),
 							React.createElement("path", { d: "M9.7 4.1l2.2 2.2" }))));
 			}
-			// 整轮删除：玩家输入与回复一起移除，留下一个可撤销的删除点。
-			function TavernDeleteRoundAction(props) {
+			// 删除单条消息：只移除这一条，玩家输入与相邻楼层都不动。
+			function TavernDeleteMessageAction(props) {
 				const askConfirm = useTavernConfirm(props.sessionId);
 				const liveState = useScopedLiveTavernView(props.sessionId, String(props.messageId || ""), [
 					["mode"], ["floorsByMessageId", String(props.messageId || "")], ["activity", "busy"]
@@ -12565,22 +12565,24 @@ function bindTavernFontZoom(node, win) {
 				const view = liveState.view;
 				const floor = view && view.floorsByMessageId ? view.floorsByMessageId[String(props.messageId || "")] : null;
 				const [busy, setBusy] = React.useState(false);
-				if (!floor || !isBodyMode(view && view.mode) || floor.role !== "assistant" || floor.editable !== true) return null;
+				if (!floor || !isBodyMode(view && view.mode) || floor.editable !== true) return null;
 				async function remove() {
 					if (busy) return;
-					const ok = await askConfirm("删除这一轮？这条玩家输入与回复都会从剧情和模型上下文里移除，之后可以用「撤销删除」恢复。");
+					const ok = await askConfirm("删除这条消息？只会移除这一条，玩家输入与其它楼层都保留，之后可以用「撤销删除」恢复。");
 					if (!ok) return;
 					setBusy(true);
 					try {
-						const result = await rpc("deleteFloorRound", { index: floor.index, turn: floor.turn, role: "assistant" }, props.sessionId);
+						const result = await rpc("deleteFloorMessage", { index: floor.index, turn: floor.turn, role: floor.role }, props.sessionId);
 						liveTavernView.setView(props.sessionId, result.view);
 						notifyTavernDataChanged(["sessions"], "play-controls");
 						tavernCoordination.invalidate(props.sessionId);
-					} catch (error) { tavernErrorHub.report("删除这一轮", error); }
+					} catch (error) { tavernErrorHub.report("删除消息", error); }
 					finally { setBusy(false); liveTavernView.invalidate(props.sessionId); }
 				}
-				return React.createElement(DshUi.Tooltip, { label: "删除这一轮", side: "bottom" },
-					React.createElement("button", { type: "button", className: "dsh-tavern-message-edit", "aria-label": "删除这一轮", disabled: busy, onClick: remove },
+				const label = floor.greeting === true ? "删除开场白" : floor.role === "user" ? "删除这条输入" : "删除这条回复";
+				const className = props.variant === "user" ? "dsh-tavern-user-copy dsh-tavern-message-edit" : "dsh-tavern-message-edit";
+				return React.createElement(DshUi.Tooltip, { label: label, side: "bottom" },
+					React.createElement("button", { type: "button", className: className, "aria-label": label, disabled: busy, onClick: remove },
 						React.createElement(DshUi.IconTrashOutline16, null)));
 			}
 			function TavernSwipeControl(props) {
@@ -12682,8 +12684,8 @@ function bindTavernFontZoom(node, win) {
 				return input.slots.inject("conversation.chat.assistant-actions", function () { return input.slots.register({
 					name: "conversation.chat.assistant-actions", id: "dsh-tavern-floor-delete", order: 8,
 					inject: function (sessionId) { return { sessionId: sessionId }; }
-				}, TavernDeleteRoundAction); });
-			}, "dsh-tavern: round delete action");
+				}, TavernDeleteMessageAction); });
+			}, "dsh-tavern: message delete action");
 			input.ctx.effect(function () {
 				return input.slots.inject("conversation.chat.assistant-actions", function () { return input.slots.register({
 					name: "conversation.chat.assistant-actions", id: "dsh-tavern-floor-edit", order: 9,
@@ -18553,14 +18555,14 @@ function bindTavernFontZoom(node, win) {
                 title: "恢复第 " + turn + " 轮正文和状态；新的操作会使此恢复点失效" }, busy ? "恢复中…" : "撤销回退（恢复第 " + turn + " 轮）");
         }
 
-        // 撤销上一次删除（版本或整轮）。较早回合的删除不能撤销，此时不显示入口。
+        // 撤销上一次删除（一个版本或一条消息）；新的回合开始时失效。
         function TavernUndoDeletionAction(props) {
             const [busy, setBusy] = React.useState(false);
             const running = props.useSession(function (state) { return state.running === true; });
             const live = useLiveTavernView(props.sessionId, "undo-delete:" + String(running));
             const view = live.view;
             if (!view || !view.canUndoDeletion || view.deletionUndoable === false) return null;
-            const kind = view.deletionUndoKind === "round" ? "整轮" : "版本";
+            const kind = view.deletionUndoKind === "message" ? "消息" : "版本";
             async function undo() {
                 if (busy || running) return;
                 setBusy(true);
@@ -18612,7 +18614,7 @@ function bindTavernFontZoom(node, win) {
 			async function save() {
 				setBodyEditPanel(Object.assign({}, panel, { busy: true, error: "" }));
 				try {
-					const result = await rpc("saveBodyEdit", { token: panel.edit.token, index: panel.edit.index, turn: panel.edit.turn, role: panel.edit.role, texts: panel.texts }, props.sessionId);
+					const result = await rpc("saveBodyEdit", { token: panel.edit.token, index: panel.edit.index, turn: panel.edit.turn, role: panel.edit.role, latest: panel.edit.latest === true, texts: panel.texts }, props.sessionId);
 					liveTavernView.setView(props.sessionId, result.view);
 					notifyTavernDataChanged(["sessions"], "play-controls");
 					tavernCoordination.invalidate(props.sessionId);

@@ -45,6 +45,9 @@ function resolveFloor(chat, input) {
   const latest = role === 'assistant' && !greeting
     && index === messages.length - 1 && index === messages.findLastIndex(item => item?.role === 'assistant')
   if (!explicit && !latest) throw new Error('只能编辑最后一轮正文')
+  // The menu path stays "the last round": if a new input arrived after it was
+  // read, the edit is refused instead of silently editing an older floor.
+  if (input && input.latest === true && !latest) throw new Error('只能编辑最后一轮正文')
   return { index, message, role, turn, greeting, latest }
 }
 
