@@ -4014,7 +4014,8 @@ export async function apply(ctx) {
   }
 
   const bodyEditor = createBodyEditor({
-    chats: { forSession: floorChatForSession, update: updateChat, patch: patchChat },
+    // completeForSession：玩家输入的楼层配对要数完整历史里的消息，bounded 读到的稀疏行数不出来。
+    chats: { forSession: floorChatForSession, completeForSession: chatForSession, update: updateChat, patch: patchChat },
     sessions: { get: id => ctx.get('agents')?.get(id), flush: session => sessionStore.flush(session) },
     timeline: storyTimeline,
     activity: chat => backgroundTasks.activity(chat),

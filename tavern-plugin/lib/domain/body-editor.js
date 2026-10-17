@@ -2,6 +2,7 @@ import { replaceSessionSurface } from './session-surface-mutations.js'
 import { randomUUID } from 'node:crypto'
 import { editableReplyParts } from './reply-presentation.js'
 import { floorToken, locateFloor, locateInputFloor } from './floor-location.js'
+import { floorsIndex } from './conversation-fork-targets.js'
 import { sessionEvents } from './session-events.js'
 import { isScopedMessages } from './scoped-messages.js'
 import { diffJson } from './json-mutation.js'
@@ -126,9 +127,23 @@ export async function saveFloorPatch({ chat, index, message, intent, detachedInt
 export function createBodyEditor({ chats, sessions, timeline, activity, project, present, sessionPatch, repairNative }) {
   const guards = createHistoryMutationGuards({ sessionPatch, activity })
   const pending = new Set()
-  function locate(session, chat, floor) {
+  // 玩家输入的原生节点以楼层表为准。楼层表（页面上那排按钮用的同一份）按时间顺序
+  // 把输入逐条配到节点上；locateInputFloor 只按 turn 反查，而导入的聊天记录没有逐轮
+  // turn/start、正文编辑写出的替换节点也不带 turn，两套规则必然对不上：编辑会落到
+  // 相邻楼层的原生节点上——Chat 改对了、页面上那一楼却没变，再点就报
+  // 「这一楼已不在当前上下文中」。
+  // 配对要数完整历史里的玩家消息，bounded 读到的稀疏行数不出来，所以单独取完整 Chat；
+  // 编辑是低频操作，这一次完整读换的是两边定位一致。turn 反查保留为兜底。
+  async function locateInput(sessionId, session, chat, floor) {
+    const complete = typeof chats.completeForSession === 'function' ? await chats.completeForSession(sessionId) : null
+    const mapped = complete && Object.values(floorsIndex(complete, session, { busy: false }).bySeq)
+      .find(entry => entry.index === floor.index && entry.role === 'user')
+    if (mapped) return { seq: mapped.seq, turn: mapped.turn }
+    return locateInputFloor({ chat, session, index: floor.index, turn: floor.turn })
+  }
+  async function locate(sessionId, session, chat, floor) {
     const located = floor.role === 'user'
-      ? locateInputFloor({ chat, session, index: floor.index, turn: floor.turn })
+      ? await locateInput(sessionId, session, chat, floor)
       : locateFloor({ chat, session, index: floor.index, turn: floor.turn, role: 'assistant' })
     return located || null
   }
@@ -167,13 +182,13 @@ export function createBodyEditor({ chats, sessions, timeline, activity, project,
       }, { source: 'body-edit.stale-clear' })
     })
     let floor = resolveFloor(chat, input)
-    let located = locate(agent.session, chat, floor)
+    let located = await locate(sessionId, agent.session, chat, floor)
     if (!located) {
       const repaired = await restore(sessionId, agent)
       if (!repaired) throw new Error(floor.role === 'user' ? '这一楼已不在当前上下文中，无法编辑' : '正文已不在当前上下文中，无法编辑')
       chat = repaired
       floor = resolveFloor(chat, input)
-      located = locate(agent.session, chat, floor)
+      located = await locate(sessionId, agent.session, chat, floor)
       // The save is the truth: a latest reply the native surface cannot carry is
       // still editable — it is saved without a marker and repair carries the text
       // over on the next round. Older floors need their native node to stay put.

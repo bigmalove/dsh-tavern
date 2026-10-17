@@ -102,6 +102,11 @@ export function floorsIndex(chat, session, { busy = false } = {}) {
       if (!nodesForTurn.some(node => node.id === id)) nodesForTurn.push({ id, seq: event.seq })
     }
   }
+  // 配对顺序必须是 surface 上的排列顺序，不是事件序号：正文编辑写出的替换节点追加在
+  // 日志末尾（seq 最大），在 surface 上却顶替中间那一条。按 seq 排会让它排到最后，
+  // 之后每一条输入都错开一格，下一次编辑就打到邻层去了。
+  const surfacePosition = new Map((session.surface?.nodes || []).map((seq, position) => [Number(seq), position]))
+  inputNodes.sort((a, b) => (surfacePosition.get(Number(a.seq)) ?? 0) - (surfacePosition.get(Number(b.seq)) ?? 0))
   const chatInputCount = messages.filter(message => message && message.role === 'user').length
   // 只在数量完全一致时按顺序配对；数量不一致说明有一侧被裁剪或抢救导入
   // 改造过，宁可退回按 turn 查表，也不能把按钮挂到别的楼层上。

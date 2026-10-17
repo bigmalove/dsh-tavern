@@ -82,3 +82,35 @@ test('正文编辑替换了输入节点之后，剩下的楼层仍然各归各�
   assert.notEqual(bySeq[String(original)]?.index, 0)
   assert.equal(byMessageId['import:2'].index, 0)
 })
+
+// 回归：替换节点追加在日志末尾（seq 最大），在 surface 上却顶替中间那一条。
+// 按事件序号配对会把它排到最后，之后每条输入都错开一格——下一次编辑就打到邻层。
+test('编辑中间一条输入之后，后面的输入楼层不错位', () => {
+  const session = Session.create('floors-middle-edit')
+  const input = (id, text) => appendSessionEvent(session, 'user/message',
+    { id, turn: 1, role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } }, { surfaceOp: 'append' })
+  const reply = (id, turn, text) => appendSessionEvent(session, 'assistant/message',
+    { turn, step: 1, message: { id, role: 'assistant', content: [{ type: 'text', text }], source: { kind: 'model', provider: 'fixture', model: 'fixture' } } },
+    { surfaceOp: 'append', sourceEventSeqs: [] })
+  input('in:1', '一'); reply('re:1', 1, '甲')
+  input('in:2', '二'); reply('re:2', 2, '乙')
+  input('in:3', '三'); reply('re:3', 3, '丙')
+  const middle = seqOf(session, 'in:2')
+  replaceSessionSurface(session, 'user/message',
+    { id: 'tavern-body-edit:mid', role: 'user', content: [{ type: 'text', text: '改过的二' }], source: { kind: 'user' } },
+    { start: middle, end: middle, sourceEventSeqs: [middle] })
+  const chat = {
+    id: 'chat', sessionId: session.id, mode: 'writing', _storageRevision: 3,
+    timeline: { schemaVersion: 1, branchId: 'b1', revision: 4, checkpoints: [], participants: {}, operations: {}, updatedAt: 0 },
+    messages: [
+      { role: 'user', text: '一' }, { role: 'assistant', turn: 1, text: '甲' },
+      { role: 'user', text: '改过的二' }, { role: 'assistant', turn: 2, text: '乙' },
+      { role: 'user', text: '三' }, { role: 'assistant', turn: 3, text: '丙' }
+    ]
+  }
+  const { bySeq } = floorsIndex(chat, session, { busy: false })
+  assert.ok(seqOf(session, 'tavern-body-edit:mid') > seqOf(session, 'in:3'), '前提：替换节点的 seq 排在后面的输入之后')
+  assert.equal(bySeq[String(seqOf(session, 'in:1'))].index, 0)
+  assert.equal(bySeq[String(seqOf(session, 'tavern-body-edit:mid'))].index, 2)
+  assert.equal(bySeq[String(seqOf(session, 'in:3'))].index, 4, '第三条输入必须仍指向自己那一楼')
+})
