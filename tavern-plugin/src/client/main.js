@@ -745,6 +745,11 @@ window.__ModuleLoader__.load({
 			return value;
 		}
 
+		// 回合历史投影持有"哪些原生回合行被隐藏"的 DOM 状态，必须全客户端只有一份：
+		// 楼层按钮（assistant-renderer）触发重新生成后要立刻对账，面板侧（play-controls）
+		// 的观察者也要用同一份，否则两边各藏一份、互相对不上。
+		const tavernHistoryProjection = createTurnHistoryProjection();
+
 // @include features/assistant-renderer.js
 
 // @include features/card-list.js

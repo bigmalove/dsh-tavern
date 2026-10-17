@@ -1,5 +1,6 @@
 		function createPlayControlsFeatureModule() {
-			const historyProjection = createTurnHistoryProjection();
+			// 与楼层按钮共用同一份投影实例（定义在 main.js 的模块作用域）。
+			const historyProjection = tavernHistoryProjection;
 			function TavernConversationExportAction(props) {
                 // The header only needs session membership. Building a complete
                 // Tavern view here delays the button behind templates and history.

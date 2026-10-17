@@ -834,7 +834,7 @@
 				setBusy(true);
 				try {
 					const res = await rpc("regenBody", { guidance: "" }, props.sessionId);
-					applyBodyRegenerationResult({ liveTavernView: liveTavernView, historyProjection: historyProjection, sessionId: props.sessionId, view: res.view, tail: null });
+					applyBodyRegenerationResult({ liveTavernView: liveTavernView, historyProjection: tavernHistoryProjection, sessionId: props.sessionId, view: res.view, tail: null });
 				} catch (error) { tavernErrorHub.report("重新生成正文", error); }
 				finally { setBusy(false); liveTavernView.invalidate(props.sessionId); tavernCoordination.invalidate(props.sessionId); }
 			}

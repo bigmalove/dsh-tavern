@@ -11811,6 +11811,11 @@ function bindTavernFontZoom(node, win) {
 			return value;
 		}
 
+		// 回合历史投影持有"哪些原生回合行被隐藏"的 DOM 状态，必须全客户端只有一份：
+		// 楼层按钮（assistant-renderer）触发重新生成后要立刻对账，面板侧（play-controls）
+		// 的观察者也要用同一份，否则两边各藏一份、互相对不上。
+		const tavernHistoryProjection = createTurnHistoryProjection();
+
 		function createTavernFrameSlashExecutor(ctx, hostWindow) {
 			hostWindow = hostWindow || window;
             // A deliberately bounded, read-only subset of ST slash commands. Parse
@@ -12647,7 +12652,7 @@ function bindTavernFontZoom(node, win) {
 				setBusy(true);
 				try {
 					const res = await rpc("regenBody", { guidance: "" }, props.sessionId);
-					applyBodyRegenerationResult({ liveTavernView: liveTavernView, historyProjection: historyProjection, sessionId: props.sessionId, view: res.view, tail: null });
+					applyBodyRegenerationResult({ liveTavernView: liveTavernView, historyProjection: tavernHistoryProjection, sessionId: props.sessionId, view: res.view, tail: null });
 				} catch (error) { tavernErrorHub.report("重新生成正文", error); }
 				finally { setBusy(false); liveTavernView.invalidate(props.sessionId); tavernCoordination.invalidate(props.sessionId); }
 			}
@@ -17643,7 +17648,8 @@ function bindTavernFontZoom(node, win) {
 		}
 
 		function createPlayControlsFeatureModule() {
-			const historyProjection = createTurnHistoryProjection();
+			// 与楼层按钮共用同一份投影实例（定义在 main.js 的模块作用域）。
+			const historyProjection = tavernHistoryProjection;
 			function TavernConversationExportAction(props) {
                 // The header only needs session membership. Building a complete
                 // Tavern view here delays the button behind templates and history.
