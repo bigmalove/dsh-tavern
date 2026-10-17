@@ -10,7 +10,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { createScopedMessages, isScopedMessages } from './scoped-messages.js'
 import { diffJson } from './json-mutation.js'
 import { rollbackAvailability, clearFailedTurnSurface, locateRegenerationSurface, planRegenerationSurface, regenerationProjection, applyRegenerationProjection, failedTurnReplayAvailability, replayableFailedTurn } from './rollback-surface.js'
-import { assertRegenerationSourceCurrent, replaceLastRound } from './last-round-replacement.js'
+import { assertRegenerationSourceCurrent, replaceLastRound, originalStateOf } from './last-round-replacement.js'
 import { diagnosticIdentity, regenerationTargetDiagnostic } from './regeneration-diagnostics.js'
 
 function str(value) {
@@ -257,7 +257,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
         if (currentMessages.length < rolledMessageCount + 2 || currentUser === null || typeof currentUser !== 'object' || currentUser.role !== 'user' ||
             currentAssistant === null || typeof currentAssistant !== 'object' || currentAssistant.role !== 'assistant' || Number(currentAssistant.turn) !== syntheticTurn ||
             str(currentAssistant.text).trim() !== body) throw new Error('重新生成流程的正文已被另一项操作修改')
-        const merged = replaceLastRound({ originalChat, regeneratedChat: current, assistantIndex: oldAssistantIndex })
+        const merged = replaceLastRound({ originalChat, regeneratedChat: current, assistantIndex: oldAssistantIndex, originalState: originalStateOf(originalChat) })
         const next = merged.chat
         if (next.nativeCommits !== null && typeof next.nativeCommits === 'object') delete next.nativeCommits[String(syntheticTurn)]
         next.nativeCommits = next.nativeCommits && typeof next.nativeCommits === 'object' ? structuredClone(next.nativeCommits) : {}
@@ -423,7 +423,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
       // 2) The original floors around the new round. Floors changed since the
       // original revision (the temporary rollback included) return to it.
       const { messages: _latestRows, ...latestHeader } = latest
-      const merged = replaceLastRound({ originalChat: { messages: [originalUser, originalAssistant] }, regeneratedChat: { ...latestHeader, messages: [regeneratedUser, newAssistant] }, assistantIndex: 1 })
+      const merged = replaceLastRound({ originalChat: { messages: [originalUser, originalAssistant] }, regeneratedChat: { ...latestHeader, messages: [regeneratedUser, newAssistant] }, assistantIndex: 1, originalState: originalStateOf(originalHeader) })
       const next = merged.chat
       if (next.nativeCommits !== null && typeof next.nativeCommits === 'object') delete next.nativeCommits[String(syntheticTurn)]
       next.nativeCommits = next.nativeCommits && typeof next.nativeCommits === 'object' ? structuredClone(next.nativeCommits) : {}

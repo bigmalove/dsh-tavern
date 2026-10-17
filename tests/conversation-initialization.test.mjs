@@ -61,6 +61,16 @@ test('原生游玩把固定会话种子写在人物卡背景之后、开场白�
   assert.deepEqual(card.session().events, cardEvents)
 })
 
+test('non-MVU greetings retain every opening as a switchable version', async () => {
+  const h = initializationFixture()
+  h.card.first_mes = '主开场'
+  h.card.alternate_greetings = ['另一个开场']
+  const view = await h.make().start(h.input)
+  const opening = view.messages.find(message => message.greeting)
+  assert.deepEqual(opening.swipes, ['主开场', '另一个开场'])
+  assert.equal(opening.swipeId, 0)
+})
+
 test('missing cards, invalid openings, missing scripts and readiness failures do not publish partial chats', async () => {
   for (const input of [{ cardPath: 'missing' }, { openingId: 'missing' }, { mode: 'script' }]) {
     const h = initializationFixture()

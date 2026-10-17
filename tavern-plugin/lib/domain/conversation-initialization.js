@@ -211,10 +211,10 @@ export function createConversationInitialization(options) {
       projectionWarnings: openingProjection.warnings,
       ts: now(),
       greeting: true,
-      turn: 1
-    }, usesMvu !== true ? {} : {
+      turn: 1,
       swipeId: selectedOpeningIndex,
       swipes: openingChoices.map(function (choice) { return choice.text }),
+    }, usesMvu !== true ? {} : {
       variables: openingChoices.map(function () { return {} }),
       mvu: {
         modified: false,
@@ -362,7 +362,7 @@ export function createConversationInitialization(options) {
 
   return Object.freeze({
     start: input => serialize(input.sessionId, () => initialize(input)),
-    prepareImport: input => serialize(input.sessionId, () => initialize({ ...input, mode: 'play', requestMode: 'dsh', importDraft: true })),
+    prepareImport: input => serialize(input.sessionId, () => initialize({ ...input, mode: input.mode === 'writing' ? 'writing' : 'play', requestMode: 'dsh', importDraft: true })),
     ensureOpening: sessionId => serialize(sessionId, () => recover(sessionId))
   })
 }

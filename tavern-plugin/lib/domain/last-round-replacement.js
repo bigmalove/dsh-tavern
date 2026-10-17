@@ -1,3 +1,5 @@
+import { appendSwipe, selectedSwipe, withSwipeState } from './swipe-versions.js'
+
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value)
 }
@@ -6,9 +8,15 @@ function str(value) {
   return typeof value === 'string' ? value : (value === undefined || value === null ? '' : String(value))
 }
 
-function selectedIndex(message) {
-  const count = Math.max(Array.isArray(message && message.swipes) ? message.swipes.length : 0, 1)
-  return Math.max(0, Math.min(count - 1, Number(message && message.swipeId) || 0))
+/** The pre-rollback settlement state, kept per version when it is replaced. */
+export function originalStateOf(chat) {
+  if (!chat) return null
+  return {
+    posture: str(chat.posture),
+    ledger: chat.ledger === undefined ? null : clone(chat.ledger),
+    lastSettle: chat.lastSettle === undefined ? null : clone(chat.lastSettle),
+    settleStatus: str(chat.settleStatus) || 'idle'
+  }
 }
 
 function regenerationConflict(reason) {
@@ -31,12 +39,17 @@ export function assertRegenerationSourceCurrent(input = {}) {
   const originalAssistant = originalChat.messages[assistantIndex]
   const currentAssistant = currentChat.messages[assistantIndex]
   if (!originalUser || !currentUser || originalUser.role !== 'user' || currentUser.role !== 'user' || str(currentUser.text) !== str(originalUser.text)) throw regenerationConflict('玩家输入已经变化')
-  if (!originalAssistant || !currentAssistant || originalAssistant.role !== 'assistant' || currentAssistant.role !== 'assistant' || Number(currentAssistant.turn) !== Number(originalAssistant.turn)) throw regenerationConflict('正文楼层已经变化')
+  if (!originalAssistant || !currentAssistant || originalAssistant.role !== 'assistant' || Number(currentAssistant.turn) !== Number(originalAssistant.turn)) throw regenerationConflict('正文楼层已经变化')
+  // text/sourceText follow the selected version: switching versions makes a
+  // concurrent regeneration conflict, exactly like an edit does.
   if (str(currentAssistant.text) !== str(originalAssistant.text) || str(currentAssistant.sourceText) !== str(originalAssistant.sourceText)) throw regenerationConflict('正文内容已经变化')
   return currentChat
 }
 
-/** Replace the last committed user/body pair with exactly one generated version. */
+/** Replace the last committed user/body pair, appending the generated reply as
+ * one more version: every earlier version stays selectable and the new one is
+ * selected. `originalState` is the pre-rollback header, whose settlement
+ * belongs to the version being replaced and is snapshotted onto it. */
 export function replaceLastRound(input = {}) {
   const originalChat = clone(input.originalChat)
   const regeneratedChat = clone(input.regeneratedChat)
@@ -48,23 +61,46 @@ export function replaceLastRound(input = {}) {
   if (!originalAssistant || originalAssistant.role !== 'assistant' || !originalUser || originalUser.role !== 'user') throw new Error('原正文不是玩家输入与助手回复组合')
   if (!regeneratedAssistant || regeneratedAssistant.role !== 'assistant') throw new Error('重新生成没有产生助手回复')
 
-  const selected = selectedIndex(regeneratedAssistant)
+  const selected = selectedSwipe(regeneratedAssistant)
   const source = Array.isArray(regeneratedAssistant.swipes) && regeneratedAssistant.swipes[selected] !== undefined
     ? str(regeneratedAssistant.swipes[selected])
     : str(regeneratedAssistant.sourceText || regeneratedAssistant.text)
+  const oldSwipeId = selectedSwipe(originalAssistant)
+  const oldSwipes = Array.isArray(originalAssistant.swipes) && originalAssistant.swipes.length
+    ? clone(originalAssistant.swipes)
+    : [str(originalAssistant.sourceText || originalAssistant.text)]
+  const hasVariables = Array.isArray(originalAssistant.variables) || Array.isArray(regeneratedAssistant.variables)
   const replacement = Object.assign({}, clone(originalAssistant), clone(regeneratedAssistant), {
     turn: originalAssistant.turn,
-    swipeId: 0,
-    swipes: [source]
+    swipeId: oldSwipeId,
+    swipes: oldSwipes,
+    ...(hasVariables ? { variables: Array.isArray(originalAssistant.variables)
+      ? clone(originalAssistant.variables)
+      : oldSwipes.map(() => null) } : {})
   })
+  // Version bookkeeping belongs to the replaced round, never to the synthetic
+  // turn's fresh reply; a state array may only survive from the original.
+  if (Array.isArray(originalAssistant.swipeStates)) replacement.swipeStates = clone(originalAssistant.swipeStates)
+  else delete replacement.swipeStates
   delete replacement.bodyEdit
   // The regenerated body replaces the original reply in the native session, so
   // the round keeps the original reply's anchor, never the synthetic turn's.
   if (originalAssistant.nativeAnchor) replacement.nativeAnchor = clone(originalAssistant.nativeAnchor)
   else delete replacement.nativeAnchor
-  if (Array.isArray(originalAssistant.variables) || Array.isArray(regeneratedAssistant.variables)) {
-    replacement.variables = [clone(Array.isArray(regeneratedAssistant.variables) ? regeneratedAssistant.variables[selected] || {} : {})]
-  }
-  regeneratedChat.messages = originalChat.messages.slice(0, assistantIndex - 1).concat([clone(originalUser), replacement])
-  return { chat: regeneratedChat, assistant: replacement }
+  // The version being replaced keeps the settlement it already earned, so
+  // switching back to it restores instead of re-settling.
+  const originalState = input.originalState
+  const snapshotted = originalState ? withSwipeState(replacement, oldSwipeId, {
+    posture: str(originalState.posture),
+    ledger: originalState.ledger === undefined ? null : clone(originalState.ledger),
+    lastSettle: originalState.lastSettle === undefined ? null : clone(originalState.lastSettle),
+    settleStatus: str(originalState.settleStatus) || 'idle'
+  }) : replacement
+  const merged = appendSwipe(snapshotted, {
+    source,
+    variables: Array.isArray(regeneratedAssistant.variables) ? clone(regeneratedAssistant.variables[selected] || {}) : undefined,
+    state: null
+  })
+  regeneratedChat.messages = originalChat.messages.slice(0, assistantIndex - 1).concat([clone(originalUser), merged])
+  return { chat: regeneratedChat, assistant: merged }
 }

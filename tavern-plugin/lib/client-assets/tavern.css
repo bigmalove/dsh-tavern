@@ -2758,3 +2758,9 @@ details.dsh-tavern-recall-guide > summary .dsh-tavern-recall-guide-heading > spa
   background: var(--dsw-specific-sidebar-fill); color: var(--dsw-alias-label-primary);
 }
 .dsh-tavern-plugin-overlay-error { display: flex; gap: 12px; align-items: center; justify-content: center; min-height: 100%; }
+/* 版本切换控件：助手操作栏只放行分叉按钮，这里补回 ‹ n/m › 并允许它显示。 */
+body.dsh-tavern-shell-active [data-turn-tail] [data-slot="conversation.chat.assistant-actions"] > :is(.dsh-tavern-message-swipe, .dsh-tavern-message-swipe-count) { display: inline-flex !important; }
+.dsh-tavern-message-swipe { align-items: center; justify-content: center; min-width: calc(22px + var(--dsh-content-font-delta, 0px)); height: calc(24px + var(--dsh-content-font-delta, 0px)); padding: 0 4px; border: 0; border-radius: 999px; background: transparent; color: var(--dsw-alias-label-tertiary); font: inherit; font-size: calc(13px + var(--dsh-content-font-delta, 0px)); line-height: 1; cursor: pointer; }
+.dsh-tavern-message-swipe:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); }
+.dsh-tavern-message-swipe:disabled { cursor: default; opacity: .4; }
+.dsh-tavern-message-swipe-count { align-items: center; justify-content: center; min-width: 26px; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; font-variant-numeric: tabular-nums; user-select: none; }

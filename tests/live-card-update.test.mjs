@@ -3,6 +3,19 @@ import assert from 'node:assert/strict'
 import {createLiveCardUpdate} from '../tavern-plugin/lib/domain/live-card-update.js'
 import {generateSchema} from '../tavern-plugin/lib/domain/mvu-schema.generated.js'
 
+test('openingVariables initializes the requested opening without changing earned snapshots', async () => {
+  const runtime = createLiveCardUpdate()
+  try {
+    const definition = { name: '测试', first_mes: '<initvar>{"day":1}</initvar>', alternate_greetings: ['<initvar>{"day":2}</initvar>'] }
+    const original = { id: 'opening', messages: [{ greeting: true, swipeId: 0, variables: [{ stat_data: { day: 99 } }] }] }
+    const before = structuredClone(original)
+    const initialized = await runtime.openingVariables(original, definition, 1)
+    assert.deepEqual(initialized.stat_data, { day: 2 })
+    assert.equal(initialized.schema.properties.day.type, 'number')
+    assert.deepEqual(original, before)
+  } finally { runtime.dispose() }
+})
+
 const card = state => ({name:'测试',first_mes:`<initvar>${JSON.stringify(state)}</initvar>`,extensions:{}})
 const snapshot = state => ({stat_data:structuredClone(state),schema:generateSchema(structuredClone(state)),initialized_lorebooks:{test:true}})
 function chat(definition, state) {

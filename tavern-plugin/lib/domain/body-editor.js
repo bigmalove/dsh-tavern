@@ -5,6 +5,7 @@ import { locateRegenerationSurface } from './rollback-surface.js'
 import { sessionEvents } from './session-events.js'
 import { isScopedMessages } from './scoped-messages.js'
 import { diffJson } from './json-mutation.js'
+import { createHistoryMutationGuards } from './history-mutation-guards.js'
 
 function latest(chat) {
   const message = chat.messages?.at(-1)
@@ -56,22 +57,39 @@ export async function synchronizeBodyEdits(session, chat, flush, persistChat) {
   return cleared
 }
 
+/**
+ * Persist one floor's timeline intent on a bounded (scoped) save. The intent is
+ * applied to a detached header plus that single floor, and both are patched on
+ * the read revision; a moved revision returns undefined so the complete path
+ * re-validates the operation token. Shared by body edits and version switches;
+ * the saved Chat is returned, presentation is the caller's business.
+ */
+export async function saveFloorPatch({ chat, index, message, intent, detachedIntent = intent, seq, reason = '模型上下文已变化，请重新打开', source = 'foreground.body-edit' }, { chats, sessions, timeline, agent }) {
+  if (!isScopedMessages(chat.messages) || typeof chats.patch !== 'function') return undefined
+  const { messages: _rows, ...header } = chat
+  const edited = timeline.apply({ chat: { ...header, messages: [message] }, intent: detachedIntent }).chat
+  const { messages: [row], ...head } = edited
+  const changes = diffJson({ ...header, messages: [] }, { ...head, messages: [] }).filter(change => !['_storageRevision', 'updatedAt'].includes(change.path[0]))
+  for (const change of diffJson(message, row)) changes.push({ ...change, path: ['messages', index, ...change.path] })
+  const saved = await chats.patch(chat.id, chat._storageRevision, changes, { source, assertCurrent() {
+    if (!agent.session.surface?.nodes.includes(seq)) throw new Error(reason)
+  } })
+  if (!saved) return undefined
+  await synchronizeBodyEdits(agent.session, { messages: [row] }, sessions.flush)
+  return saved
+}
+
 /** Edit prose only; do not replay macros, scripts or settlement. */
 export function createBodyEditor({ chats, sessions, timeline, activity, project, present, sessionPatch }) {
+  const guards = createHistoryMutationGuards({ sessionPatch, activity })
   const pending = new Set()
-  function refuseClosedPatch() {
-    if (sessionPatch && !sessionPatch.replacementAllowed()) throw new Error(sessionPatch.blockReason())
-  }
-  function idle(chat, agent) {
-    if (agent?.phase?.kind === 'running' || chat.regenInProgress || ['pending', 'running'].includes(chat.settleStatus) || activity(chat)?.busy) throw new Error('请等待当前生成或后台处理完成后再编辑')
-  }
   async function context(sessionId) {
-    refuseClosedPatch()
+    guards.refuseClosedPatch()
     const chat = await chats.forSession(sessionId)
     if (!chat) throw new Error('会话不存在')
     const agent = sessions.get(sessionId)
     if (!agent?.session) throw new Error('无法访问原生会话')
-    idle(chat, agent)
+    guards.assertIdle(chat, agent, '编辑')
     await synchronizeBodyEdits(agent.session, chat, sessions.flush, async (dirty, cleared) => {
       const drop = new Set(cleared)
       await chats.update(dirty.id, current => {
@@ -92,23 +110,18 @@ export function createBodyEditor({ chats, sessions, timeline, activity, project,
     if (!parts.some(part => part.kind === 'text' && part.text.trim())) throw new Error('这轮只有 HTML，没有可编辑文本')
     return { chat, agent, message, target, parts }
   }
-  // A bounded history edits only its last floor: apply the same timeline intent to
+  // A bounded history edits only one floor: apply the same timeline intent to
   // the header and that floor, then patch them on the read revision. A moved
-  // revision returns undefined so the complete path re-validates the edit token.
+  // revision returns undefined so the complete path re-validates the token.
+  // `detachedIntent` is the same intent against the single-floor projection;
+  // `seq` is the floor's current node in the model surface.
   async function saveLatestFloor(chat, message, patch, target, agent) {
-    if (!isScopedMessages(chat.messages) || typeof chats.patch !== 'function') return undefined
-    const index = chat.messages.length - 1
-    const { messages: _rows, ...header } = chat
-    const edited = timeline.apply({ chat: { ...header, messages: [message] }, intent: { kind: 'body.edit', turn: message.turn, patch } }).chat
-    const { messages: [row], ...head } = edited
-    const changes = diffJson({ ...header, messages: [] }, { ...head, messages: [] }).filter(change => !['_storageRevision', 'updatedAt'].includes(change.path[0]))
-    for (const change of diffJson(message, row)) changes.push({ ...change, path: ['messages', index, ...change.path] })
-    const saved = await chats.patch(chat.id, chat._storageRevision, changes, { source: 'foreground.body-edit', assertCurrent() {
-      if (!agent.session.surface?.nodes.includes(target.assistantSeq)) throw new Error('模型上下文已变化，请重新打开编辑')
-    } })
-    if (!saved) return undefined
-    await synchronizeBodyEdits(agent.session, { messages: [row] }, sessions.flush)
-    return present(saved)
+    const saved = await saveFloorPatch({
+      chat, index: chat.messages.length - 1, message, seq: target.assistantSeq,
+      intent: { kind: 'body.edit', turn: message.turn, patch },
+      reason: '模型上下文已变化，请重新打开编辑', source: 'foreground.body-edit'
+    }, { chats, sessions, timeline, agent })
+    return saved === undefined ? undefined : present(saved)
   }
   async function read(sessionId) {
     const { chat, message, parts } = await context(sessionId)
@@ -150,7 +163,7 @@ export function createBodyEditor({ chats, sessions, timeline, activity, project,
       const patched = await saveLatestFloor(chat, message, patch, target, agent)
       if (patched) return patched
       const saved = await chats.update(chat.id, current => {
-        idle(current, agent)
+        guards.assertIdle(current, agent, '编辑')
         if (token(current, latest(current)) !== input.token) throw new Error('正文或会话已变化，请重新打开编辑')
         if (!agent.session.surface?.nodes.includes(target.assistantSeq)) throw new Error('模型上下文已变化，请重新打开编辑')
         return timeline.apply({ chat: current, intent: { kind: 'body.edit', turn: message.turn, patch } }).chat

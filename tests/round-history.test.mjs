@@ -272,14 +272,20 @@ test('真实 journal 持久化：消息面失败后 checkpoint 可恢复、重�
   assert.deepEqual((await undoStore.read('chat')).messages, original.messages)
 })
 
-test('完整重生成先独立替换唯一正文，再执行后台结算', async () => {
+test('完整重生成为原轮次追加新版本并保留旧版本，再执行后台结算', async () => {
   const h = harness({ checkpoint: true })
   const originalEvents = structuredClone(h.session.events)
   const result = await h.create().regenerate('', '写得短一些', 'session')
   assert.equal(result.messages[1].text, '推门')
   assert.equal(result.messages[2].turn, 2)
-  assert.deepEqual(result.messages[2].swipes, ['新正文3'])
-  assert.deepEqual(result.messages[2].variables, [{ hp: 7 }])
+  assert.deepEqual(result.messages[2].swipes, ['旧正文', '新正文3'])
+  assert.equal(result.messages[2].swipeId, 1)
+  assert.deepEqual(result.messages[2].variables, [{ hp: 8 }, { hp: 7 }])
+  // 被替换的版本带走它已完成的结算；新版本尚未结算。
+  assert.deepEqual(result.messages[2].swipeStates, [
+    { posture: '门内', ledger: null, lastSettle: null, settleStatus: 'done' },
+    null
+  ])
   assert.deepEqual(result.suppressedDshTurns, [3])
   assert.deepEqual(result.regeneratedDshTurns, { '2': 3 })
   assert.equal(result.regenInProgress, undefined)
@@ -343,11 +349,19 @@ for (const mode of ['throw', 'missing', 'empty']) test('重生成 '+mode+' 恢�
   assert.ok(!h.calls.includes('settlement'))
 })
 
-test('重新创建流程模块后连续重生成仍替换原轮次；回退恢复 checkpoint 并按顺序通知脚本', async () => {
+test('重新创建流程模块后连续重生成仍为原轮次追加版本；回退恢复 checkpoint 并按顺序通知脚本', async () => {
   const h = harness({ checkpoint: true })
   await h.create().regenerate('chat', '', 'session')
   const result = await h.create().regenerate('chat', '', 'session')
-  assert.deepEqual(result.messages[2].swipes, ['新正文4'])
+  assert.deepEqual(result.messages[2].swipes, ['旧正文', '新正文3', '新正文4'])
+  assert.equal(result.messages[2].swipeId, 2)
+  assert.deepEqual(result.messages[2].variables, [{ hp: 8 }, { hp: 7 }, { hp: 7 }])
+  assert.deepEqual(result.messages[2].swipeStates, [
+    { posture: '门内', ledger: null, lastSettle: null, settleStatus: 'done' },
+    // 第二个版本被替换时，头部已是第一次结算后的姿势。
+    { posture: '门外', ledger: null, lastSettle: null, settleStatus: 'done' },
+    null
+  ])
   assert.deepEqual(result.suppressedDshTurns, [3, 4])
   assert.deepEqual(result.regeneratedDshTurns, { '2': 4 })
   assert.equal(result.adopted.hiddenTurn, 2)

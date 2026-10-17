@@ -94,6 +94,7 @@ import { generateHelper, generateHelperRaw, generateHelperCompletion, identifyHe
 import { validateHelperGenerateConfig, resolveHelperGenerationPreset, helperGenerationHistory } from './domain/helper-generation-prompts.js'
 import { createHelperGenerationTasks } from './domain/helper-generation-tasks.js'
 import { createBodyEditor } from './domain/body-editor.js'
+import { createSwipeSelection } from './domain/swipe-selection.js'
 import { appendHelperUserSessionContext } from './domain/helper-user-session-context.js'
 import { userMessageForTurn, requestIdForTurn, requestIdForMessages } from './domain/session-turn-input.js'
 import { inspectStoryAlignment, nativeStoryTurns } from './domain/story-alignment.js'
@@ -172,7 +173,7 @@ import { createForegroundOrchestrationStrategies } from './domain/foreground-orc
 import { clearFailedTurnSurface, rollbackAvailability, reshadowRolledBackRounds } from './domain/rollback-surface.js'
 import { assistantResultForTurn } from './domain/session-turn-result.js'
 import { activeStoryTurn, createStorySubmissionTool, STORY_SUBMIT_TOOL_NAME } from './domain/story-tool-submission.js'
-import { forkTurnsByMessageId as forkTargetsFromSession } from './domain/conversation-fork-targets.js'
+import { forkTurnsByMessageId as forkTargetsFromSession, floorsByMessageId as floorsFromChat } from './domain/conversation-fork-targets.js'
 import { createTavernRetryLimiter } from './domain/tavern-retry-limiter.js'
 import { lastTavernHelperVariables, projectTavernHelperContext, hydrateTavernHelperMessages, replaceTavernHelperVariables, HELPER_MESSAGE_COLD_WINDOW } from './domain/tavern-helper-context.js'
 import { projectTavernHelperWorldbook } from './domain/tavern-helper-worldbook.js'
@@ -2168,8 +2169,15 @@ export async function apply(ctx) {
     const session = sessionStore.get(str(chat?.sessionId)) || agentRegistry.get(str(chat?.sessionId))?.session
     return forkTargetsFromSession(session, chat?.regeneratedDshTurns)
   }
+  // Per-floor swipe/edit facts for the rendered nodes, same live-event basis as
+  // the fork mapping; a floor outside the loaded window has no entry.
+  function floorsForChat(chat, activity) {
+    const session = sessionStore.get(str(chat?.sessionId)) || agentRegistry.get(str(chat?.sessionId))?.session
+    if (!session) return {}
+    return floorsFromChat(chat, session, { busy: Boolean(activity && activity.busy) })
+  }
   function volatileSessionViewFields(chat, activity, changes) {
-    return { ...sessionStateView.volatile(chat, activity, changes), forkTurnsByMessageId: forkTurnsForChat(chat) }
+    return { ...sessionStateView.volatile(chat, activity, changes), forkTurnsByMessageId: forkTurnsForChat(chat), floorsByMessageId: floorsForChat(chat, activity) }
   }
 
   async function projectCachedSessionView(chat, previous, activity) {
@@ -3442,9 +3450,18 @@ export async function apply(ctx) {
         }
         signal?.throwIfAborted()
         let stat = { postureUpdated: false }
+        // Settlement always belongs to the currently selected version of the
+        // latest reply: snapshot it onto that version so switching can restore
+        // it (or re-settle a version that never finished).
+        const settleIndex = (Array.isArray(snapshot.messages) ? snapshot.messages : [])
+          .findLastIndex(message => message?.role === 'assistant')
+        const effectMessageIndices = (mvuResult?.effect?.changes || [])
+          .filter(change => change.path[0] === 'messages' && Number.isInteger(change.path[1])).map(change => change.path[1])
+        const settlementMessageIndices = [...new Set([...(mvuTarget ? [mvuTarget.messageId] : []),
+          ...(settleIndex >= 0 ? [settleIndex] : []), ...effectMessageIndices])]
         const completion = {
-          ...(mvuTarget && (mvuResult?.effect?.changes || []).every(c => c.path[0] !== 'messages' || Number.isInteger(c.path[1]))
-            ? {messageIndices:[mvuTarget.messageId,...(mvuResult?.effect?.changes || []).filter(c=>c.path[0]==='messages').map(c=>c.path[1])]} : {}),
+          ...(mvuTarget && (mvuResult?.effect?.changes || []).every(c => c.path[0] !== 'messages' || Number.isInteger(c.path[1])) && settlementMessageIndices.length
+            ? {messageIndices:settlementMessageIndices} : {}),
           stateChanged: Boolean(mvuResult?.effect?.changes?.length) || Boolean(mvuResult && mvuResult.receipt && mvuResult.receipt.status === 'updated') ||
             str(result && result.posture).trim() !== '',
           participant: taskRun.participant({ sessionId: backgroundSessionId, boundary: backgroundBoundary }),
@@ -3473,6 +3490,16 @@ export async function apply(ctx) {
             draft.settleStatus = 'done'
             draft.settleError = null
             draft.lastSettle = { ts: Date.now(), posture: stat.postureUpdated, raw: text.slice(0, 200) }
+            if (settleIndex >= 0) {
+              const settled = draft.messages[settleIndex]
+              if (settled) {
+                const swipeId = Math.max(0, Number(settled.swipeId) || 0)
+                const states = Array.isArray(settled.swipeStates) ? settled.swipeStates.slice() : []
+                while (states.length <= swipeId) states.push(null)
+                states[swipeId] = { posture: str(draft.posture), ledger: draft.ledger ?? null, lastSettle: draft.lastSettle ?? null, settleStatus: 'done' }
+                settled.swipeStates = states
+              }
+            }
           }
         }
         const completed = await taskRun.commit(completion)
@@ -3932,6 +3959,24 @@ export async function apply(ctx) {
     },
     present: presentStory,
     sessionPatch,
+  })
+
+  // 切换某一楼正文的版本（swipe）：文字、变量与结算随最新楼层一起切换。
+  const swipeSelection = createSwipeSelection({
+    chats: { forSession: hookChatForSession, update: updateChat, patch: patchChat },
+    sessions: { get: id => ctx.get('agents')?.get(id), flush: session => sessionStore.flush(session) },
+    timeline: storyTimeline,
+    activity: chat => backgroundTasks.activity(chat),
+    project: async (text, chat) => {
+      const extensions = await readCardExtensions(chat.cardPath, chat)
+      return projectRuntimeReply(text, { charName: chat.cardName, macroState: chat.macroState,
+        regexScripts: composeTavernRegexScripts(extensions, chat.runtimePresetSnapshot?.regexScripts), placement: 2, isEdit: false, depth: 0 })
+    },
+    present: presentStory,
+    sessionPatch,
+    queueSettlement,
+    scripts: { dispatchEvent: event => tavernScriptHostAdapter.dispatchEvent(event) },
+    initializeOpeningVariables: async (chat, swipeId) => liveCardUpdate.openingVariables(chat, await readChatCard(chat), swipeId),
   })
 
   // ---------- HTTP RPC（客户端同源 fetch） ----------
@@ -4595,6 +4640,12 @@ export async function apply(ctx) {
         await reconcileStory(args && args.sessionId)
         const view = await regenBody(args && args.chatId, args && args.guidance, args && args.sessionId)
         notifyPluginTimeline(args && args.sessionId, 'regenerate')
+        return { view }
+      }
+      case 'selectSwipe': {
+        await reconcileStory(args && args.sessionId)
+        const view = await swipeSelection.select(args && args.sessionId, args)
+        notifyPluginTimeline(args && args.sessionId, 'swipe', { turn: args && args.turn })
         return { view }
       }
       case 'replayTurn': {

@@ -677,7 +677,7 @@ export function createTavernPluginApi(deps) {
     if (gameId) dispatch(removedHandlers, { gameId }, 'onGameRemoved')
   }
 
-  const TIMELINE_KINDS = new Set(['rollback', 'undo-rollback', 'regenerate', 'edit', 'fork'])
+  const TIMELINE_KINDS = new Set(['rollback', 'undo-rollback', 'regenerate', 'edit', 'swipe', 'fork'])
   /** Called by Tavern after the story line of a game changed; the change is informational. */
   function timelineChanged(gameId, change = {}) {
     if (!gameId || !TIMELINE_KINDS.has(change.kind) || timelineHandlers.size === 0) return

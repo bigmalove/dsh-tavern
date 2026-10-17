@@ -489,6 +489,25 @@ export function createStoryTimeline(options = {}) {
     }
   }
 
+  // Prose changed under the resident background Agents: they must rewind to
+  // the checkpoint's boundary before their next run sees the new text.
+  function rewindParticipants(chat) {
+    const checkpoint = chat.timeline.checkpoints.at(-1)
+    for (const [role, participant] of Object.entries(chat.timeline.participants)) {
+      if (!persistentParticipant(participant.lifetime)) continue
+      const previous = object(checkpoint?.participants?.[role])
+      const source = participantCheckpointSource(previous)
+      const needsSession = participant.requiresNewSessionOnRewind === true || !str(participant.sessionId)
+      const boundary = source?.sessionId === participant.sessionId ? source.boundary : -1
+      chat.timeline.participants[role] = {
+        ...participant, status: needsSession ? 'needs-session' : 'needs-rewind',
+        sessionId: needsSession ? '' : participant.sessionId,
+        boundary: needsSession ? null : boundary, rewindTo: needsSession ? null : boundary,
+        syncedRevision: null, updatedAt: now()
+      }
+    }
+  }
+
   function apply(input) {
     let chat = ensure(input && input.chat)
     const intent = object(input && input.intent)
@@ -520,22 +539,53 @@ export function createStoryTimeline(options = {}) {
       chat.lastSettle = null
       chat.settleStatus = 'idle'
       chat.settleError = null
-      const checkpoint = chat.timeline.checkpoints.at(-1)
-      for (const [role, participant] of Object.entries(chat.timeline.participants)) {
-        if (!persistentParticipant(participant.lifetime)) continue
-        const previous = object(checkpoint?.participants?.[role])
-        const source = participantCheckpointSource(previous)
-        const needsSession = participant.requiresNewSessionOnRewind === true || !str(participant.sessionId)
-        const boundary = source?.sessionId === participant.sessionId ? source.boundary : -1
-        chat.timeline.participants[role] = {
-          ...participant, status: needsSession ? 'needs-session' : 'needs-rewind',
-          sessionId: needsSession ? '' : participant.sessionId,
-          boundary: needsSession ? null : boundary, rewindTo: needsSession ? null : boundary,
-          syncedRevision: null, updatedAt: now()
-        }
-      }
+      rewindParticipants(chat)
       chat.candidateAgent = null
       value = { status: 'edited', revision: chat.timeline.revision }
+    }
+    else if (intent.kind === 'body.swipe') {
+      // Switching one floor's version: the floor keeps its turn and only its
+      // projection changes. The latest floor carries the story's variables and
+      // settlement with it; older floors only swap their own text.
+      const index = Number(intent.index)
+      const message = chat.messages[index]
+      if (!message || message.role !== 'assistant' || Number(message.turn || (message.greeting === true ? 1 : 0)) !== Number(intent.turn)) throw new Error('正文楼层不存在或已变化')
+      const count = Math.max(Array.isArray(message.swipes) ? message.swipes.length : 0, 1)
+      const swipeId = Number(intent.swipeId)
+      if (!Number.isSafeInteger(swipeId) || swipeId < 0 || swipeId >= count) throw new Error('正文版本不存在')
+      Object.assign(message, intent.patch)
+      delete message.displayRuntime
+      chat.timeline.revision++
+      if (intent.latest === true) {
+        // Editing keeps the same committed round, but its next settlement must
+        // bind to the switched revision. Old in-flight work still fails basedOn.
+        const switchedRound = backgroundBody(chat)
+        if (switchedRound && Number(switchedRound.turn) === Number(intent.turn)) {
+          switchedRound.committedRevision = chat.timeline.revision
+        }
+        // The selected version's own settlement wins: restore a finished one,
+        // clear and let the caller re-settle a version that never finished.
+        const restored = object(intent.restoreState)
+        if (restored !== null && str(restored.settleStatus) === 'done') {
+          chat.posture = str(restored.posture)
+          chat.ledger = clone(restored.ledger || null)
+          chat.lastSettle = clone(restored.lastSettle || null)
+          chat.settleStatus = 'done'
+        } else {
+          chat.posture = ''
+          chat.ledger = null
+          chat.lastSettle = null
+          chat.settleStatus = 'idle'
+        }
+        chat.settleError = null
+        chat.candidates = null
+        rewindParticipants(chat)
+        chat.candidateAgent = null
+      }
+      if (message.greeting === true) chat.openingText = message.text
+      delete chat.deletionUndo
+      chat.timeline.updatedAt = now()
+      value = { status: 'swiped', revision: chat.timeline.revision }
     }
     else if (intent.kind === 'body.begin') value = beginBody(chat, intent)
     else if (intent.kind === 'agent.begin') value = beginAgent(chat, intent)

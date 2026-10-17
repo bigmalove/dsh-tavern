@@ -728,7 +728,55 @@
 				const shown = Boolean(view && isBodyMode(view.mode) && view.releaseCapabilities && view.releaseCapabilities.sceneImages && turn > 0);
 				return shown ? React.createElement(SceneImageAction, { key: props.sessionId + ":" + turn, sessionId: props.sessionId, turn: turn }) : null;
 			}
-			function register(input) {
+			function TavernSwipeControl(props) {
+			const liveState = useScopedLiveTavernView(props.sessionId, String(props.messageId || ""), [
+				["mode"], ["floorsByMessageId", String(props.messageId || "")], ["activity", "busy"], ["regenInProgress"]
+			]);
+			const view = liveState.view;
+			const floor = view && view.floorsByMessageId ? view.floorsByMessageId[String(props.messageId || "")] : null;
+			const [busy, setBusy] = React.useState(false);
+			if (!floor || !isBodyMode(view && view.mode) || floor.role !== "assistant") return null;
+			const count = Math.max(1, Number(floor.swipeCount) || 1);
+			const latest = floor.latest === true;
+			// 只有一个版本又不是最新楼层时无从可切；开场白的 › 不生成新开场白。
+			if (count <= 1 && !latest) return null;
+			const blocked = Boolean((view && view.activity && view.activity.busy) || (view && view.regenInProgress));
+			const disabled = busy || blocked || floor.editable !== true;
+			const title = floor.reason || (blocked ? "请等待当前生成或后台处理完成后再操作" : "");
+			const current = Math.max(0, Number(floor.swipeId) || 0);
+			async function select(swipeId) {
+				if (busy || disabled) return;
+				setBusy(true);
+				try {
+					await rpc("selectSwipe", { sessionId: props.sessionId, index: floor.index, turn: floor.turn, swipeId: swipeId, token: floor.token }, props.sessionId);
+					liveTavernView.invalidate(props.sessionId);
+				} catch (error) { tavernErrorHub.report("切换正文版本", error); }
+				finally { setBusy(false); liveTavernView.invalidate(props.sessionId); }
+			}
+			// 最后一个版本且是最新楼层：直接重新生成一个新版本（不带意见）。
+			async function regenerate() {
+				if (busy || disabled) return;
+				setBusy(true);
+				try {
+					const res = await rpc("regenBody", { guidance: "" }, props.sessionId);
+					applyBodyRegenerationResult({ liveTavernView: liveTavernView, historyProjection: historyProjection, sessionId: props.sessionId, view: res.view, tail: null });
+				} catch (error) { tavernErrorHub.report("重新生成正文", error); }
+				finally { setBusy(false); liveTavernView.invalidate(props.sessionId); tavernCoordination.invalidate(props.sessionId); }
+			}
+			function prev(event) { if (current > 0) select(current - 1); }
+			function next(event) {
+				if (current + 1 < count) { select(current + 1); return; }
+				if (latest && floor.greeting !== true) regenerate();
+			}
+			const label = "第 " + String(current + 1) + " / " + String(count) + " 个版本";
+			return React.createElement(React.Fragment, null,
+				React.createElement(DshUi.Tooltip, { label: disabled && title ? title : "上一个版本", side: "bottom" },
+					React.createElement("button", { type: "button", className: "dsh-tavern-message-swipe", "aria-label": "上一个版本", disabled: disabled || current <= 0, onClick: prev }, "‹")),
+				React.createElement("span", { className: "dsh-tavern-message-swipe-count", title: label }, String(current + 1) + "/" + String(count)),
+				React.createElement(DshUi.Tooltip, { label: disabled && title ? title : (current + 1 < count ? "下一个版本" : latest && floor.greeting !== true ? "重新生成一个新版本" : "没有更多版本"), side: "bottom" },
+					React.createElement("button", { type: "button", className: "dsh-tavern-message-swipe", "aria-label": "下一个版本", disabled: disabled || (current + 1 >= count && !(latest && floor.greeting !== true)), onClick: next }, "›")));
+		}
+		function register(input) {
 				const scriptOwner = createTavernScriptSessionOwner({ sessions: input.ctx.sessions, executeSlash: createTavernFrameSlashExecutor(input.ctx) });
 				const executeSlash = createTavernFrameSlashExecutor(input.ctx);
 				input.ctx.effect(function () {
@@ -758,12 +806,18 @@
 						priority: -1
 					}, TavernUserNodeView); });
 				}, "dsh-tavern: raw user message renderer");
-				input.ctx.effect(function () {
-					return input.slots.inject("conversation.chat.assistant-actions", function () { return input.slots.register({
-						name: "conversation.chat.assistant-actions", id: "dsh-tavern-fork", order: 20,
-						inject: function (sessionId) { return { sessionId: sessionId }; }
-					}, TavernForkAssistantAction); });
-				}, "dsh-tavern: conversation fork action");
+			input.ctx.effect(function () {
+				return input.slots.inject("conversation.chat.assistant-actions", function () { return input.slots.register({
+					name: "conversation.chat.assistant-actions", id: "dsh-tavern-swipe", order: 10,
+					inject: function (sessionId) { return { sessionId: sessionId }; }
+				}, TavernSwipeControl); });
+			}, "dsh-tavern: reply version switch action");
+			input.ctx.effect(function () {
+				return input.slots.inject("conversation.chat.assistant-actions", function () { return input.slots.register({
+					name: "conversation.chat.assistant-actions", id: "dsh-tavern-fork", order: 20,
+					inject: function (sessionId) { return { sessionId: sessionId }; }
+				}, TavernForkAssistantAction); });
+			}, "dsh-tavern: conversation fork action");
 				input.ctx.effect(function () {
 					return input.slots.inject("conversation.chat.assistant-actions", function () { return input.slots.register({
 						name: "conversation.chat.assistant-actions", id: "dsh-tavern-illustrate", order: 21,
