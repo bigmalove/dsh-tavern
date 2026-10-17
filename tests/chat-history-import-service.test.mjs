@@ -125,3 +125,26 @@ test('rescue carries the selected last valid MVU snapshot, reenables settlement 
  assert.equal(chat.timeline.checkpoints.length,0)
  assert.deepEqual(h.records.get(source.id),source)
 })
+
+test('写作会话导入聊天记录：不读人物卡与世界书，按既有正文纯文字导入',async()=>{
+ const h=fixture()
+ let cardReads=0, worldBookReads=0
+ h.options.cards.read=async()=>{cardReads++;return {name:'card'}}
+ h.options.worldBooks.bound=async()=>{worldBookReads++;return null}
+ h.options.initialization.prepareImport=async input=>{
+  assert.equal(input.cardPath,'');assert.equal(input.mode,'writing')
+  return timeline.apply({chat:{id:'chat',sessionId:'session',mode:'writing',cardPath:'',cardName:'写作',messages:[],mvu:{enabled:false},scriptState:null,cardContextSnapshot:''},intent:{kind:'ensure'}}).chat
+ }
+ const service=createChatHistoryImportService(h.options)
+ const preview=await service.preview({cardPath:'',text,writing:true})
+ assert.equal(preview.writing,true);assert.equal(preview.count,5)
+ assert.equal(cardReads,0)
+ assert.ok(preview.warnings.some(w=>/变量快照/.test(w)))
+ const result=await service.import({cardPath:'',text,writing:true,operationId:'operation-writing-1',sessionId:'session'})
+ assert.equal(result.mode,'writing')
+ assert.equal(cardReads,0);assert.equal(worldBookReads,0)
+ const chat=await h.chats.resolve('session')
+ assert.equal(chat.mode,'writing')
+ assert.ok(chat.messages.every(m=>m.variables===undefined))
+ assert.match(foregroundContexts(h.session)[0],/既有正文/)
+})
