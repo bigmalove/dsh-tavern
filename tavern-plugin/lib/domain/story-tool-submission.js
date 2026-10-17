@@ -1,4 +1,6 @@
+import { randomUUID } from 'node:crypto'
 import { sessionEvents } from './session-events.js'
+import { createSessionSurfaceMutator } from './session-surface-mutations.js'
 
 export const STORY_SUBMIT_TOOL_NAME = 'submit_story'
 export const STORY_SUBMIT_PROMPT = [
@@ -50,23 +52,44 @@ export function storySubmissionForTurn(session, turn) {
       try { content = validContent(JSON.parse(model.block.arguments).content) } catch { continue }
       const resultText = (block.content || []).filter(part => part?.type === 'text').map(part => part.text).join('')
       if (resultText !== content) continue
-      return { index: model.index, event: model.event, receiptIndex: index, receiptSeq: Number(event.seq ?? index), text: content.trim(), content, toolCallId: block.toolCallId, storyToolSubmission: true }
+      return { index: model.index, receiptIndex: Number(event.seq ?? index), event: model.event, text: content.trim(), content, toolCallId: block.toolCallId, storyToolSubmission: true }
     }
   }
   return null
 }
 
-/** Surface range that replaces a submission's call message through its receipt. */
-export function storySubmissionSurfaceRange(session, submission) {
-  if (!submission?.storyToolSubmission) return null
-  const start = Number(submission.event?.seq ?? submission.index)
-  const end = Number(submission.receiptSeq)
-  const nodes = Array.isArray(session?.surface?.nodes) ? session.surface.nodes.map(Number) : null
-  if (!nodes) return null
-  const from = nodes.indexOf(start)
-  const to = nodes.indexOf(end)
-  if (from < 0 || to < from) return null
-  return { start, end, sourceEventSeqs: nodes.slice(from, to + 1) }
+/**
+ * Turn a finished submission into an ordinary reply. The appended text lets the
+ * chat view show the step as an answer (it ignores surface replacements); the
+ * replacement then leaves that one text where the call, receipt and copy were,
+ * so the model sees the body once and rollback/regeneration see a normal round.
+ */
+export function foldStorySubmission(session, result, bodyText) {
+  const data = result.event.data
+  const turn = Number(data.turn) || 0
+  const step = Number(data.step) || 1
+  const surface = createSessionSurfaceMutator(session)
+  // `index` is the events-array position, `receiptIndex` the event seq; the
+  // surface is a seq list, so the call is located by its own seq.
+  const start = Number(result.event?.seq ?? result.index)
+  const receipt = Number(result.receiptIndex)
+  const nodes = Array.isArray(session?.surface?.nodes) ? session.surface.nodes.map(Number) : []
+  const from = nodes.indexOf(start), to = nodes.indexOf(receipt)
+  // A step may dispatch several tools; every surface node between the call and
+  // this submission's receipt is shadowed with them, never left unmatched.
+  if (from < 0 || to < from) return
+  // The visible copy and the replacement are one message: the chat view keys a
+  // round's actions (fork, edit) by the message id it rendered, and the fork map
+  // reads the id of the newest projection event, so both must agree.
+  const reply = { ...data.message, id: randomUUID(),
+    source: { kind: 'model', provider: 'dsh-tavern', model: 'reply-projection' },
+    content: [{ type: 'text', text: bodyText }] }
+  const shown = surface.append('assistant/message', { turn, step, message: reply }, { surfaceOp: 'append', sourceEventSeqs: [] })
+  const shownSeq = Number(typeof shown === 'number' ? shown : shown.seq)
+  const end = session.surface.nodes.map(Number).indexOf(shownSeq)
+  if (end < to) return
+  surface.replace('assistant/message', { turn, step, message: reply },
+    { start, end: shownSeq, sourceEventSeqs: session.surface.nodes.slice(from, end + 1).map(Number) })
 }
 
 export function activeStoryTurn(session) {

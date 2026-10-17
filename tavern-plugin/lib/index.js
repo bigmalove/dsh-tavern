@@ -103,7 +103,7 @@ import { sessionOpeningDescriptor, prepareSessionOpening } from './domain/sessio
 import { scriptPromptScanText } from './domain/tavern-script-prompts.js'
 import { createOpeningPreparation } from './domain/opening-preparation.js'
 import { createChatHistoryImportService } from './domain/chat-history-import-service.js'
-import { sessionEvents, appendSessionEvent } from './domain/session-events.js'
+import { sessionEvents } from './domain/session-events.js'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createHash, randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
@@ -174,7 +174,7 @@ import { applyConversationPresetToCurrent } from './domain/conversation-preset-a
 import { createForegroundOrchestrationStrategies } from './domain/foreground-orchestration-strategies.js'
 import { clearFailedTurnSurface, rollbackAvailability, reshadowRolledBackRounds } from './domain/rollback-surface.js'
 import { assistantResultForTurn } from './domain/session-turn-result.js'
-import { activeStoryTurn, createStorySubmissionTool, storySubmissionSurfaceRange, STORY_SUBMIT_TOOL_NAME } from './domain/story-tool-submission.js'
+import { activeStoryTurn, createStorySubmissionTool, foldStorySubmission, STORY_SUBMIT_TOOL_NAME } from './domain/story-tool-submission.js'
 import { forkTurnsByMessageId as forkTargetsFromSession, floorsByMessageId as floorsFromChat } from './domain/conversation-fork-targets.js'
 import { createTavernRetryLimiter } from './domain/tavern-retry-limiter.js'
 import { lastTavernHelperVariables, projectTavernHelperContext, hydrateTavernHelperMessages, replaceTavernHelperVariables, HELPER_MESSAGE_COLD_WINDOW } from './domain/tavern-helper-context.js'
@@ -4914,38 +4914,10 @@ export async function apply(ctx) {
   }
 
   function replaceAssistantReply(session, result, bodyText) {
-    if (result === null) return
+    if (result !== null && result.storyToolSubmission) return foldStorySubmission(session, result, bodyText)
+    if (result === null || result.text === bodyText) return
     const previous = result.event && result.event.data && result.event.data.message
     if (previous === null || typeof previous !== 'object') return
-    let range
-    if (result.storyToolSubmission) {
-      // The call and its receipt both carry the body; one text reply replaces them.
-      range = storySubmissionSurfaceRange(session, result)
-      if (range === null) return
-      // The host transcript renders appended assistant messages only, so the
-      // rewritten body first lands as a fresh append the UI can show; the replace
-      // below then shadows the call, its receipt and that append for the model,
-      // leaving the body exactly once in the request history.
-      const reply = {
-        turn: Number(result.event.data && result.event.data.turn) || 0,
-        step: Number(result.event.data && result.event.data.step) || 1,
-        message: Object.assign({}, previous, {
-          id: randomUUID(),
-          source: { kind: 'model', provider: 'dsh-tavern', model: 'reply-projection' },
-          content: [{ type: 'text', text: bodyText }]
-        })
-      }
-      const appended = appendSessionEvent(session, 'assistant/message', reply, { surfaceOp: 'append' })
-      const appendedSeq = Number(appended && typeof appended === 'object' ? appended.seq : appended)
-      const nodes = Array.isArray(session?.surface?.nodes) ? session.surface.nodes.map(Number) : []
-      const from = nodes.indexOf(range.start)
-      const to = nodes.indexOf(appendedSeq)
-      if (from < 0 || to < from) return
-      range = { start: range.start, end: appendedSeq, sourceEventSeqs: nodes.slice(from, to + 1) }
-      replaceSessionSurface(session, 'assistant/message', reply, range)
-      return
-    }
-    if (result.text === bodyText) return
     replaceSessionSurface(session, 'assistant/message', {
       turn: Number(result.event.data && result.event.data.turn) || 0,
       step: Number(result.event.data && result.event.data.step) || 1,

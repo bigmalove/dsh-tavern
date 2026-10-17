@@ -27,13 +27,13 @@ async function createStoryHost(bootModule) {
   const { boot } = await import(bootUrl.href)
   const { LlmAdapter } = await import(new URL('../../dsh-llm/lib/index.js', bootUrl))
   const { defineTool } = await import(new URL('../../dsh-tools/lib/index.js', bootUrl))
-  const { createStorySubmissionTool, storySubmissionForTurn, storySubmissionSurfaceRange } = await import(new URL('story-tool-submission.js', DOMAIN))
+  const { createStorySubmissionTool, storySubmissionForTurn, foldStorySubmission } = await import(new URL('story-tool-submission.js', DOMAIN))
   const { assistantResultForTurn } = await import(new URL('session-turn-result.js', DOMAIN))
   const { sessionEvents, appendSessionEvent } = await import(new URL('session-events.js', DOMAIN))
   const { replaceSessionSurface } = await import(new URL('session-surface-mutations.js', DOMAIN))
   const { installTavernTokenMeter } = await import(new URL('tavern-token-meter.js', DOMAIN))
   const server = await readFile(new URL('../tavern-plugin/lib/index.js', import.meta.url), 'utf8')
-  const rewrite = { storySubmissionSurfaceRange, replaceSessionSurface, appendSessionEvent, randomUUID }
+  const rewrite = { foldStorySubmission, replaceSessionSurface, appendEvent: appendSessionEvent, randomUUID }
   vm.runInNewContext(server.slice(server.indexOf('  function replaceAssistantReply('), server.indexOf('  // A game keeps a snapshot of its preset')) + '; this.replace = replaceAssistantReply', rewrite)
   const root = await mkdtemp(join(tmpdir(), 'tavern-story-host-'))
   const config = join(root, 'host.yml')
@@ -178,10 +178,19 @@ test('真实收尾改写后两轮都可计量，第二轮上下文只剩一份�
   assert.ok(result.measurements.every(measurement => measurement.totalTokens > 0))
   const projections = result.events.filter(event => event.type === 'assistant/message' && event.data.message.source?.model === 'reply-projection')
   assert.equal(projections.length, 4)
+  const calls = result.events.filter(event => event.type === 'assistant/message' &&
+    (event.data.message.content || []).some(block => block.type === 'tool-call' && block.name === 'submit_story'))
   for (let index = 0; index < projections.length; index += 2) {
-    assert.equal(projections[index].surfaceOp, 'append')
-    assert.equal(projections[index + 1].surfaceOp.op, 'replace')
-    assert.equal(projections[index].data.message.id, projections[index + 1].data.message.id)
+    const shown = projections[index], folded = projections[index + 1]
+    assert.equal(shown.surfaceOp, 'append')
+    assert.equal(folded.surfaceOp.op, 'replace')
+    // The fold appends the visible copy, then shadows the call, its receipt and
+    // that copy: the range must cite every node it removes.
+    assert.equal(folded.surfaceOp.startSeq, calls[index / 2].seq)
+    assert.equal(folded.surfaceOp.endSeq, shown.seq)
+    assert.deepEqual(folded.sourceEventSeqs.slice(-1), [shown.seq])
+    assert.ok(folded.sourceEventSeqs.length >= 3, '调用、回执与追加文字都要被引用')
+    assert.deepEqual(shown.data.message.content, folded.data.message.content)
   }
   assert.equal(result.requests, 2)
   assert.equal(result.turnEnds, 2)
