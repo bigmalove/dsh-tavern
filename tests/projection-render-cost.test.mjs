@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import vm from 'node:vm'
 function harness(){
- const context=vm.createContext({isPlayMode:mode=>mode==='story'})
+ // 被测函数在 bundle 里与 main.js 同作用域，这里按 main.js 的定义补齐它用到的判定。
+ const context=vm.createContext({isPlayMode:mode=>mode==='story'||mode==='script',isBodyMode:mode=>mode==='story'||mode==='script'||mode==='writing'})
  const main=fs.readFileSync(new URL('../tavern-plugin/lib/client.js',import.meta.url),'utf8')
  const functions=main.slice(main.indexOf('function tavernProjectionForTurn('),main.indexOf('function TavernMvuReceipt('))
  vm.runInContext(fs.readFileSync(new URL('../tavern-plugin/lib/domain/indexed-array.js',import.meta.url),'utf8').replace(/^export .*$/gm,'')+'\n'+fs.readFileSync(new URL('../tavern-plugin/src/client/modules/session-view-sync.js',import.meta.url),'utf8')+'\n'+functions,context)
