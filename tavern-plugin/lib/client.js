@@ -12556,7 +12556,35 @@ function bindTavernFontZoom(node, win) {
 							React.createElement("path", { d: "M11.2 2.6l2.2 2.2-8.2 8.2-2.9.7.7-2.9z" }),
 							React.createElement("path", { d: "M9.7 4.1l2.2 2.2" }))));
 			}
+			// 整轮删除：玩家输入与回复一起移除，留下一个可撤销的删除点。
+			function TavernDeleteRoundAction(props) {
+				const askConfirm = useTavernConfirm(props.sessionId);
+				const liveState = useScopedLiveTavernView(props.sessionId, String(props.messageId || ""), [
+					["mode"], ["floorsByMessageId", String(props.messageId || "")], ["activity", "busy"]
+				]);
+				const view = liveState.view;
+				const floor = view && view.floorsByMessageId ? view.floorsByMessageId[String(props.messageId || "")] : null;
+				const [busy, setBusy] = React.useState(false);
+				if (!floor || !isBodyMode(view && view.mode) || floor.role !== "assistant" || floor.editable !== true) return null;
+				async function remove() {
+					if (busy) return;
+					const ok = await askConfirm("删除这一轮？这条玩家输入与回复都会从剧情和模型上下文里移除，之后可以用「撤销删除」恢复。");
+					if (!ok) return;
+					setBusy(true);
+					try {
+						const result = await rpc("deleteFloorRound", { index: floor.index, turn: floor.turn, role: "assistant" }, props.sessionId);
+						liveTavernView.setView(props.sessionId, result.view);
+						notifyTavernDataChanged(["sessions"], "play-controls");
+						tavernCoordination.invalidate(props.sessionId);
+					} catch (error) { tavernErrorHub.report("删除这一轮", error); }
+					finally { setBusy(false); liveTavernView.invalidate(props.sessionId); }
+				}
+				return React.createElement(DshUi.Tooltip, { label: "删除这一轮", side: "bottom" },
+					React.createElement("button", { type: "button", className: "dsh-tavern-message-edit", "aria-label": "删除这一轮", disabled: busy, onClick: remove },
+						React.createElement(DshUi.IconTrashOutline16, null)));
+			}
 			function TavernSwipeControl(props) {
+			const askConfirm = useTavernConfirm(props.sessionId);
 			const liveState = useScopedLiveTavernView(props.sessionId, String(props.messageId || ""), [
 				["mode"], ["floorsByMessageId", String(props.messageId || "")], ["activity", "busy"], ["regenInProgress"]
 			]);
@@ -12596,13 +12624,29 @@ function bindTavernFontZoom(node, win) {
 				if (current + 1 < count) { select(current + 1); return; }
 				if (latest && floor.greeting !== true) regenerate();
 			}
+			// 删除当前版本：只剩一个版本时改用整轮删除。
+			async function removeVersion() {
+				if (busy || disabled || count <= 1) return;
+				const ok = await askConfirm("删除当前这个版本？其余版本会保留，之后可以用「撤销删除」恢复。");
+				if (!ok) return;
+				setBusy(true);
+				try {
+					const result = await rpc("deleteFloorVersion", { index: floor.index, turn: floor.turn, swipeId: current, token: floor.token }, props.sessionId);
+					liveTavernView.setView(props.sessionId, result.view);
+					notifyTavernDataChanged(["sessions"], "play-controls");
+					tavernCoordination.invalidate(props.sessionId);
+				} catch (error) { tavernErrorHub.report("删除正文版本", error); }
+				finally { setBusy(false); liveTavernView.invalidate(props.sessionId); }
+			}
 			const label = "第 " + String(current + 1) + " / " + String(count) + " 个版本";
 			return React.createElement(React.Fragment, null,
 				React.createElement(DshUi.Tooltip, { label: disabled && title ? title : "上一个版本", side: "bottom" },
 					React.createElement("button", { type: "button", className: "dsh-tavern-message-swipe", "aria-label": "上一个版本", disabled: disabled || current <= 0, onClick: prev }, "‹")),
 				React.createElement("span", { className: "dsh-tavern-message-swipe-count", title: label }, String(current + 1) + "/" + String(count)),
 				React.createElement(DshUi.Tooltip, { label: disabled && title ? title : (current + 1 < count ? "下一个版本" : latest && floor.greeting !== true ? "重新生成一个新版本" : "没有更多版本"), side: "bottom" },
-					React.createElement("button", { type: "button", className: "dsh-tavern-message-swipe", "aria-label": "下一个版本", disabled: disabled || (current + 1 >= count && !(latest && floor.greeting !== true)), onClick: next }, "›")));
+					React.createElement("button", { type: "button", className: "dsh-tavern-message-swipe", "aria-label": "下一个版本", disabled: disabled || (current + 1 >= count && !(latest && floor.greeting !== true)), onClick: next }, "›")),
+				count > 1 ? React.createElement(DshUi.Tooltip, { label: disabled && title ? title : "删除当前版本", side: "bottom" },
+					React.createElement("button", { type: "button", className: "dsh-tavern-message-swipe dsh-tavern-message-swipe-delete", "aria-label": "删除当前版本", disabled: disabled, onClick: removeVersion }, "×")) : null);
 		}
 		function register(input) {
 				const scriptOwner = createTavernScriptSessionOwner({ sessions: input.ctx.sessions, executeSlash: createTavernFrameSlashExecutor(input.ctx) });
@@ -12634,6 +12678,12 @@ function bindTavernFontZoom(node, win) {
 						priority: -1
 					}, TavernUserNodeView); });
 				}, "dsh-tavern: raw user message renderer");
+			input.ctx.effect(function () {
+				return input.slots.inject("conversation.chat.assistant-actions", function () { return input.slots.register({
+					name: "conversation.chat.assistant-actions", id: "dsh-tavern-floor-delete", order: 8,
+					inject: function (sessionId) { return { sessionId: sessionId }; }
+				}, TavernDeleteRoundAction); });
+			}, "dsh-tavern: round delete action");
 			input.ctx.effect(function () {
 				return input.slots.inject("conversation.chat.assistant-actions", function () { return input.slots.register({
 					name: "conversation.chat.assistant-actions", id: "dsh-tavern-floor-edit", order: 9,
@@ -18503,6 +18553,28 @@ function bindTavernFontZoom(node, win) {
                 title: "恢复第 " + turn + " 轮正文和状态；新的操作会使此恢复点失效" }, busy ? "恢复中…" : "撤销回退（恢复第 " + turn + " 轮）");
         }
 
+        // 撤销上一次删除（版本或整轮）。较早回合的删除不能撤销，此时不显示入口。
+        function TavernUndoDeletionAction(props) {
+            const [busy, setBusy] = React.useState(false);
+            const running = props.useSession(function (state) { return state.running === true; });
+            const live = useLiveTavernView(props.sessionId, "undo-delete:" + String(running));
+            const view = live.view;
+            if (!view || !view.canUndoDeletion || view.deletionUndoable === false) return null;
+            const kind = view.deletionUndoKind === "round" ? "整轮" : "版本";
+            async function undo() {
+                if (busy || running) return;
+                setBusy(true);
+                try {
+                    const result = await rpc("undoFloorDeletion", {}, props.sessionId);
+                    liveTavernView.setView(props.sessionId, result && result.view);
+                    notifyTavernDataChanged(["sessions"], "play-controls");
+                } catch (error) { tavernErrorHub.report("撤销删除", error); }
+                finally { setBusy(false); liveTavernView.invalidate(props.sessionId); tavernCoordination.invalidate(props.sessionId); }
+            }
+            return React.createElement("button", { role: "menuitem", disabled: busy || running, onClick: undo,
+                title: "把刚刚删除的" + kind + "放回去；新的操作会使此恢复点失效" }, busy ? "恢复中…" : "撤销删除（" + kind + "）");
+        }
+
 		const bodyEditPanel = { value: null, listeners: new Set() };
 		function setBodyEditPanel(value) {
 			bodyEditPanel.value = value;
@@ -18970,6 +19042,7 @@ function bindTavernFontZoom(node, win) {
 					React.createElement(TavernEditBodyAction, props),
 					React.createElement(TavernRollbackAction, props),
                     React.createElement(TavernUndoRollbackAction, props),
+                    React.createElement(TavernUndoDeletionAction, props),
 					React.createElement(TavernCompactionAction, Object.assign({}, props, { inMenu: true })))
 			);
 		}

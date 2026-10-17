@@ -246,6 +246,8 @@ export function createStoryTimeline(options = {}) {
     }
     chat.timeline.operations[operation.id] = operation
     trimOperations(chat.timeline)
+    // A new round makes any pending deletion undo point ambiguous.
+    delete chat.deletionUndo
     return operationValue(operation)
   }
 
@@ -571,7 +573,10 @@ export function createStoryTimeline(options = {}) {
       const index = Number(intent.index)
       const message = chat.messages[index]
       if (!message || message.role !== 'assistant' || Number(message.turn || (message.greeting === true ? 1 : 0)) !== Number(intent.turn)) throw new Error('正文楼层不存在或已变化')
-      const count = Math.max(Array.isArray(message.swipes) ? message.swipes.length : 0, 1)
+      // The patch may rewrite the version arrays itself (delete/restore); the
+      // target version must be valid for the resulting message, not the old one.
+      const count = Math.max(Array.isArray(intent.patch?.swipes) ? intent.patch.swipes.length
+        : Array.isArray(message.swipes) ? message.swipes.length : 0, 1)
       const swipeId = Number(intent.swipeId)
       if (!Number.isSafeInteger(swipeId) || swipeId < 0 || swipeId >= count) throw new Error('正文版本不存在')
       Object.assign(message, intent.patch)
@@ -604,9 +609,77 @@ export function createStoryTimeline(options = {}) {
         chat.candidateAgent = null
       }
       if (message.greeting === true) chat.openingText = message.text
-      delete chat.deletionUndo
+      if (Object.hasOwn(intent, 'deletionUndo')) {
+        if (intent.deletionUndo === null) delete chat.deletionUndo
+        else chat.deletionUndo = clone(intent.deletionUndo)
+      } else delete chat.deletionUndo
       chat.timeline.updatedAt = now()
       value = { status: 'swiped', revision: chat.timeline.revision }
+    }
+    else if (intent.kind === 'round.delete') {
+      // Removing a committed round takes its player input and reply together.
+      // The newest round also owns the scene's variables and settlement: after
+      // deleting it the previous round's own snapshot takes over.
+      const index = Number(intent.index)
+      const count = Number(intent.count) || 0
+      if (!Number.isSafeInteger(index) || index < 0 || !Number.isSafeInteger(count) || count < 1
+        || index + count > chat.messages.length) throw new Error('要删除的回合不存在')
+      const removed = chat.messages.splice(index, count)
+      chat.timeline.revision++
+      chat.timeline.updatedAt = now()
+      const last = chat.messages.findLastIndex(item => item?.role === 'assistant')
+      if (last < 0) {
+        chat.posture = ''
+        chat.ledger = null
+        chat.lastSettle = null
+        chat.settleStatus = 'idle'
+        delete chat.variables
+      } else {
+        const previous = chat.messages[last]
+        const swipeId = Math.max(0, Number(previous.swipeId) || 0)
+        const restored = Array.isArray(previous.swipeStates) ? object(previous.swipeStates[swipeId]) : null
+        if (restored !== null && str(restored.settleStatus) === 'done') {
+          chat.posture = str(restored.posture)
+          chat.ledger = clone(restored.ledger || null)
+          chat.lastSettle = clone(restored.lastSettle || null)
+          chat.settleStatus = 'done'
+        } else {
+          chat.posture = ''
+          chat.ledger = null
+          chat.lastSettle = null
+          chat.settleStatus = 'idle'
+        }
+        const variables = Array.isArray(previous.variables) ? previous.variables[swipeId] : undefined
+        if (variables !== undefined) chat.variables = clone(variables)
+      }
+      chat.settleError = null
+      chat.candidates = null
+      rewindParticipants(chat)
+      chat.candidateAgent = null
+      if (intent.deletionUndo === null) delete chat.deletionUndo
+      else if (intent.deletionUndo !== undefined) chat.deletionUndo = clone(intent.deletionUndo)
+      value = { status: 'deleted', revision: chat.timeline.revision, removed }
+    }
+    else if (intent.kind === 'round.restore') {
+      // Undo of a round deletion: the rows come back at their old position and
+      // the header returns to the state the deleted round had produced.
+      const index = Number(intent.index)
+      const messages = Array.isArray(intent.messages) ? intent.messages : []
+      if (!Number.isSafeInteger(index) || index < 0 || !messages.length) throw new Error('没有可恢复的回合')
+      chat.messages.splice(index, 0, ...clone(messages))
+      const state = object(intent.state)
+      chat.posture = str(state.posture)
+      chat.ledger = clone(state.ledger === undefined ? null : state.ledger)
+      chat.lastSettle = clone(state.lastSettle === undefined ? null : state.lastSettle)
+      chat.settleStatus = str(state.settleStatus) || 'idle'
+      if (Object.hasOwn(state, 'variables')) chat.variables = clone(state.variables)
+      chat.settleError = null
+      chat.candidates = null
+      chat.timeline.revision++
+      rewindParticipants(chat)
+      chat.candidateAgent = null
+      delete chat.deletionUndo
+      value = { status: 'restored', revision: chat.timeline.revision }
     }
     else if (intent.kind === 'body.begin') value = beginBody(chat, intent)
     else if (intent.kind === 'agent.begin') value = beginAgent(chat, intent)

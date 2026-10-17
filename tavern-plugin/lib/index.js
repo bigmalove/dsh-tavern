@@ -95,6 +95,7 @@ import { validateHelperGenerateConfig, resolveHelperGenerationPreset, helperGene
 import { createHelperGenerationTasks } from './domain/helper-generation-tasks.js'
 import { createBodyEditor } from './domain/body-editor.js'
 import { createSwipeSelection } from './domain/swipe-selection.js'
+import { createHistoryDeletion } from './domain/history-deletion.js'
 import { appendHelperUserSessionContext } from './domain/helper-user-session-context.js'
 import { userMessageForTurn, requestIdForTurn, requestIdForMessages } from './domain/session-turn-input.js'
 import { inspectStoryAlignment, nativeStoryTurns } from './domain/story-alignment.js'
@@ -3948,7 +3949,11 @@ export async function apply(ctx) {
   })
 
   const bodyEditor = createBodyEditor({
-    chats: { forSession: hookChatForSession, update: updateChat, patch: patchChat },
+    chats: { forSession: async (sessionId, { index } = {}) => {
+      const need = { lastAssistant: true, lastVariables: true, ...(Number.isSafeInteger(index) ? { include: [index] } : {}) }
+      const selected = await boundedHistory.forSession(sessionId, need)
+      return selected ? normalizeChat(selected.chat) : chatForSession(sessionId)
+    }, update: updateChat, patch: patchChat },
     sessions: { get: id => ctx.get('agents')?.get(id), flush: session => sessionStore.flush(session) },
     timeline: storyTimeline,
     activity: chat => backgroundTasks.activity(chat),
@@ -3977,6 +3982,27 @@ export async function apply(ctx) {
     queueSettlement,
     scripts: { dispatchEvent: event => tavernScriptHostAdapter.dispatchEvent(event) },
     initializeOpeningVariables: async (chat, swipeId) => liveCardUpdate.openingVariables(chat, await readChatCard(chat), swipeId),
+  })
+
+  // 删除某一楼的版本或整轮；只保留一个撤销点。
+  const historyDeletion = createHistoryDeletion({
+    chats: { forSession: async (sessionId, { index } = {}) => {
+      const need = { lastAssistant: true, lastVariables: true, ...(Number.isSafeInteger(index) ? { include: [index] } : {}) }
+      const selected = await boundedHistory.forSession(sessionId, need)
+      return selected ? normalizeChat(selected.chat) : chatForSession(sessionId)
+    }, update: updateChat, patch: patchChat },
+    sessions: { get: id => ctx.get('agents')?.get(id), flush: session => sessionStore.flush(session) },
+    timeline: storyTimeline,
+    activity: chat => backgroundTasks.activity(chat),
+    project: async (text, chat) => {
+      const extensions = await readCardExtensions(chat.cardPath, chat)
+      return projectRuntimeReply(text, { charName: chat.cardName, macroState: chat.macroState,
+        regexScripts: composeTavernRegexScripts(extensions, chat.runtimePresetSnapshot?.regexScripts), placement: 2, isEdit: false, depth: 0 })
+    },
+    present: presentStory,
+    sessionPatch,
+    queueSettlement,
+    scripts: { dispatchEvent: event => tavernScriptHostAdapter.dispatchEvent(event) },
   })
 
   // ---------- HTTP RPC（客户端同源 fetch） ----------
@@ -4646,6 +4672,23 @@ export async function apply(ctx) {
         await reconcileStory(args && args.sessionId)
         const view = await swipeSelection.select(args && args.sessionId, args)
         notifyPluginTimeline(args && args.sessionId, 'swipe', { turn: args && args.turn })
+        return { view }
+      }
+      case 'deleteFloorVersion': {
+        await reconcileStory(args && args.sessionId)
+        const view = await historyDeletion.deleteVersion(args && args.sessionId, args)
+        notifyPluginTimeline(args && args.sessionId, 'delete', { turn: args && args.turn })
+        return { view }
+      }
+      case 'deleteFloorRound': {
+        await reconcileStory(args && args.sessionId)
+        const view = await historyDeletion.deleteRound(args && args.sessionId, args)
+        notifyPluginTimeline(args && args.sessionId, 'delete', { turn: args && args.turn })
+        return { view }
+      }
+      case 'undoFloorDeletion': {
+        const view = await historyDeletion.undo(args && args.sessionId)
+        notifyPluginTimeline(args && args.sessionId, 'edit', { settled: true })
         return { view }
       }
       case 'replayTurn': {

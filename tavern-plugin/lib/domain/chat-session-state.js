@@ -117,7 +117,9 @@ export function createSessionStateView({ activity: activityOf, evidence: evidenc
       && previous.events.deref() === events && previous.key === key
       && (previous.revision === chat._storageRevision || previous.revision === changes.baseRevision)) {
       previous.revision = chat._storageRevision
-      return {...copyRollback(previous.value),undoRollbackTurn:canUndoRollback(chat,session) ? chat.rollbackUndo.turn : null}
+      return {...copyRollback(previous.value),undoRollbackTurn:canUndoRollback(chat,session) ? chat.rollbackUndo.turn : null,
+        canUndoDeletion: Boolean(chat.deletionUndo), deletionUndoKind: chat.deletionUndo ? String(chat.deletionUndo.kind || '') : '',
+        deletionUndoable: Boolean(chat.deletionUndo) && chat.deletionUndo.undoable !== false}
     }
     const rollbackState = Array.isArray(nodes) ? rollbackAvailability(chat, { events: evidence.events, nodes }) : {
       canRollback: false, canClearIncompleteReply: false,
@@ -141,6 +143,9 @@ export function createSessionStateView({ activity: activityOf, evidence: evidenc
       canRollback: rollbackState.canRollback,
       canClearIncompleteReply: rollbackState.canClearIncompleteReply,
       undoRollbackTurn: canUndoRollback(chat, evidence.session) ? chat.rollbackUndo.turn : null,
+      canUndoDeletion: Boolean(chat.deletionUndo),
+      deletionUndoKind: chat.deletionUndo ? String(chat.deletionUndo.kind || '') : '',
+      deletionUndoable: Boolean(chat.deletionUndo) && chat.deletionUndo.undoable !== false,
       rollbackUnavailableReason: rollbackState.reason
     }
     if (native && chat.id && Number.isSafeInteger(chat._storageRevision)

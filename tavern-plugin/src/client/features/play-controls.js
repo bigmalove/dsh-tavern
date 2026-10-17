@@ -721,6 +721,28 @@
                 title: "恢复第 " + turn + " 轮正文和状态；新的操作会使此恢复点失效" }, busy ? "恢复中…" : "撤销回退（恢复第 " + turn + " 轮）");
         }
 
+        // 撤销上一次删除（版本或整轮）。较早回合的删除不能撤销，此时不显示入口。
+        function TavernUndoDeletionAction(props) {
+            const [busy, setBusy] = React.useState(false);
+            const running = props.useSession(function (state) { return state.running === true; });
+            const live = useLiveTavernView(props.sessionId, "undo-delete:" + String(running));
+            const view = live.view;
+            if (!view || !view.canUndoDeletion || view.deletionUndoable === false) return null;
+            const kind = view.deletionUndoKind === "round" ? "整轮" : "版本";
+            async function undo() {
+                if (busy || running) return;
+                setBusy(true);
+                try {
+                    const result = await rpc("undoFloorDeletion", {}, props.sessionId);
+                    liveTavernView.setView(props.sessionId, result && result.view);
+                    notifyTavernDataChanged(["sessions"], "play-controls");
+                } catch (error) { tavernErrorHub.report("撤销删除", error); }
+                finally { setBusy(false); liveTavernView.invalidate(props.sessionId); tavernCoordination.invalidate(props.sessionId); }
+            }
+            return React.createElement("button", { role: "menuitem", disabled: busy || running, onClick: undo,
+                title: "把刚刚删除的" + kind + "放回去；新的操作会使此恢复点失效" }, busy ? "恢复中…" : "撤销删除（" + kind + "）");
+        }
+
 		const bodyEditPanel = { value: null, listeners: new Set() };
 		function setBodyEditPanel(value) {
 			bodyEditPanel.value = value;
@@ -1146,6 +1168,7 @@
 					React.createElement(TavernEditBodyAction, props),
 					React.createElement(TavernRollbackAction, props),
                     React.createElement(TavernUndoRollbackAction, props),
+                    React.createElement(TavernUndoDeletionAction, props),
 					React.createElement(TavernCompactionAction, Object.assign({}, props, { inMenu: true })))
 			);
 		}

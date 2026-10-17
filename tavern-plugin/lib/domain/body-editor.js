@@ -134,7 +134,8 @@ export function createBodyEditor({ chats, sessions, timeline, activity, project,
   }
   async function context(sessionId, input) {
     guards.refuseClosedPatch()
-    const chat = await chats.forSession(sessionId)
+    const index = input && Number.isSafeInteger(Number(input.index)) ? Number(input.index) : undefined
+    const chat = await chats.forSession(sessionId, index === undefined ? undefined : { index })
     if (!chat) throw new Error('会话不存在')
     const agent = sessions.get(sessionId)
     if (!agent?.session) throw new Error('无法访问原生会话')
