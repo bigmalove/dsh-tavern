@@ -705,11 +705,12 @@
 			async function switchMode(nextMode) {
 				playPrewarmRef.current.cancel();
 				setUiMode(nextMode); setPicking(false); setMenuSession(null);
+				// Back to the conversation last used in that mode, not the newest created (#220).
 				const first = history.filter(function (item) {
 					if (groupOfMode(item.mode) !== nextMode) return false;
 					if (nextMode !== "play") return true;
 					return (item.requestMode === "sillytavern" ? "sillytavern" : "dsh") === requestMode;
-				})[0];
+				}).reduce(function (best, item) { return !best || tavernHistoryActivity(item, summaries) > tavernHistoryActivity(best, summaries) ? item : best; }, null);
 				if (first) {
 					try { await openSessionWhenReady(first.sessionId); }
 					catch (err) { setError("打开 Session 失败：" + String(err && err.message || err)); }
@@ -1007,10 +1008,10 @@
 				h("input", { ref: fileRef, type: "file", accept: ".png,.json", style: { display: "none" }, onChange: function (e) { const f = e.target.files && e.target.files[0]; if (f) importCard(f); e.target.value = ""; } }),
 				pendingChatImport ? h("div", { className: "dsh-tavern-side-empty", role: "status", style: { padding: "4px 6px", display: "flex", alignItems: "center", gap: "8px" } }, h("span", null, "选择这份 SillyTavern 聊天记录对应的人物卡" + (pendingChatImport.characterName ? "（记录里的角色：" + pendingChatImport.characterName + "）" : "")), h("button", { className: "dsh-tavern-btn", disabled: busy, onClick: function () { setPendingChatImport(null); } }, "取消")) : null,
 				organization.toolbar(),
-				organization.visible.length ? h(React.Fragment, null, h("div", { className: "dsh-tavern-side-empty", style: { padding: "4px 6px" } }, "已绑定剧本的人物卡将自动按剧本推进；未绑定的按自由故事推进。剧本绑定在“卡片模式”中管理。"), organization.renderCards(function (card) { return h("div", { key: card.path, className: "dsh-tavern-card-pick-wrap" },
+				organization.visible.length ? h(React.Fragment, null, h("div", { className: "dsh-tavern-side-empty", style: { padding: "4px 6px" } }, "已绑定剧本的人物卡将自动按剧本推进；未绑定的按自由故事推进。剧本绑定在“卡片模式”中管理。"), h(TavernCardList, { place: "play", cards: organization.visible, batch: cardBatch, busy: busy, open: function (card) { if (!card.readError) preparePlayConversation(card); }, builtin: function () { return organization.renderCards(function (card) { return h("div", { key: card.path, className: "dsh-tavern-card-pick-wrap" },
 					cardBatch.checkbox(card),
-					h("button", { className: "dsh-tavern-card-pick" + (card.hasImage ? " with-image" : "") + (cardBatch.managing && cardBatch.isSelected(card.path) ? " selected" : ""), disabled: busy || (!cardBatch.managing && Boolean(card.readError)), onClick: function () { if (cardBatch.managing) cardBatch.toggle(card.path); else preparePlayConversation(card); } }, h(TavernCardListContent, { showPath: true, card: card, detail: card.script ? ("剧本：" + card.script.title) : "自由故事（未绑定剧本）" }))
-				); })) : h("div", { className: "dsh-tavern-empty" }, cards.length ? "没有匹配的人物卡" : "还没有人物卡。\n点“导入人物卡”添加 PNG/JSON 卡片。")
+					h("button", { className: "dsh-tavern-card-pick" + (card.hasImage ? " with-image" : "") + (cardBatch.managing && cardBatch.isSelected(card.path) ? " selected" : ""), disabled: busy || (!cardBatch.managing && Boolean(card.readError)), title: "文件：" + String(card.path).replace(/\\/g, "/").split("/").pop(), onClick: function () { if (cardBatch.managing) cardBatch.toggle(card.path); else preparePlayConversation(card); } }, h(TavernCardListContent, { card: card, detail: card.script ? ("剧本：" + card.script.title) : "" }))
+				); }); } })) : h("div", { className: "dsh-tavern-empty" }, cards.length ? "没有匹配的人物卡" : "还没有人物卡。\n点“导入人物卡”添加 PNG/JSON 卡片。")
 			));
 
 			const cardEditRows = cards.length ? cards.map(function (card) { return h("div", { key: card.path, className: "dsh-tavern-card-pick-wrap" },
@@ -1205,9 +1206,13 @@
 				{ name: "sidebar.brand.mark", priority: -1 },
 				function (props) { const size = (props && props.size) || 24; return React.createElement("span", { className: "dsh-tavern-logo", "aria-hidden": "true", style: { width: size + 4, height: size + 4 } }); }
 			)), "dsh-tavern: sidebar brand mark");
+			// Whether the left drawer is open on narrow layouts, as of the last render. Opening the right
+			// column used to close it as a side effect; now that it stays shut (#213), close the drawer here.
+			let sidebarWide = false;
+			function closeNarrowSidebar() { if (sidebarWide) { sidebarWide = false; ctx.layout.toggleSidebar(); } }
 			ctx.effect(() => slots.inject("sidebar.workspaces", () => slots.register(
 				{ name: "sidebar.workspaces", priority: -1 },
-				function (props) { return React.createElement(TavernSidebar, Object.assign({}, props, {
+				function (props) { sidebarWide = Boolean(props.wide); return React.createElement(TavernSidebar, Object.assign({}, props, {
 					collapsed: !props.wide,
 					embedded: true,
 					sessions: ctx.sessions,
@@ -1224,11 +1229,13 @@
 					},
 					archiveSession: function (sessionId) { return ctx.workspaces.archiveSession(sessionId); },
 					toggleSidebar: function () { if (props.wide) ctx.layout.toggleSidebar(); else props.expandSidebar(); },
-					openConversationSettingsTab: async function (sessionId) { await openTavernSidebarTab(ctx, { type: "dsh-tavern:conversation-settings" }, { sessionId: sessionId }); await openTavernSidebarTab(ctx, { type: "dsh-tavern:status" }, { sessionId: sessionId }); },
-					openCardLibraryTab: function (sessionId) { return openTavernSidebarTab(ctx, { type: "dsh-tavern:cards", meta: null }, { sessionId: sessionId }); },
-					openPresetLibraryTab: function (sessionId) { return openTavernSidebarTab(ctx, { type: "dsh-tavern:presets" }, { sessionId: sessionId }); },
-					openWorldBookLibraryTab: function (sessionId) { return openTavernSidebarTab(ctx, { type: "dsh-tavern:worldbooks" }, { sessionId: sessionId }); },
-					openResourcesTab: function (sessionId) { return openTavernSidebarTab(ctx, { type: "dsh-tavern:resources" }, { sessionId: sessionId }); },
+					// Entering a game or the card workspace opens these tabs beside it. On phone-width
+					// layouts the right column covers the story, so leave it closed and show the story (#213).
+					openConversationSettingsTab: async function (sessionId) { if (narrowLayout()) return closeNarrowSidebar(); await openTavernSidebarTab(ctx, { type: "dsh-tavern:conversation-settings" }, { sessionId: sessionId }); await openTavernSidebarTab(ctx, { type: "dsh-tavern:status" }, { sessionId: sessionId }); },
+					openCardLibraryTab: function (sessionId) { if (narrowLayout()) return closeNarrowSidebar(); return openTavernSidebarTab(ctx, { type: "dsh-tavern:cards", meta: null }, { sessionId: sessionId }); },
+					openPresetLibraryTab: function (sessionId) { if (narrowLayout()) return closeNarrowSidebar(); return openTavernSidebarTab(ctx, { type: "dsh-tavern:presets" }, { sessionId: sessionId }); },
+					openWorldBookLibraryTab: function (sessionId) { if (narrowLayout()) return closeNarrowSidebar(); return openTavernSidebarTab(ctx, { type: "dsh-tavern:worldbooks" }, { sessionId: sessionId }); },
+					openResourcesTab: function (sessionId) { if (narrowLayout()) return closeNarrowSidebar(); return openTavernSidebarTab(ctx, { type: "dsh-tavern:resources" }, { sessionId: sessionId }); },
 					appendMention: input.appendMention,
 					injectTaskPrompt: input.injectTaskPrompt,
 					cleanWorkspaceDraft: input.cleanWorkspaceDraft

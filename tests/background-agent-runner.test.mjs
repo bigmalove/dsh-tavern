@@ -1,3 +1,4 @@
+import { createSettlementItems } from '../tavern-plugin/lib/domain/background-pipeline.js'
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -533,7 +534,7 @@ test('插件结算工具：随后台会话固定注册，只在结算任务里�
   const runner = createBackgroundAgentRunner({
     id: () => 'background-plugin-tools',
     backgroundTools: [{ name: 'posture_submit', parameters: { type: 'object' } }, { name: 'candidate_submit', parameters: { type: 'object' } }],
-    pluginSettlement: () => pluginSettlement,
+    settlementItems: () => createSettlementItems({ plugins: () => pluginSettlement }),
     pluginCandidate: () => ({ sections: async ({ gameId }) => [{ text: gameId + ' 候选多给探索选项' }] }),
     agents: {
       get: () => ({ id: 'parent', session: { header: {} } }),
@@ -611,5 +612,50 @@ test('插件后台任务：独立的一次性会话，插件工具注册在这�
     assert.match(results[1], /不允许调用 posture_submit/)
     assert.match(texts[0], /任务类型：插件任务[\s\S]*【任务要求】\n按日期推进世界/)
     assert.equal(registered.has('world_advance'), false, '任务结束后撤销插件工具')
+  } finally { await runner.dispose() }
+})
+
+test('结算任务的固定工具顺序与本轮任务文字：Tavern 工具、台词标注、插件工具（管线重构护栏）', async () => {
+  const registered = [], texts = []
+  let work = Promise.resolve()
+  const castSettlement = {
+    tools: () => [{ name: 'cast_submit', parameters: { type: 'object' } }],
+    has: name => name === 'cast_submit',
+    section: async ({ gameId, turn }) => '【本轮台词】' + gameId + ':' + turn,
+    call: async () => JSON.stringify({ ok: true })
+  }
+  const pluginSettlement = {
+    tools: () => [{ name: 'zeta_submit', parameters: { type: 'object' } }, { name: 'alpha_submit', parameters: { type: 'object' } }],
+    has: name => name === 'zeta_submit' || name === 'alpha_submit',
+    toolNames: async () => ({ available: ['alpha_submit', 'zeta_submit'], unavailable: [] }),
+    sections: async () => [{ text: '插件说明' }],
+    calls: () => async () => JSON.stringify({ ok: true })
+  }
+  const runner = createBackgroundAgentRunner({
+    id: () => 'background-order',
+    backgroundTools: [{ name: 'posture_submit', parameters: { type: 'object' } }, { name: 'mvu_submit_update', parameters: { type: 'object' } }],
+    settlementItems: () => createSettlementItems({ items: () => [castSettlement], plugins: () => pluginSettlement }),
+    agents: {
+      get: () => ({ id: 'parent', session: { header: {} } }),
+      async create(options) {
+        await options.setup({
+          systemPrompt: { section() {}, suppressRuntimeContext() {} }, on() {},
+          tools: { restrict() {}, register(tool) { registered.push(tool.name); return () => {} } }
+        })
+        const session = { id: 'background-order', events: [], append(type, data) { this.events.push({ type, data }) } }
+        return { agent: { session,
+          followup(message) { texts.push(message.content[0].text); work = (async () => { session.append('assistant/message', { message: { content: [{ type: 'text', text: '完成' }] } }) })() },
+          async whenIdle() { await work } }, async dispose() {} }
+      }
+    }
+  })
+  try {
+    await runner.run({ sessionId: 'parent', persistent: true, task: 'settlement', turn: 3, selection: { provider: 'test', model: 'test' },
+      system: '姿势要求', messages: [{ role: 'user', content: [{ type: 'text', text: '【本轮正文】门开了' }] }], tools: [{ name: 'posture_submit', parameters: { type: 'object' } }],
+      onToolCall: async () => JSON.stringify({ ok: true }) })
+    assert.deepEqual(registered, ['posture_submit', 'mvu_submit_update', 'cast_submit', 'zeta_submit', 'alpha_submit'])
+    assert.equal(texts.length, 1)
+    assert.equal(texts[0], '【最近剧情与本次任务】\n任务类型：状态结算\n[用户]\n【本轮正文】门开了\n\n【任务要求】\n姿势要求\n\n【本轮台词】parent:3\n\n【插件附加的结算任务】\n\n'
+      + '本轮可用插件工具：alpha_submit、zeta_submit。以本轮列出的为准：之前回合里这些工具被关闭或报错的情况已不再适用。需要时在提交本轮结算之前调用；插件工具失败不影响本轮结算。\n\n插件说明')
   } finally { await runner.dispose() }
 })

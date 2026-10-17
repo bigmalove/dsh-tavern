@@ -108,3 +108,7 @@ test('the global scene image Agent default model saves like the other defaults a
   assert.deepEqual(presentTavernSettings(saved, []).defaultImageModel, { provider: 'p', model: 'flash' })
   assert.equal(presentTavernSettings(applyTavernSettingsPatch(saved, { defaultImageModel: null }), []).defaultImageModel, null)
 })
+
+test('酒馆状态各区块直接显示，旧的显示开关不再保留', () => {
+  assert.equal(Object.hasOwn(presentTavernSettings({ statusSections: { posture: true } }, {}), 'statusSections'), false)
+})

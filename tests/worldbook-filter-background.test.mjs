@@ -111,7 +111,7 @@ test('前台准备保存筛选任务及共享会话，不覆盖后台时间线�
   assert.equal(h.calls.length, 1)
 })
 
-test('回退后筛选沿用后台 Session 并遮蔽废弃任务；压缩后回退遵守重建规则', async t => {
+test('回退后筛选沿用后台 Session 并遮蔽废弃任务；压缩过也沿用同一个 Session，原地清空任务历史', async t => {
   for (const compacted of [false, true]) {
     const h = harness(); t.after(h.dispose)
     const initial = await h.filter(await h.input())
@@ -129,14 +129,10 @@ test('回退后筛选沿用后台 Session 并遮蔽废弃任务；压缩后回�
     await h.store.writeChat(rolled.chat)
     const result = await h.filter(await h.input())
     assert.deepEqual(Object.keys((await h.store.readChat()).timeline.participants), ['background'])
-    if (compacted) {
-      assert.notEqual(result.traceSessionId, initial.traceSessionId)
-    } else {
-      assert.equal(result.traceSessionId, initial.traceSessionId)
-      const session = h.sessions.get(initial.traceSessionId)
-      assert.ok(session.events.some(event => event.surfaceOp?.op === 'replace'))
-      assert.ok(!session.surface.nodes.some(seq => JSON.stringify(session.events[seq]).includes('即将废弃的行动')))
-    }
+    assert.equal(result.traceSessionId, initial.traceSessionId)
+    const session = h.sessions.get(initial.traceSessionId)
+    assert.ok(session.events.some(event => event.surfaceOp?.op === 'replace'))
+    assert.ok(!session.surface.nodes.some(seq => JSON.stringify(session.events[seq]).includes('即将废弃的行动')))
   }
 })
 

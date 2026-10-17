@@ -19,6 +19,13 @@ test('只列出上一轮结算后变化的变量及最新值；列表整体给�
   assert.equal(lastRoundVariableChanges({ ...chat([message(before), message(after)]), mvu: { enabled: false } }), null)
 })
 
+test('上一轮删掉的变量也列出，标为已删除', () => {
+  const text = lastRoundVariableChanges(chat([message({ 背包: { 钥匙: 1, 地图: 1 }, 状态: '中毒' }), message({ 背包: { 地图: 1 } })]))
+  assert.match(text, /\/背包\/钥匙 = （已删除）/)
+  assert.match(text, /\/状态 = （已删除）/)
+  assert.doesNotMatch(text, /地图/)
+})
+
 test('每轮第一步追加一次，作为插件上下文进入历史', () => {
   const current = chat([message({ hp: 10 }), message({ hp: 9 })])
   const decision = { kind: 'enter', messages: [{ role: 'user', content: [{ type: 'text', text: '继续' }], source: { kind: 'user' } }] }
@@ -37,12 +44,10 @@ test('单个变量最多 100 字，超出截断并标注', () => {
   assert.equal(line, '/日记 = "' + '今'.repeat(99) + '…（已截断）')
 })
 
-test('变量回灌是本局设置，默认开启，关闭后不注入', async () => {
-  const { normalizeBackgroundTasks, applyTavernSettingsPatch } = await import('../tavern-plugin/lib/domain/tavern-settings.js')
-  assert.equal(normalizeBackgroundTasks({}).variableFeedback, true)
-  assert.equal(normalizeBackgroundTasks({ variableFeedback: false }).variableFeedback, false)
-  assert.equal(applyTavernSettingsPatch({}, { defaultPlaySettings: { backgroundTasks: { variableFeedback: false } } }).defaultPlaySettings.backgroundTasks.variableFeedback, false)
+test('变量回灌固定开启，旧存档里的关闭设置不再生效', async () => {
+  const { normalizeBackgroundTasks } = await import('../tavern-plugin/lib/domain/tavern-settings.js')
+  assert.equal(Object.hasOwn(normalizeBackgroundTasks({ variableFeedback: false }), 'variableFeedback'), false)
   const current = { ...chat([message({ hp: 10 }), message({ hp: 9 })]), backgroundTasks: { variableFeedback: false } }
   const decision = { kind: 'enter', messages: [] }
-  assert.equal(appendVariableChanges({ chat: current, payload: { step: 1 }, decision }).messages.length, 0)
+  assert.equal(appendVariableChanges({ chat: current, payload: { step: 1 }, decision }).messages.length, 1)
 })

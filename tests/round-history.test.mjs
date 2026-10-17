@@ -146,6 +146,31 @@ test('rollback refuses a checkpoint whose round has left the native Surface inst
   assert.equal(h.calls.length,0)
 })
 
+test('有修复能力时，原生上下文丢了这一轮也照样回退：存档回退，随后按存档修复原生', async () => {
+  const h=harness({checkpoint:true})
+  h.session.events[1].data.turn=1 // The native surface shows another round.
+  const repairs=[]
+  h.options.repairNative=async (sessionId, session)=>{ repairs.push({ sessionId, messages: h.chat.messages.length, session }) }
+  const result=await h.create().rollback('session','chat')
+  assert.equal(h.chat.messages.length,1,'the save rolled back')
+  assert.equal(result.rolledBack.removedAssistantText,'旧正文')
+  // Once before the rollback (it may restore the round), once after the save moved.
+  assert.ok(repairs.length>=2)
+  assert.equal(repairs.at(-1).messages,1)
+  assert.equal(repairs.at(-1).session,h.session)
+})
+
+test('有修复能力时，重新生成找不到原生正文：先按存档修复再定位', async () => {
+  const h=harness()
+  const original=h.session.events[1]
+  h.session.surface.nodes=[0]
+  let repaired=0
+  h.options.repairNative=async ()=>{ repaired++; h.session.surface.nodes=[0,original.seq] }
+  await h.create().regenerate('chat','','session')
+  assert.equal(repaired,1)
+  assert.match(h.chat.messages.at(-1).text,/^新正文/)
+})
+
 test('配对失败的证据写入现有诊断包，原错误与聊天、原生历史保持不变', async () => {
   const h = harness()
   h.chat.messages.splice(1, 1)
@@ -797,4 +822,38 @@ test('rescued history blocks regeneration and rollback without modifying old tex
  await assert.rejects(h.create().regenerate('chat','','session'),/救援/)
  await assert.rejects(h.create().rollback('session','chat'),/救援/)
  assert.deepEqual(h.chat,before)
+})
+
+
+test('读卡期间重放已独占失败回合，读卡失败释放锁后可重试', async () => {
+  const h = harness()
+  h.session.append('turn/start', { turn: 3 })
+  h.session.append('user/message', { role: 'user', content: [{ type: 'text', text: '重放这句' }], source: { kind: 'user' } }, { surfaceOp: 'append' })
+  h.session.append('turn/end', { turn: 3, reason: { kind: 'error', message: 'HTTP 500' } })
+  let entered, rejectRead
+  const started = new Promise(resolve => { entered = resolve })
+  let cardReads = 0, failRead = true
+  h.options.chats.readCard = async () => {
+    cardReads++
+    if (!failRead) return { name: '角色' }
+    entered()
+    return await new Promise((_resolve, reject) => { rejectRead = reject })
+  }
+  const live = h.create()
+  const first = live.replayFailed('chat', 'session')
+  const failed = assert.rejects(first, /card unavailable/)
+  await started
+  await assert.rejects(live.replayFailed('chat', 'session'), /正在重放失败回合/)
+  await assert.rejects(live.regenerate('chat', '', 'session'), /正在重放失败回合/)
+  await assert.rejects(live.rollback('session', 'chat'), /正在重放失败回合/)
+  assert.equal(cardReads, 1)
+  assert.equal(h.calls.filter(call => call === 'followup').length, 0)
+  rejectRead(new Error('card unavailable'))
+  await failed
+  // The module captured the callback, so change its outcome without rebuilding it.
+  failRead = false
+  await live.replayFailed('chat', 'session')
+  assert.equal(cardReads, 2)
+  assert.equal(h.calls.filter(call => call === 'followup').length, 1)
+  assert.equal(h.agent.input.content[0].text, '重放这句')
 })

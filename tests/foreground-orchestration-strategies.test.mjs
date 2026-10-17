@@ -312,3 +312,14 @@ test('预设后段骰子同一轮各步一致，新一轮或重新生成重新�
   assert.notEqual(backs[1], backs[2], '同一轮重新开始（重新生成）重新抽')
   assert.notEqual(backs[2], backs[3], '下一轮重新抽')
 })
+
+test('插件工具默认各模式都可见；插件用 toolModes 限定后只在对应模式出现', async () => {
+  async function names(mode) {
+    const run = strategies({ nativePlay: { async modeFor() { return mode }, async visibleTools() { return ['tavern_read_variables'] }, workspaceContext() { return '' },
+      async resolvePreset() { return null }, controlledToolNames: new Set(['tavern_read_variables']), pluginToolModes: name => ({ wrongbook_lookup: ['card'], draw_now: ['play'] })[name] || null } })
+    const assembly = await run.value.assembleSystemPrompt({ sections: [], contexts: [], tools: ['tavern_read_variables', 'wrongbook_lookup', 'draw_now', 'narrative_anchor_read'].map(name => ({ name })) }, { sessionId: 'native', chat: { mode }, cwd: '/w' })
+    return assembly.tools.map(tool => tool.name)
+  }
+  assert.deepEqual(await names('story'), ['tavern_read_variables', 'draw_now', 'narrative_anchor_read'])
+  assert.deepEqual(await names('card'), ['tavern_read_variables', 'wrongbook_lookup', 'narrative_anchor_read'])
+})

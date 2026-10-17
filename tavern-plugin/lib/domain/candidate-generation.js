@@ -61,12 +61,24 @@ function projectCandidateIdentityMacros(value, card, chat) {
   })
 }
 
+// Some models double-escape tool arguments: literal "\\u7a97" text becomes the character.
+export function decodeLiteralUnicodeEscapes(value) {
+  const text = str(value)
+  if (!/\\u[0-9a-fA-F]{4}/.test(text)) return text
+  return text.replace(/(?:\\u[0-9a-fA-F]{4})+/g, run => {
+    try {
+      const decoded = JSON.parse('"' + run + '"')
+      return decoded.isWellFormed() ? decoded : run
+    } catch { return run }
+  })
+}
+
 function validatedChoices(source, scriptMode, logger) {
   const choices = []
   for (const item of Array.isArray(source) ? source : []) {
     if (item === null || typeof item !== 'object') continue
     const type = choiceType(item.type)
-    const text = str(item.text).trim()
+    const text = decodeLiteralUnicodeEscapes(item.text).trim()
     if (type === null || text === '' || choices.some(function (choice) { return choice.text === text })) continue
     choices.push({ type, text })
   }

@@ -72,3 +72,12 @@ test('整理后的台账只给下一轮正文一次；台账为空或没有整�
   assert.deepEqual(ledgerFrameInputs({ ledger }), [])
   assert.deepEqual(ledgerFrameInputs({ ledger: { version: 1, location: '', locationPath: [], items: [], npcs: [], scenes: [], itemLog: [] }, ledgerInjection: { through: 2 } }), [])
 })
+
+test('管线护栏：手动台账整理的任务说明逐字不变', async () => {
+  const { LEDGER_RULES } = await import('../tavern-plugin/lib/domain/story-ledger.js')
+  const systems = []
+  const run = fixture(async input => { systems.push(input.system); await input.onToolCall({ name: 'ledger_submit', arguments: addKey }) })
+  await run.api.start({ sessionId: 'session' }); await run.api.wait('chat')
+  assert.deepEqual(systems, ['本次执行玩家手动发起的台账整理。台账是给玩家查阅的备忘录，整理后下一轮正文会参考一次。阅读给出的剧情（第 1–2 轮），对照当前台账，调用一次 ledger_submit 提交这些剧情带来的增量；没有变化也提交 {}。不得改写正文、变量或姿势。\n\n'
+    + LEDGER_RULES.replace('先完成台账，再提交姿势或变量；不要创建其他 Agent。', '不要创建其他 Agent。')])
+})

@@ -10,6 +10,7 @@
 			const composerActions = [];
 			const panels = new Map();
 			const startGroups = [];
+			const cardListViews = [];
 			const listeners = new Set();
 			// Tavern's own context, for the sidebar a plugin panel opens in (set at apply).
 			let host = null;
@@ -192,6 +193,19 @@
 					// A bare id names the plugin's own registerPanel page; anything with ":" is a sidebar tab id as registered.
 					const entry = { owner: owner, title: input.title.trim(), tabs: input.tabs.map(function (tab) { return tab.indexOf(":") >= 0 ? tab : "tavern-plugin:" + owner + ":" + tab; }) };
 					return owned(this, function () { return addTo(startGroups, entry); }, "tavernUi.registerStartGroup()");
+				},
+				// Another way to show the card library and the play picker (a grid, covers); Tavern keeps
+				// searching, groups and batch actions, and falls back to its own list when the view fails.
+				registerCardListView(input) {
+					if (!input || typeof input.id !== "string" || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(input.id)) throw new TypeError("registerCardListView 的 id 只能用小写字母、数字、点、下划线和连字符");
+					if (typeof input.label !== "string" || !input.label.trim() || input.label.trim().length > 20) throw new TypeError("registerCardListView 需要 1–20 字的 label");
+					if (typeof input.render !== "function") throw new TypeError("registerCardListView 需要 render 函数");
+					const owner = ownerOf(this);
+					const entry = { key: owner + ":" + input.id, owner: owner, label: input.label.trim(), render: input.render };
+					return owned(this, function () {
+						if (cardListViews.some(function (view) { return view.key === entry.key; })) throw new Error("人物卡列表视图 " + input.id + " 已注册");
+						return addTo(cardListViews, entry);
+					}, "tavernUi.registerCardListView()");
 				}
 			};
 			Object.defineProperty(service, Symbol.for("cordis.tracker"), { value: { associate: "tavernUi", property: "ctx" } });
@@ -204,6 +218,7 @@
 				markers: function () { return markers.slice(); },
 				messageActions: function () { return messageActions.slice(); },
 				composerActions: function () { return composerActions.slice(); },
+				cardListViews: function () { return cardListViews.slice(); },
 				startGroups: function () { return startGroups.map(function (group) { return { title: group.title, tabs: group.tabs.slice() }; }); }
 			};
 		}
@@ -404,4 +419,83 @@
 			if (!actions.length) return null;
 			return React.createElement(TavernPluginActionButtons, { actions: actions, className: "dsh-tavern-plugin-composer-actions", buttonClassName: "dsh-tavern-choice-trigger",
 				disabled: props.running, context: { gameId: props.sessionId, turn: props.turn, busy: Boolean(props.running) } });
+		}
+
+		const TAVERN_CARD_LIST_VIEW_KEY = "dsh-tavern-card-list-view";
+		function readTavernCardListView() { try { return window.localStorage.getItem(TAVERN_CARD_LIST_VIEW_KEY) || ""; } catch (_) { return ""; } }
+
+		function tavernCardListViewCard(card) {
+			return {
+				path: card.path, name: card.name, fileName: String(card.path).replace(/\\/g, "/").split("/").pop(),
+				imageUrl: card.hasImage ? "/api/dsh-tavern/card-image?path=" + encodeURIComponent(card.path) : "",
+				script: card.script ? { title: card.script.title } : null,
+				group: card.group || "", starred: Boolean(card.starred), error: card.readError || ""
+			};
+		}
+
+		// Tavern's own grid of covers, built on the same render input plugin views get.
+		// Adapted from swp-z/dsh-tavern-card-grid (MIT); no column setting, the width decides.
+		function renderTavernCardGrid(input) {
+			const h = React.createElement;
+			return h("div", { className: "dsh-tavern-card-grid" }, input.cards.map(function (card) {
+				const selected = input.isSelected(card.path);
+				const corner = [input.mention(card.path), input.menu(card.path)].filter(Boolean);
+				return h("div", { key: card.path, className: "dsh-tavern-card-grid-item" + (selected ? " selected" : "") + (card.error ? " broken" : "") },
+					h("button", { type: "button", className: "dsh-tavern-card-grid-open", title: card.error || card.name, "aria-pressed": input.selecting ? selected : undefined,
+						disabled: input.busy || (!input.selecting && input.place === "play" && Boolean(card.error)), onClick: function () { input.open(card.path); } },
+						card.imageUrl ? h("img", { className: "dsh-tavern-card-grid-cover", src: card.imageUrl, alt: "", loading: "lazy" })
+							: h("span", { className: "dsh-tavern-card-grid-cover placeholder", "aria-hidden": "true" }, Array.from(String(card.name || "").replace(/^[^\p{L}\p{N}]+/u, ""))[0] || "?"),
+						h("span", { className: "dsh-tavern-card-grid-name" }, card.name)),
+					input.selecting ? h("input", { type: "checkbox", className: "dsh-tavern-card-batch-checkbox dsh-tavern-card-grid-check", checked: selected, disabled: input.busy,
+						"aria-label": "选择人物卡：" + card.name, onChange: function () { input.toggle(card.path); } }) : null,
+					corner.length ? h("span", { className: "dsh-tavern-card-grid-corner" }, corner) : null);
+			}));
+		}
+		const TAVERN_CARD_GRID_VIEW = { key: "dsh-tavern:grid", owner: "DSH Tavern", label: "宫格", render: renderTavernCardGrid };
+
+		function TavernCardListViewBody(props) {
+			const rendered = props.view.render(props.input);
+			return rendered === null || rendered === undefined ? props.fallback : rendered;
+		}
+
+		/**
+		 * The card rows of the library and the play picker: Tavern's own list or grid, or a
+		 * plugin view, picked by a switcher (remembered per browser).
+		 * props: place, cards (already searched and filtered), batch, busy, open(card), menu(card)?, mention(card)?, builtin().
+		 */
+		function TavernCardList(props) {
+			useTavernUiExtensions();
+			const [chosen, setChosen] = React.useState(readTavernCardListView);
+			const h = React.createElement;
+			const views = [TAVERN_CARD_GRID_VIEW].concat(tavernUiExtensions.cardListViews());
+			const view = views.find(function (entry) { return entry.key === chosen; }) || null;
+			const builtin = props.builtin();
+			function choose(key) {
+				setChosen(key);
+				try { window.localStorage.setItem(TAVERN_CARD_LIST_VIEW_KEY, key); } catch (_) {}
+			}
+			const switcher = h("div", { className: "dsh-tavern-card-view-switch", role: "group", "aria-label": "人物卡显示方式" },
+				[{ key: "", label: "列表" }].concat(views).map(function (entry) {
+					return h("button", { key: entry.key, type: "button", "aria-pressed": (view ? view.key : "") === entry.key, title: entry.owner && entry !== TAVERN_CARD_GRID_VIEW ? "来自插件 " + entry.owner : undefined, onClick: function () { choose(entry.key); } }, entry.label);
+				}));
+			if (!view) return h(React.Fragment, null, switcher, builtin);
+			const byPath = new Map(props.cards.map(function (card) { return [card.path, card]; }));
+			const batch = props.batch;
+			const input = {
+				place: props.place,
+				cards: props.cards.map(tavernCardListViewCard),
+				busy: Boolean(props.busy),
+				selecting: Boolean(batch.managing),
+				isSelected: function (path) { return batch.managing && batch.isSelected(path); },
+				toggle: function (path) { if (batch.managing && byPath.has(path)) batch.toggle(path); },
+				open: function (path) {
+					const card = byPath.get(path);
+					if (!card || props.busy) return;
+					if (batch.managing) batch.toggle(path); else props.open(card);
+				},
+				menu: function (path) { const card = byPath.get(path); return card && props.menu && !batch.managing ? props.menu(card) : null; },
+				mention: function (path) { const card = byPath.get(path); return card && props.mention && !batch.managing ? props.mention(card) : null; }
+			};
+			return h(React.Fragment, null, switcher,
+				h(tavernPluginBoundary(), { key: view.key, owner: view.owner, fallback: builtin }, h(TavernCardListViewBody, { view: view, input: input, fallback: builtin })));
 		}

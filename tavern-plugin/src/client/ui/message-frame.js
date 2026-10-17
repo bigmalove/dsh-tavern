@@ -467,7 +467,8 @@
 				}).join("\n")) + '</div></div></div>';
 				return h(TavernMessageFrame, Object.assign({}, options, { key: "opening-runtime", content: content, partIndex: 0, eager: options.eagerFrame }));
 			}
-			const renderMarkdown = function (text, key) { return h(TavernColoredMarkdown, { key: key, text: text, streaming: options.streaming, labels: { code: options.codeLabels, footnotes: "脚注" }, codeLabels: options.codeLabels, fileMentions: options.mentions }); };
+			const renderPlain = function (text, key) { return h(TavernColoredMarkdown, { key: key, text: text, streaming: options.streaming, labels: { code: options.codeLabels, footnotes: "脚注" }, codeLabels: options.codeLabels, fileMentions: options.mentions }); };
+			const renderMarkdown = options.cast && !options.streaming ? function (text, key) { return renderTavernCastText(text, key, renderPlain, options.cast); } : renderPlain;
 			return parts.map(function (part, index) {
 				if (part.kind === "markdown") {
 					const markdown = options.plugin ? options.plugin.render(String(part.text || ""), index, renderMarkdown) : renderMarkdown(String(part.text || ""), index);
@@ -516,12 +517,13 @@
 				if (block.kind === "text") {
 					if (input.projection && projected) continue;
 					const projection = input.projection;
-					if (projection) rendered.push(h(React.Fragment, { key: index }, renderTavernProjection(projection, { streaming: input.streaming, codeLabels: codeLabels, mentions: input.mentions, sessionId: input.sessionId, turn: input.turn, frameSizing: input.frameSizing, helperContext: input.helperContext, helperContextReader: input.helperContextReader, trustedCardMode: input.trustedCardMode, eagerFrame: input.eagerFrame, frameOwner: input.frameOwner, executeSlash: input.executeSlash, scriptLayer: input.scriptLayer , plugin: input.plugin })));
+					if (projection) rendered.push(h(React.Fragment, { key: index }, renderTavernProjection(projection, { streaming: input.streaming, codeLabels: codeLabels, mentions: input.mentions, sessionId: input.sessionId, turn: input.turn, frameSizing: input.frameSizing, helperContext: input.helperContext, helperContextReader: input.helperContextReader, trustedCardMode: input.trustedCardMode, eagerFrame: input.eagerFrame, frameOwner: input.frameOwner, executeSlash: input.executeSlash, scriptLayer: input.scriptLayer , plugin: input.plugin, cast: input.cast })));
 					else if (input.htmlSketches) rendered.push(h(React.Fragment, { key: index }, splitTavernHtmlSketches(block.text).map(function (part, partIndex) {
 						return part.kind === "sketch" ? h(TavernHtmlSketch, { key: partIndex, html: part.html }) : h(TavernColoredMarkdown, { key: partIndex, text: part.text, streaming: input.streaming, labels: { code: codeLabels, footnotes: "脚注" }, codeLabels: codeLabels, fileMentions: input.mentions });
 					})));
 					else {
-						const renderMarkdown = function (text, key) { return h(TavernColoredMarkdown, { key: key, text: text, streaming: input.streaming, labels: { code: codeLabels, footnotes: "脚注" }, codeLabels: codeLabels, fileMentions: input.mentions }); };
+						const renderPlain = function (text, key) { return h(TavernColoredMarkdown, { key: key, text: text, streaming: input.streaming, labels: { code: codeLabels, footnotes: "脚注" }, codeLabels: codeLabels, fileMentions: input.mentions }); };
+						const renderMarkdown = input.cast && !input.streaming ? function (text, key) { return renderTavernCastText(text, key, renderPlain, input.cast); } : renderPlain;
 						rendered.push(input.plugin ? input.plugin.render(String(block.text || ""), index, renderMarkdown) : renderMarkdown(String(block.text || ""), index));
 					}
 					projected = true;
@@ -541,7 +543,7 @@
 				if (block.kind !== "tool-call") rendered.push(h(DshUi.JsonBlock, { key: index, label: translate("message.unknownBlock"), payload: block.block || block, truncatedLabel: function (total) { return translate("json.truncated", { total: total }); } }));
 			}
 			if (input.projection && !projected) {
-				rendered.push(h(React.Fragment, { key: "projection" }, renderTavernProjection(input.projection, { streaming: false, codeLabels: codeLabels, mentions: input.mentions, sessionId: input.sessionId, turn: input.turn, frameSizing: input.frameSizing, helperContext: input.helperContext, helperContextReader: input.helperContextReader, trustedCardMode: input.trustedCardMode, eagerFrame: input.eagerFrame, frameOwner: input.frameOwner, executeSlash: input.executeSlash , plugin: input.plugin })));
+				rendered.push(h(React.Fragment, { key: "projection" }, renderTavernProjection(input.projection, { streaming: false, codeLabels: codeLabels, mentions: input.mentions, sessionId: input.sessionId, turn: input.turn, frameSizing: input.frameSizing, helperContext: input.helperContext, helperContextReader: input.helperContextReader, trustedCardMode: input.trustedCardMode, eagerFrame: input.eagerFrame, frameOwner: input.frameOwner, executeSlash: input.executeSlash , plugin: input.plugin, cast: input.cast })));
 			}
 			if (input.interrupted) rendered.push(h("span", { key: "stopped", className: "dsh-tavern-assistant-stopped" }, translate("message.stopped")));
 			return rendered;

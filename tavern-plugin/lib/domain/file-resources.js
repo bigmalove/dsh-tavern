@@ -545,9 +545,24 @@ export function createFileResourceStore(options = {}) {
     return operation
   }
 
-  async function importCard(payload, card) {
+  let importCardTail = Promise.resolve()
+  function importCard(payload, card, options = {}) {
+    const operation = importCardTail.catch(() => {}).then(() => writeImportedCard(payload, card, options))
+    importCardTail = operation
+    return operation
+  }
+
+  async function writeImportedCard(payload, card, options) {
     await ensure()
-    const rawName = safeResourceName(payload && payload.name || '未命名人物卡.json')
+    let rawName = safeResourceName(payload && payload.name || '未命名人物卡.json')
+    if (options.unique) {
+      const parsed = path.parse(rawName)
+      for (let suffix = 1; ; suffix += 1) {
+        const candidate = 'cards/' + path.parse(rawName).name + '.json'
+        if (!await exists(absolute(candidate)) && await originalCardName(candidate) === null) break
+        rawName = parsed.name + ' (' + suffix + ')' + parsed.ext
+      }
+    }
     const workingName = path.parse(rawName).name + '.json'
     const relative = 'cards/' + workingName
     const originalName = payload && payload.kind === 'png' ? path.parse(rawName).name + '.png' : workingName

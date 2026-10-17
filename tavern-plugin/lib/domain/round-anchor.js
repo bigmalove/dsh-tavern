@@ -26,7 +26,9 @@ function lineage(events) {
     const sources = event?.surfaceOp && typeof event.surfaceOp === 'object' && Array.isArray(event.sourceEventSeqs) ? event.sourceEventSeqs : null
     // Guard cycles from damaged logs: a seq is its own root while being resolved.
     roots.set(seq, new Set([seq]))
-    const result = sources ? new Set(sources.flatMap(source => [...of(source)])) : new Set([seq])
+    // A replacement descends from what it cites and is its own root too, so an
+    // anchor written onto a replacement (native surface repair) resolves as well.
+    const result = sources ? new Set([seq, ...sources.flatMap(source => [...of(source)])]) : new Set([seq])
     roots.set(seq, result)
     return result
   }

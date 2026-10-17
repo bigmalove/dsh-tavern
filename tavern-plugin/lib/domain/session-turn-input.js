@@ -6,6 +6,10 @@ import { sessionEvents } from './session-events.js'
 
 function str(value) { return typeof value === 'string' ? value : (value === undefined || value === null ? '' : String(value)) }
 
+/** A turn that ended without a committed reply: an error, a stop, or a crash the
+ * host closed on recovery ('interrupted'). Its input and partial reply are residue. */
+export function isFailedTurnEnd(kind) { return kind === 'error' || kind === 'aborted' || kind === 'interrupted' }
+
 /** Who sent an input: the player, a regenerate attempt, a legacy failed-turn replay, or nobody. */
 export function inputKind(message) {
   const source = message && message.source
@@ -75,7 +79,7 @@ export function requestIdForTurn(session, turn) {
 /** Player inputs that are still story: those of a failed or rejected turn are
  * residue the failed-turn cleanup removes, and never block recovery. */
 export function storyPlayerInputs(events, from = 0) {
-  const failed = new Set(events.filter(event => event?.type === 'turn/end' && ['error', 'aborted'].includes(event.data?.reason?.kind)).map(event => Number(event.data.turn)))
+  const failed = new Set(events.filter(event => event?.type === 'turn/end' && isFailedTurnEnd(event.data?.reason?.kind)).map(event => Number(event.data.turn)))
   const found = []
   let turn = 0
   for (const event of events) {

@@ -8,17 +8,24 @@ import { setupRealCharacterDesign, realCharacterDesignChecks } from './real-char
 import { setupRealCardEdit, realCardEditChecks } from './real-card-edit.mjs'
 import { startSceneImageServer, sceneAddChecks } from './scene-add.mjs'
 import { regenAnomalyChecks, regenTemplateChecks } from './regen-anomalies.mjs'
+import { failedTurnCleanupChecks } from './failed-turn-cleanup.mjs'
+import { toolStepsChecks } from './tool-steps.mjs'
 import { storageAuditChecks } from './storage-audit.mjs'
 import { brokenSaveChecks } from './broken-save.mjs'
+import { nativeRepairChecks } from './native-repair.mjs'
+import { failureResilienceChecks } from './failure-resilience.mjs'
 import { incrementalMvuChecks } from './mvu-incremental.mjs'
 import {openingUpdateChecks} from './opening-update.mjs'
 import { backgroundLifecycleChecks } from './background-lifecycle.mjs'
 import { cardMemoryChecks } from './card-memory.mjs'
 import {displayRegressionRules, displayRegressionChecks} from './display-regression.mjs'
 import { surfaceRecoveryChecks } from './surface-recovery.mjs'
+import { castStageChecks, castStageInputChecks } from './cast-stage.mjs'
 import { cardVariableUpdateChecks } from './card-variable-update.mjs'
 import { cardUpdateChecks } from './card-update.mjs'
 import { sidebarUpgrade } from './sidebar-upgrade.mjs'
+import { pinPanelChecks } from './pin-panel.mjs'
+import { mobileSidebarChecks } from './mobile-sidebar.mjs'
 import { compactedEditedLegacySession } from '../fixtures/compacted-legacy-session.mjs'
 import { encodeMigratedSessionLog, parseSessionLog } from '../../tavern-plugin/lib/domain/legacy-session-migration.js'
 import { compactionChecks } from './compaction.mjs'
@@ -33,11 +40,14 @@ import { spawn } from 'node:child_process'
 import { chromium } from 'playwright'
 import { createChatJournalStore } from '../../tavern-plugin/lib/domain/chat-journal-store.js'
 
-const displayScenario = process.argv.includes('--display-regression')
+const pinScenario = process.argv.includes('--pin-panel')
+const displayScenario = pinScenario || process.argv.includes('--display-regression')
 const recoveryScenario = process.argv.includes('--surface-recovery')
 const helperApiScenario = process.argv.includes('--helper-api')
 // Story body submitted through the submit_story tool (per-conversation toggle, off by default).
 const storyToolScenario = process.argv.includes('--story-tool')
+// Dialogue avatars: settlement annotates speakers, quoted lines show as speaker rows.
+const castScenario = process.argv.includes('--cast')
 const compactionScenario = process.argv.find(arg => arg.startsWith('--compaction='))?.split('=')[1]
 const source = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const runtime = resolve(process.env.TAVERN_E2E_RUNTIME || join(homedir(), '.dsh-tavern/runtime'))
@@ -126,7 +136,6 @@ async function inspectScreen() {
   await openStatus()
   await page.frameLocator('.dsh-tavern-status-runtime iframe.dsh-tavern-message-frame:not([aria-hidden="true"])')
     .locator('#e2e-gold').filter({ hasText: /^金币：10$/ }).waitFor()
-  await page.getByText('站在柜台前，收下奖励。', { exact: true }).filter({ visible: true }).waitFor()
 }
 try {
   await step('准备独立运行环境', async () => {
@@ -208,8 +217,11 @@ try {
           TAVERN_E2E_BACKGROUND_DIR: (process.argv.includes('--background-lifecycle') || process.argv.includes('--background-failure')) ? output : '',
           TAVERN_E2E_REQUEST_AUDIT: join(output, 'preset-requests.jsonl'),
           TAVERN_E2E_STORY_TOOL_LOG: storyToolScenario ? join(output, 'story-tool.jsonl') : '',
+          TAVERN_E2E_SETTLEMENT_DUMP: process.env.TAVERN_E2E_SETTLEMENT_DUMP || '',
+          TAVERN_E2E_CAST: castScenario ? '1' : '',
           TAVERN_E2E_MEMORY_AUDIT: process.argv.includes('--card-memory') ? join(output, 'memory-requests.jsonl') : '',
           TAVERN_E2E_SCENE_AUDIT: process.argv.includes('--scene-add') ? join(output, 'scene-requests.jsonl') : '',
+          TAVERN_E2E_CONTEXT_AUDIT: process.argv.includes('--native-repair') || process.argv.includes('--failure-resilience') ? join(output, 'context-requests.jsonl') : '',
           TAVERN_E2E_LLM_MODULE: join(modules, '@deepseek-ai/dsh-llm/lib/index.js'),
           // Server card scripts are the default; ordinary scenarios keep exercising the page path.
           DSH_TAVERN_SERVER_SCRIPTS: process.argv.includes('--server-scripts') ? '1' : '0',
@@ -299,7 +311,8 @@ try {
   if(process.argv.includes('--native-format'))await step('确认新局直接写入原生分页存档',assertNativeStorage)
   if (process.argv.includes('--text-colors')) {
     await step('实际正文挂载主题对白高亮', async () => {
-      await page.locator('.dsh-tavern-colored-markdown').waitFor()
+      // A trusted card's script layer keeps a hidden copy of the body beside the shown one.
+      await page.locator('.dsh-tavern-colored-markdown').filter({ visible: true }).first().waitFor()
       const state=await page.evaluate(()=>({api:typeof Highlight,css:typeof CSS.highlights,styles:document.querySelectorAll('style[data-dsh-tavern-text-colors]').length,ranges:[...CSS.highlights.values()].reduce((n,h)=>n+h.size,0)}))
       report.textColors=state
       assert.ok(state.styles>0,'正文必须挂载高亮样式')
@@ -449,10 +462,18 @@ try {
     })
   } else if (helperApiScenario) {
     await helperApiChecks({ page, step, savedChat, output, report })
+  } else if (process.argv.includes('--failure-resilience')) {
+    await failureResilienceChecks({ page, step, savedChat, output, report, root, restartServer })
+  } else if (process.argv.includes('--native-repair')) {
+    await nativeRepairChecks({ page, step, savedChat, output, report, data, restartServer })
   } else if (process.argv.includes('--broken-save')) {
     await brokenSaveChecks({ page, step, savedChat, output, report, root, data, profile, source, restartServer })
   } else if (process.argv.includes('--regen-template')) {
     await regenTemplateChecks({ page, step, savedChat, output, report, root })
+  } else if (process.argv.includes('--tool-steps')) {
+    await toolStepsChecks({ page, step, savedChat, output, report })
+  } else if (process.argv.includes('--failed-turn-cleanup')) {
+    await failedTurnCleanupChecks({ page, step, savedChat, output, report })
   } else if (process.argv.includes('--regen-anomalies')) {
     await regenAnomalyChecks({ page, step, savedChat, output, report, serverLog: () => log })
   } else if (process.argv.includes('--scene-add')) {
@@ -474,11 +495,27 @@ try {
     await surfaceRecoveryChecks({ page, step, savedChat, output, report, root, restartServer })
   } else {
   if (storyToolScenario) await step('开启正文走工具调用', async () => {
-    await page.getByRole('button', { name: '更多 ▾', exact: true }).click()
-    await page.getByRole('menuitemcheckbox', { name: '正文走工具调用：关', exact: true }).click()
-    await page.getByRole('button', { name: '更多 ▾', exact: true }).click()
-    await page.getByRole('menuitemcheckbox', { name: '正文走工具调用：开', exact: true }).waitFor()
-    await page.getByRole('button', { name: '更多 ▾', exact: true }).click()
+    // A global switch: DSH settings → DSH Tavern → 高级.
+    const chatUrl = page.url()
+    await page.getByRole('button', { name: 'Settings', exact: true }).click()
+    await page.getByText('DSH Tavern', { exact: true }).first().click()
+    const toggle = page.getByRole('switch', { name: '正文走工具调用', exact: true })
+    await toggle.click()
+    await page.getByText('已保存，所有游戏下一轮生效').waitFor()
+    assert.equal(await toggle.isChecked(), true)
+    await page.goto(chatUrl)
+    await page.getByRole('textbox', { name: /发消息|Message/ }).waitFor()
+  })
+  if (castScenario) await step('开启对话头像', async () => {
+    const chatUrl = page.url()
+    await page.getByRole('button', { name: 'Settings', exact: true }).click()
+    await page.getByText('DSH Tavern', { exact: true }).first().click()
+    const toggle = page.getByRole('switch', { name: '对话头像', exact: true })
+    await toggle.click()
+    await page.getByText('已保存，所有游戏下一轮生效').first().waitFor()
+    assert.equal(await toggle.isChecked(), true)
+    await page.goto(chatUrl)
+    await page.getByRole('textbox', { name: /发消息|Message/ }).waitFor()
   })
   await step('玩一轮，确认正文、金币与人物姿势', async () => {
     const composer = page.getByRole('textbox', { name: /发消息|Message/ })
@@ -510,6 +547,22 @@ try {
     await page.screenshot({ path: join(output, 'story-tool-actions.png'), fullPage: true })
     await page.frameLocator('.dsh-tavern-status-runtime iframe:not([aria-hidden="true"])').locator('#e2e-gold').filter({ hasText: /^金币：10$/ }).waitFor()
   })
+  if (castScenario) await step('台词显示成带头像的说话人行，刷新后仍在', async () => {
+    const rows = page.locator('.dsh-tavern-cast-line').filter({ visible: true })
+    for (const reload of [false, true]) {
+      if (reload) await page.reload({ waitUntil: 'domcontentloaded' })
+      await rows.first().waitFor({ timeout: 30000 })
+      const shown = await rows.evaluateAll(items => items.map(item => ({
+        name: item.querySelector('.dsh-tavern-cast-name')?.textContent, emotion: item.querySelector('.dsh-tavern-cast-emotion')?.textContent || '',
+        avatar: item.querySelector('.dsh-tavern-cast-avatar')?.textContent || 'img', text: item.querySelector('.dsh-tavern-cast-body')?.textContent || '' })))
+      assert.deepEqual(shown.map(row => [row.name, row.emotion, row.avatar]), [['店主', '开心', '店'], ['你', '感激', '你']])
+      assert.ok(shown[0].text.includes('欢迎回来，这是你的奖励。'))
+      await page.getByText('你获得了十枚金币。', { exact: false }).filter({ visible: true }).first().waitFor()
+    }
+    await page.screenshot({ path: join(output, 'cast-lines.png') })
+    report.castLines = true
+  })
+  if (castScenario) await castStageChecks({ page, step, output, report })
   await step('刷新后确认同一局、正文和状态均保留', async () => {
     await page.reload({ waitUntil: 'domcontentloaded' })
     await inspectScreen()
@@ -587,6 +640,10 @@ try {
     await incrementalMvuChecks({page,step,savedChat,output,report,restartServer})
   } else if (process.argv.includes('--background-lifecycle')) {
     await backgroundLifecycleChecks({page,step,savedChat,data,output,report,restartServer})
+  } else if (process.argv.includes('--mobile-sidebar')) {
+    await mobileSidebarChecks({page,step,output,report})
+  } else if (pinScenario) {
+    await pinPanelChecks({page,step,output,report})
   } else if (displayScenario) {
     await displayRegressionChecks({page,step,savedChat,data,output,report,restartServer})
   } else if (compactionScenario) {
@@ -831,6 +888,7 @@ try {
     await assertNativeStorage()
     report.nativeFormat.restart=true
   })
+  if (castScenario) await castStageInputChecks({ page, step, report })
   // Every scenario ends with the story save agreeing with what the model sees (#196).
   if (storyToolScenario) await step('正文均经 submit_story 提交', async () => {
     const submitted = (await readFile(join(output, 'story-tool.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line).content)

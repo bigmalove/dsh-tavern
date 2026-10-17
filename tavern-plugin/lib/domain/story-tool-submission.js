@@ -11,8 +11,9 @@ export const STORY_SUBMIT_PROMPT = [
   '</output_method>'
 ].join('\n')
 
-export function storyToolCallEnabled(chat) {
-  return !!chat && (!chat.mode || ['story', 'script', 'writing'].includes(chat.mode)) && chat.storyToolCallEnabled === true
+/** A global switch (Tavern settings); it applies to play and writing sessions. */
+export function storyToolCallEnabled(chat, enabled) {
+  return enabled === true && !!chat && (!chat.mode || ['story', 'script', 'writing'].includes(chat.mode))
 }
 
 function validContent(content) {
@@ -69,21 +70,28 @@ export function foldStorySubmission(session, result, bodyText) {
   const turn = Number(data.turn) || 0
   const step = Number(data.step) || 1
   const surface = createSessionSurfaceMutator(session)
-  // `index` is the events-array position, `receiptIndex` the event seq; the
-  // surface is a seq list, so the call is located by its own seq.
+  // `submission.index` is the events-array position while the receipt is an
+  // event seq; the surface is a seq list, so the call is located by its own seq.
+  // A filtered or compacted log makes the two differ, and a positional lookup
+  // then fails with "消息替换目标已变化".
   const start = Number(result.event?.seq ?? result.index)
   const receipt = Number(result.receiptIndex)
   const nodes = Array.isArray(session?.surface?.nodes) ? session.surface.nodes.map(Number) : []
-  const from = nodes.indexOf(start), to = nodes.indexOf(receipt)
-  // A step may dispatch several tools; every surface node between the call and
-  // this submission's receipt is shadowed with them, never left unmatched.
+  const from = nodes.indexOf(start)
+  const to = nodes.indexOf(receipt)
+  // A step may dispatch several tools, so other receipts can sit between the
+  // call and this submission's receipt. The range must cite every node it
+  // removes or the replacement is refused with "缺少有效的来源引用".
   if (from < 0 || to < from) return
-  // The visible copy and the replacement are one message: the chat view keys a
-  // round's actions (fork, edit) by the message id it rendered, and the fork map
-  // reads the id of the newest projection event, so both must agree.
-  const reply = { ...data.message, id: randomUUID(),
+  // The appended copy and the replacement are one message. The chat view keys a
+  // round's actions by the message id it rendered and the fork map reads the id
+  // of the newest projection event, so two ids here hide the fork action.
+  const reply = {
+    ...data.message,
+    id: randomUUID(),
     source: { kind: 'model', provider: 'dsh-tavern', model: 'reply-projection' },
-    content: [{ type: 'text', text: bodyText }] }
+    content: [{ type: 'text', text: bodyText }]
+  }
   const shown = surface.append('assistant/message', { turn, step, message: reply }, { surfaceOp: 'append', sourceEventSeqs: [] })
   const shownSeq = Number(typeof shown === 'number' ? shown : shown.seq)
   const end = session.surface.nodes.map(Number).indexOf(shownSeq)
@@ -102,7 +110,7 @@ export function activeStoryTurn(session) {
 }
 
 /** Executed exclusively by the host; the durable tool result is the receipt. */
-export function createStorySubmissionTool({ chatForSession, isBackground = () => false }) {
+export function createStorySubmissionTool({ chatForSession, enabled, isBackground = () => false }) {
   return {
     name: STORY_SUBMIT_TOOL_NAME,
     description: '提交本轮完整最终正文。全部正文放入 content；成功后结束本轮，不再补充回复。',
@@ -115,7 +123,7 @@ export function createStorySubmissionTool({ chatForSession, isBackground = () =>
       const sessionId = session?.id || ''
       if (!sessionId || isBackground(sessionId)) throw new Error('正文提交只用于前台游玩回合')
       const chat = await chatForSession(sessionId)
-      if (!storyToolCallEnabled(chat)) throw new Error('当前对话未开启正文走工具调用')
+      if (!storyToolCallEnabled(chat, await enabled())) throw new Error('未开启正文走工具调用')
       const turn = activeStoryTurn(session)
       if (turn === null) throw new Error('当前没有正在生成的游玩回合')
       const content = validContent(args?.content)

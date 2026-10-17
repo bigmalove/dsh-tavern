@@ -112,10 +112,10 @@ export function createBackgroundAgentTask(options) {
     stableNames.add(tool.name)
     stableBackgroundTools.push(tool)
   }
-  // Seam to the plugin layer (plugin-api.js): tools and notes plugins add to settlement.
-  const pluginSettlement = () => typeof options.pluginSettlement === 'function' ? options.pluginSettlement() : null
+  // Settlement items (domain/background-pipeline.js): Tavern's optional items and the plugins' tools and notes.
+  const settlementItems = () => typeof options.settlementItems === 'function' ? options.settlementItems() : null
   function pluginTools() {
-    const tools = pluginSettlement()?.tools() || []
+    const tools = settlementItems()?.tools() || []
     return tools.filter(tool => tool && !stableNames.has(tool.name) && !sharedByName.has(tool.name))
   }
   function completedBoundary(events) {
@@ -274,11 +274,9 @@ export function createBackgroundAgentTask(options) {
           const shared = (input.task !== 'worldbook-filter' || registeredShared?.allowDuringWorldbookFilter === true) &&
             (input.task !== 'character-design' || registeredShared?.allowDuringCharacterDesign === true) ? registeredShared : undefined
           const current = allowed.get(tool.name) || (shared && shared.tool)
-          if (current === undefined && input.task === 'settlement' && state.pluginCall && pluginSettlement()?.has(tool.name)) {
-            if (typeof input.stopToolsWhen === 'function' && input.stopToolsWhen()) {
-              return JSON.stringify({ ok: false, retryable: false, message: '当前任务已经提交完成，请结束本轮。插件工具请在提交结算之前调用。' })
-            }
-            return await state.pluginCall(tool.name, args)
+          if (current === undefined && input.task === 'settlement' && state.settlementCall && settlementItems()?.has(tool.name)) {
+            const result = await state.settlementCall(tool.name, args)
+            if (result !== undefined) return result
           }
           if (current === undefined) {
             return JSON.stringify({
@@ -394,9 +392,9 @@ export function createBackgroundAgentTask(options) {
     state.progress=progress
     runtimeInput.signal=input.signal ? AbortSignal.any([input.signal,progress.signal]) : progress.signal
     const removeTaskTools = installTaskTools(state, runtimeInput, agent.session)
-    const plugins = input.task === 'settlement' ? pluginSettlement() : null
+    const items = input.task === 'settlement' ? settlementItems() : null
     const pluginContext = { gameId: str(input.sessionId), turn: Math.max(0, Number(input.turn) || 0) }
-    state.pluginCall = plugins ? plugins.calls(pluginContext) : null
+    state.settlementCall = items ? items.calls(pluginContext, { stopped: () => typeof input.stopToolsWhen === 'function' && input.stopToolsWhen() }) : null
     const cancel = () => progress.cancel()
     input.signal?.addEventListener('abort', cancel, { once: true })
 
@@ -432,19 +430,14 @@ export function createBackgroundAgentTask(options) {
         ? worldbookSnapshot(agent.session, turnWorldbook) : null
       const systemUpdate = input.task === 'candidate' && typeof input.systemPromptText === 'string'
         ? cardSystemPromptSnapshot(agent.session, input.systemPromptText) : null
-      const pluginNotes = plugins ? await plugins.sections(pluginContext) : []
       // Tool definitions stay fixed for the cache; which ones may be called is stated each
       // turn, so a plugin turned off and on again is usable without stale refusals.
-      const pluginToolNames = plugins ? await plugins.toolNames(pluginContext) : { available: [], unavailable: [] }
+      const settlementText = items ? await items.text(pluginContext) : ''
       const candidateNotes = input.task === 'candidate' && typeof options.pluginCandidate === 'function'
         ? await options.pluginCandidate()?.sections(pluginContext).catch(() => []) || [] : []
-      const pluginText = pluginNotes.length || pluginToolNames.available.length || pluginToolNames.unavailable.length ? ['【插件附加的结算任务】',
-        ...(pluginToolNames.available.length ? ['本轮可用插件工具：' + pluginToolNames.available.join('、') + '。以本轮列出的为准：之前回合里这些工具被关闭或报错的情况已不再适用。需要时在提交本轮结算之前调用；插件工具失败不影响本轮结算。'] : []),
-        ...(pluginToolNames.unavailable.length ? ['本轮不可用的插件工具（玩家在本局关闭了对应插件）：' + pluginToolNames.unavailable.join('、') + '。本轮不要调用。'] : []),
-        ...pluginNotes.map(note => note.text)].join('\n\n')
-        : candidateNotes.length ? ['【插件附加的候选要求】', ...candidateNotes.map(note => note.text)].join('\n\n') : ''
+      const candidateText = candidateNotes.length ? ['【插件附加的候选要求】', ...candidateNotes.map(note => note.text)].join('\n\n') : ''
       const taskText = [foregroundReads, snapshot?.rendered, systemUpdate?.rendered,
-        backgroundPrompt(filterContext?.messages || input.messages, scriptContext?.turnContext ?? input.turnContext, input.task, input.system, input), pluginText].filter(Boolean).join('\n\n')
+        backgroundPrompt(filterContext?.messages || input.messages, scriptContext?.turnContext ?? input.turnContext, input.task, input.system, input), settlementText, candidateText].filter(Boolean).join('\n\n')
       agent.followup({
         id: randomUUID(),
         role: 'user',
@@ -476,7 +469,7 @@ export function createBackgroundAgentTask(options) {
       progress.dispose()
       state.progress=null
       input.signal?.removeEventListener('abort', cancel)
-      state.pluginCall = null
+      state.settlementCall = null
       await removeTaskTools()
     }
   }

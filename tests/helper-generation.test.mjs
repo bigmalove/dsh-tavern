@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { generateHelper, generateHelperRaw, generateHelperCompletion, identifyHelperModelMessages } from '../tavern-plugin/lib/domain/helper-generation.js'
+import { generateHelper, generateHelperRaw, generateHelperCompletion, identifyHelperModelMessages, defaultOrderedRawConfig } from '../tavern-plugin/lib/domain/helper-generation.js'
 import { compileHelperGenerate, validateHelperGenerateConfig, resolveHelperGenerationPreset, helperGenerationHistory } from '../tavern-plugin/lib/domain/helper-generation-prompts.js'
 import { createHelperGenerationTasks } from '../tavern-plugin/lib/domain/helper-generation-tasks.js'
 import { createCleanCompatibilityPreset } from '../tavern-plugin/lib/domain/sillytavern-compatibility.js'
@@ -9,9 +9,9 @@ import { createCleanCompatibilityPreset } from '../tavern-plugin/lib/domain/sill
 const pluginSource = await readFile(new URL('../tavern-plugin/lib/index.js', import.meta.url), 'utf8')
 const generationCases = pluginSource.slice(pluginSource.indexOf("      case 'generateTavernHelper':"), pluginSource.indexOf("      case 'callOpeningRuntime':"))
 function generationRpc(dependencies) {
-  return new Function('dependencies', `const { helperGenerationTasks, chatForSession, callModel, generateHelper, generateHelperRaw, generateHelperCompletion,
-    helperGenerationHistory, validateHelperGenerateConfig, readChatCard, helperGenerationPreset, worldBooks, readCardExtensions } = dependencies;
-    return async (method, args) => { switch (method) { ${generationCases} } }`)(dependencies)
+  return new Function('dependencies', 'globalDefaultOrder', `const { helperGenerationTasks, chatForSession, callModel, generateHelper, generateHelperRaw, generateHelperCompletion,
+    helperGenerationHistory, validateHelperGenerateConfig, readChatCard, helperGenerationPreset, worldBooks, readCardExtensions, defaultOrderedRawConfig } = { defaultOrderedRawConfig: globalDefaultOrder, ...dependencies };
+    return async (method, args) => { switch (method) { ${generationCases} } }`)(dependencies, defaultOrderedRawConfig)
 }
 
 function generationContext() {
@@ -173,6 +173,10 @@ test('generation RPC resolves named presets without changing selection and scope
       catalog: async () => ({ presets: [{ path: 'presets/named.json', title: 'Named' }] }),
       read: async path => { assert.equal(path, 'presets/named.json'); return named }, readDocument: async () => ({}) }) })
   assert.deepEqual(await invoke('generateTavernHelper', { sessionId: 'story', config: { preset_name: 'Named', generation_id: 'complete', user_input: 'hello' } }), { text: 'reply' })
+  // Tavern Helper's generateRaw without ordered_prompts is the default-order request generate builds.
+  assert.deepEqual(await invoke('generateTavernHelperRaw', { sessionId: 'story', config: { preset_name: 'Named', generation_id: 'default-order', user_input: 'hello' } }), { text: 'reply' })
+  assert.ok(JSON.stringify(requests.at(-1).messages).includes('Named preset text'), '缺省顺序的 generateRaw 按 generate 组装')
+  requests.splice(1)
   assert.ok(JSON.stringify(requests[0].messages).includes('Named preset text'))
   assert.ok(JSON.stringify(requests[0].messages).includes('selected body'))
   assert.equal(requests[0].background, true)
@@ -240,4 +244,12 @@ test('extra model connection and credentials cannot override host routing', asyn
   for (const extra of [{ tools: [{}] }, { n: 2 }, { temperature: NaN }, { max_tokens: -1 }]) {
     await assert.rejects(generateHelperCompletion({ messages: [{ role: 'user', content: 'hello' }], ...extra }, { callModel: () => assert.fail('invalid request') }))
   }
+})
+
+test('generateRaw 只有在没给顺序时才按 generate 处理', () => {
+  assert.deepEqual(defaultOrderedRawConfig({ user_input: 'hi', ordered_prompts: [] }), { user_input: 'hi' })
+  assert.deepEqual(defaultOrderedRawConfig({ user_input: 'hi' }), { user_input: 'hi' })
+  assert.equal(defaultOrderedRawConfig({ ordered_prompts: ['user_input'] }), null)
+  assert.equal(defaultOrderedRawConfig({ ordered_prompts: 'user_input' }), null, '错误类型交给 generateRaw 报错')
+  assert.equal(defaultOrderedRawConfig(null), null)
 })

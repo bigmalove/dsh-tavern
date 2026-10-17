@@ -11,15 +11,17 @@
 			const [selected, setSelected] = React.useState("");
 			const [refreshes, setRefreshes] = React.useState({});
 			const view = props.view;
-			const statuses = view && isPlayMode(view.mode) ? (view.tavernStatusViews || []) : [];
-			const manual = entries.filter(function (entry) { return entry.sessionId === props.sessionId && entry.pinned; });
+			// "pinned": only panels pinned from messages (status bar shown in the story body);
+			// "status": only the card's status views (that body copy). Default: both.
+			const statuses = view && isPlayMode(view.mode) && props.panels !== "pinned" ? (view.tavernStatusViews || []) : [];
+			const manual = props.panels === "status" ? [] : entries.filter(function (entry) { return entry.sessionId === props.sessionId && entry.pinned; });
 			const newest = manual.reduce(function (latest, entry) { return !latest || entry.activation > latest.activation ? entry : latest; }, null);
 			React.useEffect(function () { if (newest) setSelected(newest.id); }, [props.sessionId, newest && newest.activation]);
 			const ids = statuses.map(function (panel) { return panel.viewId; }).concat(manual.map(function (entry) { return entry.id; }));
 			const active = ids.includes(selected) ? selected : ids[0];
 			if (!view || !view.tavernHelper || !ids.length) return null;
 			const h = React.createElement;
-			return h("section", { className: "dsh-tavern-status-runtime" + (ids.length === 1 ? " single-panel" : "") },
+			const runtime = h("section", { className: "dsh-tavern-status-runtime" + (ids.length === 1 ? " single-panel" : "") },
 				h("div", { className: "dsh-tavern-panel-toolbar" }, ids.length > 1 ? h("div", { className: "dsh-tavern-panel-tabs", role: "tablist", "aria-label": "人物卡面板" },
 					statuses.concat(manual.map(function (entry) { return { viewId: entry.id, title: entry.title }; })).map(function (panel) {
 						return h("button", { key: panel.viewId, role: "tab", type: "button", "aria-selected": active === panel.viewId,
@@ -43,6 +45,7 @@
 					h("button", { type: "button", className: "dsh-tavern-btn", onClick: function () { tavernPanelRegistry.pin(entry.id, false); } }, "返回正文栏"),
 					h(TavernDockedPanel, { id: entry.id })); })
 			);
+			return props.section ? h("section", { className: "dsh-tavern-status-section" }, runtime) : runtime;
 		}
 
 		function latestTavernAssistantMessageId(snapshot) {

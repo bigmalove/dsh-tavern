@@ -3,7 +3,7 @@ import { inputAttachments, projectPlayerContent } from './player-input-content.j
 import { resolveRuntimePresetMacros } from './runtime-presets.js'
 import { createEphemeralCompatibilityRequest, isCompatibilityConversationRequest } from './compatibility-request.js'
 import { projectRuntimePresetRequest } from './runtime-preset-lifecycle.js'
-import { STORY_SUBMIT_PROMPT, storyToolCallEnabled } from './story-tool-submission.js'
+import { STORY_SUBMIT_PROMPT, STORY_SUBMIT_TOOL_NAME } from './story-tool-submission.js'
 import { markRequestHandled, requestHandledBy } from './request-lineage.js'
 import { inputKind } from './session-turn-input.js'
 
@@ -306,11 +306,11 @@ export function createNativePlayOrchestrationStrategy(options) {
       session: payload.agent?.session, disabledWritingSkills: input.chat?.disabledWritingSkills
     })
     let agentMessages = visibleMessages
-    const rawSnapshot = mode === 'story' || mode === 'script' || mode === 'writing' ? await options.resolvePreset(input.chat) : null
+    const rawSnapshot = mode === 'story' || mode === 'script' ? await options.resolvePreset(input.chat) : null
     // Render the three phases together; the persisted preset and prior messages stay authoritative.
     const randomSeed = rawSnapshot ? presetSeed(sessionId, Math.max(0, Number(payload.turn) || 0), Math.max(1, Number(payload.step) || 1)) : undefined
     const snapshot = resolveRuntimePresetMacros(rawSnapshot, { charName: input.chat?.cardName, macroState: input.chat?.macroState, randomSeed }).snapshot
-    if (mode === 'story' || mode === 'script' || mode === 'writing') {
+    if (mode === 'story' || mode === 'script') {
       if (Number(payload.step) === 1 && typeof options.synchronizeTail === 'function') {
         await options.synchronizeTail({ sessionId, chat: input.chat, payload })
       }
@@ -326,7 +326,7 @@ export function createNativePlayOrchestrationStrategy(options) {
     if (Number(payload.step) === 1) {
       const prepared = await options.prepareTurn({ sessionId, turn: payload.turn, requestId: input.requestId, userText: userTextOf(payload.messages), runtimePresetSnapshot: snapshot })
       if (prepared && prepared.duplicate) throw new Error('该消息已由酒馆处理，请勿重复发送')
-      if (mode === 'story' || mode === 'script' || mode === 'writing') {
+      if (mode === 'story' || mode === 'script') {
         agentMessages = replaceTurnInput(agentMessages, prepared.frame.userInput.projectedText)
         const adapted = options.appendFrame({ messages: agentMessages, frame: prepared.frame, step: payload.step, session: payload.agent?.session })
         agentMessages = adapted.messages
@@ -335,7 +335,7 @@ export function createNativePlayOrchestrationStrategy(options) {
         agentMessages = agentMessages.concat([snapshotMessage(prepared.text)])
       }
     }
-    if (mode !== 'story' && mode !== 'script' && mode !== 'writing') return { kind: 'enter', messages: agentMessages }
+    if (mode !== 'story' && mode !== 'script') return { kind: 'enter', messages: agentMessages }
     // Models that update the system prompt in history would otherwise append the
     // new prompt after the old one, leaving a switched-out preset at the head.
     // A new request series makes DSH replace the head instead. Unknown history
@@ -423,20 +423,24 @@ export function createNativePlayOrchestrationStrategy(options) {
       const workspace = options.workspaceContext(input.cwd, input.workspaceProjection)
       if (workspace !== '') sections.push({ name: 'tavern:resource-workspace', text: workspace })
     }
-    if (mode === 'story' || mode === 'script' || mode === 'writing') {
+    if (mode === 'story' || mode === 'script') {
       const raw = await options.resolvePreset(input.chat)
       const front = presetFrontSections(resolveRuntimePresetMacros(raw, { charName: input.chat?.cardName, macroState: input.chat?.macroState }).snapshot)
       sections.unshift(...front)
       frontTexts.set(input.sessionId, front.map(section => section.text))
       renderedFronts.set(input.sessionId, createHash('sha256').update(JSON.stringify(front.map(section => section.text))).digest('hex'))
-      // The submission contract travels with the turn, not with the preset: it is
-      // appended after the front so removing the toggle restores the saved prompt.
-      if (storyToolCallEnabled(input.chat)) sections.push({ name: 'tavern:story-tool-submission', text: STORY_SUBMIT_PROMPT })
+      // The submission contract travels with the tool, not with the preset: it is
+      // appended after the front so turning the switch off restores the saved prompt.
+      if (visible.has(STORY_SUBMIT_TOOL_NAME)) sections.push({ name: 'tavern:story-tool-submission', text: STORY_SUBMIT_PROMPT })
     }
     assembly.sections = sections
     if (Array.isArray(assembly.contexts)) assembly.contexts = assembly.contexts.filter(section => section.name !== 'approval:policy')
+    // A plugin's own tool shows everywhere unless the plugin scoped it (tavern.toolModes).
+    const group = mode === 'card' ? 'card' : 'play'
     assembly.tools = assembly.tools.filter(function (schema) {
-      return !options.controlledToolNames.has(schema.name) || visible.has(schema.name)
+      if (options.controlledToolNames.has(schema.name)) return visible.has(schema.name)
+      const modes = options.pluginToolModes ? options.pluginToolModes(schema.name) : null
+      return !modes || modes.includes(group)
     })
     // DSH may expose both editor generations; the legacy schema alone costs
     // ~800 tokens on every card-Agent step and duplicates read/edit/write.

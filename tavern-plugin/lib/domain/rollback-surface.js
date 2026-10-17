@@ -6,7 +6,7 @@ import { restoredSurfaceSeqs } from './surface-restoration.js'
 import { sessionEvents, surfaceReplacementRange } from './session-events.js'
 import { createSurfaceOwnership, planSurfaceRecovery, planSurfaceRange, SurfaceRecoveryError, OWNED } from './surface-recovery.js'
 import { randomUUID } from 'node:crypto'
-import { inputKind, isTurnInput, isNewTurnInput, isNewPlayerInput } from './session-turn-input.js'
+import { inputKind, isTurnInput, isNewTurnInput, isNewPlayerInput, isFailedTurnEnd } from './session-turn-input.js'
 import { resolveRoundAnchor } from './round-anchor.js'
 
 function object(value) {
@@ -243,7 +243,7 @@ export function replayableFailedTurn(input) {
   }
   if (lastEnd === null) return null
   const reason = lastEnd.data && lastEnd.data.reason ? lastEnd.data.reason.kind : ''
-  if (reason !== 'error' && reason !== 'aborted') return null
+  if (!isFailedTurnEnd(reason)) return null
   const turn = Number(lastEnd.data.turn)
   const endSeq = Number(lastEnd.seq)
   // A turn that already started after this failure owns the tail now; replaying
@@ -424,14 +424,28 @@ export function applyRegenerationProjection(session, projection) {
   for (const cleanup of projection.cleanups || []) replaceSessionSurface(session, 'user/message', cleanup.data, cleanup.range)
 }
 
+/** Turns cut off without ending (the server stopped mid-reply) whose nodes the model still sees. */
+export function interruptedSurfaceTurns({ events = [], nodes = [] }) {
+  const visible = nodes.map(Number)
+  return turnIntervals(events).filter(interval => interval.interrupted && visible.some(seq => seq > interval.start && seq < interval.end)).map(interval => interval.turn)
+}
+
 function turnIntervals(events) {
   const starts = new Map(), intervals = []
   for (const event of events) {
     if (!event) continue
     const turn = Number(event.data?.turn)
-    if (event.type === 'turn/start') starts.set(turn, event.seq)
+    if (event.type === 'turn/start') {
+      // A turn that never ended before the next one began was cut off (the
+      // server stopped mid-reply): it failed, and its input must not ride along.
+      for (const [open, start] of starts) {
+        if (open !== turn) intervals.push({ turn: open, start, end: event.seq, failed: true, interrupted: true })
+      }
+      for (const open of [...starts.keys()]) if (open !== turn) starts.delete(open)
+      starts.set(turn, event.seq)
+    }
     if (event.type === 'turn/end' && starts.has(turn)) {
-      intervals.push({ turn, start: starts.get(turn), end: event.seq, failed: ['error', 'aborted'].includes(event.data?.reason?.kind) })
+      intervals.push({ turn, start: starts.get(turn), end: event.seq, failed: isFailedTurnEnd(event.data?.reason?.kind) })
       starts.delete(turn)
     }
   }

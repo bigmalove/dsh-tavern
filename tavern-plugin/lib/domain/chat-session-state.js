@@ -29,7 +29,7 @@ export function projectChatSessionState(chat, options = {}) {
   const selected = { pendingMvuSettlement }
   for (const key of ['id', 'sessionId', '_storageRevision', 'mode', 'cardPath', 'cardContextRevision',
     'backgroundConfigVersion', 'conversationFeaturesVersion', 'disabledWritingSkills', 'contextCompaction', 'updatedAt', 'timeline', 'candidateAgent',
-    'cardName', 'requestMode', 'statusBarPlacement', 'webSearchEnabled', 'storyToolCallEnabled', 'candidates', 'taskMailbox', 'regenInProgress',
+    'cardName', 'requestMode', 'statusBarPlacement', 'statusSections', 'webSearchEnabled', 'candidates', 'taskMailbox', 'regenInProgress',
     'settleError', 'scriptState', 'hiddenDshErrorTurns', 'suppressedDshTurns', 'regeneratedDshTurns', 'tavernHelperLifecycleRevision']) {
     if (Object.hasOwn(chat, key)) selected[key] = chat[key]
   }
@@ -140,13 +140,14 @@ export function createSessionStateView({ activity: activityOf, evidence: evidenc
       rollbackTargetTurn: settlementTurn(chat),
       canReplayFailedTurn: replayTarget !== null,
       replayFailedTurn: replayTarget === null ? null : replayTarget.turn,
-      canRollback: rollbackState.canRollback,
+      // The save decides: a round the native surface lost is repaired, not refused.
+      canRollback: rollbackState.canRollback || hasRound,
       canClearIncompleteReply: rollbackState.canClearIncompleteReply,
       undoRollbackTurn: canUndoRollback(chat, evidence.session) ? chat.rollbackUndo.turn : null,
       canUndoDeletion: Boolean(chat.deletionUndo),
       deletionUndoKind: chat.deletionUndo ? String(chat.deletionUndo.kind || '') : '',
       deletionUndoable: Boolean(chat.deletionUndo) && chat.deletionUndo.undoable !== false,
-      rollbackUnavailableReason: rollbackState.reason
+      rollbackUnavailableReason: rollbackState.canRollback || hasRound ? '' : rollbackState.reason
     }
     if (native && chat.id && Number.isSafeInteger(chat._storageRevision)
       && key.length + (sharedMappings ? JSON.stringify({...result,regeneratedDshTurns:undefined}).length + mappingFields.bytes(mappings) : JSON.stringify(result).length) < 1024*1024) {
@@ -225,6 +226,7 @@ export function projectChatBackgroundConfig(chat) {
     if (Object.hasOwn(chat, key)) selected[key] = chat[key]
   }
   selected.backgroundSessionStatus = chat.timeline?.participants?.background?.status
+  if (chat.mvu) selected.mvu = { enabled: chat.mvu.enabled, owner: chat.mvu.owner }
   return structuredClone(selected)
 }
 

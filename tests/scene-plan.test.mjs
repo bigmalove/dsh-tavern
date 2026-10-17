@@ -158,3 +158,26 @@ test('replan ignores the turn\'s own frame as saved plan and continuity base, th
   assert.notEqual(two.id, one.id)
   assert.equal((await fx.prepare()).saved.id, two.id)
 })
+
+test('a back view drops the face and may draw only the visible appearance, for that picture alone', async t => {
+  const fx = await fixture(t)
+  const value = first()
+  value.characters[0].fields.appearance = field('黑发蓝眼', 'long black hair, blue eyes')
+  value.characters[0].fields.expression = field('微笑', 'smile')
+  value.views = [{ id: 'lin', angle: 'back', appearance: 'long black hair, nape' }]
+  const back = await fx.module.commit(await fx.prepare(), value)
+  assert.match(back.prompt, /林岚: long black hair, nape, white coat, standing/)
+  assert.doesNotMatch(back.prompt, /blue eyes|smile/)
+  assert.deepEqual(back.views, { [back.subjects[0]]: { angle: 'back', appearance: 'long black hair, nape' } })
+  const snapshot = await fx.module.snapshot('game', back)
+  assert.deepEqual(snapshot.blocks.filter(block => block.owner !== 'scene').map(block => block.tags), ['long black hair, nape', 'white coat', 'standing'])
+  // The person keeps their full appearance and expression for the next picture.
+  const id = back.subjects[0]
+  const next = await fx.module.commit(await fx.prepare(2, '林岚回头。'), { description: '回头', continuity: 'continued', subjects: [id], characters: [], scene: { composition } })
+  assert.match(next.prompt, /blue eyes/)
+  assert.match(next.prompt, /smile/)
+  assert.ok(!('views' in next))
+  const bad = { description: '', continuity: 'continued', subjects: [id], characters: [], scene: { composition } }
+  await assert.rejects(fx.module.commit(await fx.prepare(3, 'x'), { ...bad, views: [{ id: 'nobody', angle: 'back' }] }), /subjects/)
+  await assert.rejects(fx.module.commit(await fx.prepare(3, 'x'), { ...bad, views: [{ id, angle: 'top' }] }), /angle/)
+})

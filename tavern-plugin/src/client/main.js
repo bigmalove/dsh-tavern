@@ -730,6 +730,10 @@ window.__ModuleLoader__.load({
 
 // @include features/plugin-extensions.js
 
+// @include features/cast-presentation.js
+
+// @include features/cast-stage.js
+
 // @include ui/message-frame.js
 
 		// 正文编辑面板的跨模块状态：楼层按钮（assistant-renderer）打开它，

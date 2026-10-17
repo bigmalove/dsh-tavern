@@ -224,3 +224,11 @@ test('first candidate interrupted before a result keeps its bound session for re
   await run.candidates.generate({ sessionId: 'session-1', messageId: 'first' });
   assert.equal(run.modelRequests[1].persistentSessionId, 'background-bound-before-result');
 });
+
+test('候选项文本里模型双重转义的 \\uXXXX 还原成文字', async () => {
+  const { decodeLiteralUnicodeEscapes } = await import('../tavern-plugin/lib/domain/candidate-generation.js')
+  assert.equal(decodeLiteralUnicodeEscapes('\\u7a97\\u5916下雨'), '窗外下雨')
+  assert.equal(decodeLiteralUnicodeEscapes('笑\\ud83d\\ude00'), '笑😀')
+  assert.equal(decodeLiteralUnicodeEscapes('路径 C:\\users 保持原样'), '路径 C:\\users 保持原样')
+  assert.equal(decodeLiteralUnicodeEscapes('孤立 \\ud83d 保持原样'), '孤立 \\ud83d 保持原样')
+})

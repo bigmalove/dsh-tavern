@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import vm from 'node:vm'
+import { stubFrameDependencyImports } from './fixtures/frame-dependency-imports.mjs'
 
 let descriptor
 vm.runInNewContext(await readFile(new URL('../tavern-plugin/lib/client.js', import.meta.url), 'utf8'), {
@@ -21,7 +22,7 @@ function frame(observeMvuView = true) {
   context.window = context
   vm.createContext(context)
   for (const match of html.matchAll(/<script data-dsh-tavern-(?:helper|frame-variable-aliases|mvu-view-observer)>([\s\S]*?)<\/script>/g)) {
-    vm.runInContext(match[1].replace('import(new URL("/api/dsh-tavern/vendor/runtime-assets/zod/index.mjs",document.baseURI).href)', 'Promise.resolve({})'), context)
+    vm.runInContext(stubFrameDependencyImports(match[1]), context)
   }
   return { state, context, reports, handlers, parent }
 }

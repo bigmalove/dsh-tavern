@@ -263,6 +263,30 @@ test('body edit invalidates stale posture and rewinds background before the edit
   assert.equal(task.value.participant.rewindTo, 19)
 })
 
+test('后台会话压缩过：编辑与撤销都沿用同一个后台会话，原地清空任务历史，清空后不再沿用压缩标记', () => {
+  const { timeline } = harness()
+  let chat = timeline.apply({ intent: { kind: 'ensure' }, chat: { id: 'compacted', mode: 'story', messages: [
+    { role: 'user', text: '开门' }, { role: 'assistant', turn: 2, text: '陆伯拿蓝灯笼' }
+  ], posture: '', scriptState: { cursor: 2 }, settleStatus: 'done' } }).chat
+  const background = { role: 'background', lifetime: 'chat', sessionId: 'bg', status: 'current', boundary: 40, branchId: chat.timeline.branchId, requiresNewSessionOnRewind: true }
+  chat.timeline.participants.background = background
+  chat.timeline.checkpoints = [{ turn: 2, participants: { background: { ...background, boundary: 19 } } }]
+  const original = structuredClone(chat)
+  const edited = timeline.apply({ chat: structuredClone(chat), intent: { kind: 'body.edit', turn: 2, patch: { text: '沈青拿红纸伞' } } }).chat
+  const editTask = timeline.apply({ chat: edited, intent: { kind: 'agent.begin', role: 'candidate' } })
+  assert.equal(editTask.value.participant.sessionId, 'bg')
+  assert.equal(editTask.value.participant.rewindTo, -1)
+  const aborted = timeline.apply({ chat: structuredClone(chat), intent: { kind: 'replacement.abort', restoreChat: original } }).chat
+  assert.equal(aborted.timeline.participants.background.sessionId, 'bg')
+  assert.equal(aborted.timeline.participants.background.status, 'needs-rewind')
+  assert.equal(aborted.timeline.participants.background.rewindTo, -1)
+  // After the reset ran, the worker has no compacted history left.
+  const done = timeline.complete({ chat: editTask.chat, operationId: editTask.value.operationId, basedOn: editTask.value.basedOn,
+    outcome: { status: 'success', participant: { sessionId: 'bg', boundary: 7 } } }).chat
+  assert.equal(done.timeline.participants.background.boundary, 7)
+  assert.equal(done.timeline.participants.background.requiresNewSessionOnRewind, undefined)
+})
+
 test('变量重试推进版本后，延后的重新结算接续时仍能提交', () => {
   const { timeline, chat } = harness()
   let current = beginAndCommitBody(timeline, chat, 1, '推门', '门开了。')
@@ -281,4 +305,19 @@ test('变量重试推进版本后，延后的重新结算接续时仍能提交',
   assert.equal(begun.chat.timeline.operations[begun.value.operationId].roundOperationId, undefined)
   assert.equal(result.value.status, 'committed')
   assert.equal(timeline.inspect({ chat: current }).revision, 3)
+})
+
+test('裁剪旧 operation 时保留仍在运行或延后的任务', () => {
+  const { timeline, chat } = harness()
+  const settlement = timeline.apply({ chat, intent: { kind: 'agent.begin', role: 'settlement' } })
+  const current = settlement.chat
+  for (let index = 0; index < 85; index++) {
+    current.timeline.operations['old-' + index] = { id: 'old-' + index, kind: 'body', role: 'body', status: 'completed', createdAt: 5000 + index }
+  }
+  const begun = timeline.apply({ chat: current, intent: { kind: 'body.begin', turn: 1, userText: '继续' } })
+  const operations = begun.chat.timeline.operations
+  assert.equal(operations[settlement.value.operationId]?.status, 'running')
+  assert.equal(operations[begun.value.operationId]?.status, 'running')
+  assert.equal(operations['old-0'], undefined, '已完成的旧记录照常裁剪')
+  assert.equal(Object.keys(operations).filter(id => id.startsWith('old-')).length, 80)
 })

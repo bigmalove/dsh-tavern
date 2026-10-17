@@ -139,16 +139,18 @@
 				return h(CardFieldsPanel, { view: { card: card }, library: true, organizationSettings: organization.detailSettings(cards.find(item => item.path === selectedPath)), busy: busy, onBack: clearCard, onAttach: sessionMode === "card" ? function () { props.appendMention(card.path, card.name); } : null, onOpenWorldBook: props.openWorldBook, onRename: renameCard, onExport: exportCardFile, onDelete: deleteCardFile, onSaved: function (saved) { setCard(Object.assign({}, saved, { path: selectedPath })); refreshCards(); } });
 			}
 			const visible = organization.visible;
+			// "@" quotes a card into the card workspace conversation; only there does it mean anything.
+			const mentionButton = sessionMode === "card" ? function (item) { return h("button", { type: "button", className: "dsh-tavern-card-mention", title: "在对话中引用", "aria-label": "在对话中引用：" + item.name, onClick: function (event) { event.stopPropagation(); props.appendMention(item.path, item.name); } }, "@"); } : null;
 			return h("div", { className: "dsh-tavern-library dsh-tavern-card-library" },
 				h("div", { className: "dsh-tavern-status-head" }, h("div", { className: "dsh-tavern-status-title" }, "人物卡库"), h("div", { className: "dsh-tavern-question-sub" }, cards.length + " 张人物卡"), h("div", { className: "dsh-tavern-library-head-actions" }, h(MobileCardImportButton, { inputRef: importInput, disabled: busy, onImported: async function (imported) { await refreshCards(); await loadCard(imported.path); notifyTavernDataChanged(["cards"], "cards"); } }), h("input", { ref: importInput, type: "file", multiple: true, accept: ".png,.json", style: { display: "none" }, onChange: function (event) { const files = Array.from(event.target.files || []); importCardFiles(files); event.target.value = ""; } }))),
 				h("div", { className: "dsh-tavern-question-sub dsh-tavern-card-import-hint", role: "status" }, importStatus || "支持多选 PNG、JSON 人物卡一起导入"),
 				organization.toolbar(),
-				h("div", { className: "dsh-tavern-resource-body" }, error ? h("div", { className: "dsh-tavern-dock-error" }, error) : null, visible.length ? organization.renderCards(function (item) { return h("div", { key: item.path, className: "dsh-tavern-library-card-row" },
+				h("div", { className: "dsh-tavern-resource-body" }, error ? h("div", { className: "dsh-tavern-dock-error" }, error) : null, visible.length ? h(TavernCardList, { place: "library", cards: visible, batch: cardBatch, busy: busy, open: function (item) { loadCard(item.path); }, menu: organization.rowMenu, mention: mentionButton, builtin: function () { return organization.renderCards(function (item) { return h("div", { key: item.path, className: "dsh-tavern-library-card-row" },
 					cardBatch.checkbox(item),
 					h("button", { className: "dsh-tavern-library-card" + (item.hasImage ? " with-image" : "") + (cardBatch.managing && cardBatch.isSelected(item.path) ? " selected" : ""), disabled: busy, onClick: function () { if (cardBatch.managing) cardBatch.toggle(item.path); else loadCard(item.path); } }, h(TavernCardListContent, { card: item, detail: item.path.split("/").pop(), extra: item.script ? "已绑定剧本：" + item.script.title : "" })),
 					!cardBatch.managing ? organization.rowMenu(item) : null,
-					sessionMode === "card" && !cardBatch.managing ? h("button", { type: "button", className: "dsh-tavern-card-mention", title: "在对话中引用", "aria-label": "在对话中引用：" + item.name, onClick: function () { props.appendMention(item.path, item.name); } }, "@") : null
-				); }) : h("div", { className: "dsh-tavern-empty" }, cards.length ? "没有匹配的人物卡" : "还没有人物卡"), organization.addCardsFooter() )
+					!cardBatch.managing ? mentionButton(item) : null
+				); }); } }) : h("div", { className: "dsh-tavern-empty" }, cards.length ? "没有匹配的人物卡" : "还没有人物卡"), organization.addCardsFooter() )
 			);
 		}
 

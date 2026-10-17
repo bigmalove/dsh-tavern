@@ -121,24 +121,32 @@ export async function saveFloorPatch({ chat, index, message, intent, detachedInt
 }
 
 /** Edit prose only; do not replay macros, scripts or settlement. */
-export function createBodyEditor({ chats, sessions, timeline, activity, project, present, sessionPatch }) {
+export function createBodyEditor({ chats, sessions, timeline, activity, project, present, sessionPatch, repairNative }) {
   const guards = createHistoryMutationGuards({ sessionPatch, activity })
   const pending = new Set()
   function locate(session, chat, floor) {
     const located = floor.role === 'user'
       ? locateInputFloor({ chat, session, index: floor.index, turn: floor.turn })
       : locateFloor({ chat, session, index: floor.index, turn: floor.turn, role: 'assistant' })
-    if (!located) throw new Error(floor.role === 'user' ? '这一楼已不在当前上下文中，无法编辑' : '正文已不在当前上下文中，无法编辑')
-    return located
+    return located || null
   }
   function parts(floor) {
     if (floor.role === 'user') return [{ kind: 'text', text: str(floor.message.text) }]
     return editableReplyParts(source(floor.message))
   }
+  // The save is the truth: a floor the native tail lost is repaired, not refused.
+  async function restore(sessionId, agent) {
+    if (typeof repairNative !== 'function') return null
+    await repairNative(sessionId, agent.session)
+    const chat = await chats.forSession(sessionId)
+    if (!chat) throw new Error('会话不存在')
+    guards.assertIdle(chat, agent, '编辑')
+    return chat
+  }
   async function context(sessionId, input) {
     guards.refuseClosedPatch()
     const index = input && Number.isSafeInteger(Number(input.index)) ? Number(input.index) : undefined
-    const chat = await chats.forSession(sessionId, index === undefined ? undefined : { index })
+    let chat = await chats.forSession(sessionId, index === undefined ? undefined : { index })
     if (!chat) throw new Error('会话不存在')
     const agent = sessions.get(sessionId)
     if (!agent?.session) throw new Error('无法访问原生会话')
@@ -156,9 +164,18 @@ export function createBodyEditor({ chats, sessions, timeline, activity, project,
         return changed ? current : undefined
       }, { source: 'body-edit.stale-clear' })
     })
-    const floor = resolveFloor(chat, input)
+    let floor = resolveFloor(chat, input)
+    let located = locate(agent.session, chat, floor)
+    if (!located) {
+      const repaired = await restore(sessionId, agent)
+      if (!repaired) throw new Error(floor.role === 'user' ? '这一楼已不在当前上下文中，无法编辑' : '正文已不在当前上下文中，无法编辑')
+      chat = repaired
+      floor = resolveFloor(chat, input)
+      located = locate(agent.session, chat, floor)
+      if (!located) throw new Error(floor.role === 'user' ? '这一楼已不在当前上下文中，无法编辑' : '正文已不在当前上下文中，无法编辑')
+    }
     guards.assertRescueHistoryEditable(chat, floor.message)
-    return { chat, agent, floor, located: locate(agent.session, chat, floor) }
+    return { chat, agent, floor, located }
   }
   async function read(sessionId, input) {
     const { chat, floor } = await context(sessionId, input)

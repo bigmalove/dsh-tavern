@@ -1,3 +1,5 @@
+import { createGameSaveResources } from './domain/game-save-resources.js'
+import { createCardEditor } from './domain/card-editor.js'
 import { ensureSessionVariableDirectory } from './domain/session-variable-directory.js'
 import { createCompatibilityTurnCompiler } from './domain/compatibility-turn.js'
 import { registerTavernHttpRoutes } from './http/routes.js'
@@ -90,7 +92,7 @@ import { createBackgroundSuppressionReader } from './domain/background-surface.j
 import { ensureCardWorkspaceMessage } from './domain/card-workspace-message.js'
 import { createPromptTemplateGlobalVariables } from './domain/prompt-template-global-variables.js'
 import { createTavernApiDiagnostics } from './domain/tavern-api-diagnostics.js'
-import { generateHelper, generateHelperRaw, generateHelperCompletion, identifyHelperModelMessages } from './domain/helper-generation.js'
+import { generateHelper, generateHelperRaw, generateHelperCompletion, identifyHelperModelMessages, defaultOrderedRawConfig } from './domain/helper-generation.js'
 import { validateHelperGenerateConfig, resolveHelperGenerationPreset, helperGenerationHistory } from './domain/helper-generation-prompts.js'
 import { createHelperGenerationTasks } from './domain/helper-generation-tasks.js'
 import { createBodyEditor } from './domain/body-editor.js'
@@ -99,6 +101,7 @@ import { createHistoryDeletion } from './domain/history-deletion.js'
 import { appendHelperUserSessionContext } from './domain/helper-user-session-context.js'
 import { userMessageForTurn, requestIdForTurn, requestIdForMessages } from './domain/session-turn-input.js'
 import { inspectStoryAlignment, nativeStoryTurns } from './domain/story-alignment.js'
+import { repairNativeSurface, recordNativeSurfaceRepair, planNativeSurfaceRepair } from './domain/native-surface-repair.js'
 import { sessionOpeningDescriptor, prepareSessionOpening } from './domain/session-opening.js'
 import { scriptPromptScanText } from './domain/tavern-script-prompts.js'
 import { createOpeningPreparation } from './domain/opening-preparation.js'
@@ -115,6 +118,7 @@ import { legacyImageConfigurationReader } from './domain/image-generation-host.j
 import { createPluginMedia, publicPluginMedia, pluginFileMediaType } from './domain/plugin-media.js'
 import { createPluginData } from './domain/plugin-data.js'
 import { createPluginTurnReader } from './domain/plugin-turns.js'
+import { createPluginVariableWriter } from './domain/plugin-variables.js'
 import { createTavernPluginApi } from './plugin-api.js'
 import { createSceneWorldbooks, sceneWorldbookBinding } from './domain/scene-worldbook.js'
 import { createSceneImageDiagnostics, createSceneImageHostLogger, recordSceneImageInteraction } from './domain/scene-image-diagnostics.js'
@@ -162,6 +166,9 @@ import { createLedgerEditor } from './domain/ledger-editor.js'
 import { readLedger, LEDGER_SUBMIT_TOOL } from './domain/story-ledger.js'
 import { createManualLedger } from './domain/manual-ledger.js'
 import { POSTURE_SUBMIT_TOOL, POSTURE_SUBMIT_TOOL_NAME, lastSubmittedPosture, normalizePostureSubmission } from './domain/posture-submission.js'
+import { createCastPresentation } from './domain/cast-presentation.js'
+import { createCastAssets } from './domain/cast-assets.js'
+import { createPostureItem, createSettlementItems, plainSettlementPlan, runPipelineStages } from './domain/background-pipeline.js'
 import { TAVERN_COMPATIBILITY_CAPABILITIES, createTavernCompatibilityDiagnosticStore } from './domain/tavern-compatibility-diagnostics.js'
 import { createMvuDiagnosticStore, createMvuDiagnosticExport, sanitizeRuntimeDiagnostics, sanitizeModuleFailure, sanitizeMvuLoadDiagnostic, redactMvuLoadError } from './domain/mvu-diagnostics.js'
 import { createPlayChatDebugReference, readPlayChatDebugTurn } from './domain/play-chat-debug.js'
@@ -172,9 +179,9 @@ import { createPhoneChat } from './domain/phone-chat.js'
 import { createPresetLibrary } from './domain/preset-library.js'
 import { applyConversationPresetToCurrent } from './domain/conversation-preset-application.js'
 import { createForegroundOrchestrationStrategies } from './domain/foreground-orchestration-strategies.js'
-import { clearFailedTurnSurface, rollbackAvailability, reshadowRolledBackRounds } from './domain/rollback-surface.js'
+import { clearFailedTurnSurface, rollbackAvailability, reshadowRolledBackRounds, interruptedSurfaceTurns } from './domain/rollback-surface.js'
 import { assistantResultForTurn } from './domain/session-turn-result.js'
-import { activeStoryTurn, createStorySubmissionTool, foldStorySubmission, STORY_SUBMIT_TOOL_NAME } from './domain/story-tool-submission.js'
+import { createStorySubmissionTool, foldStorySubmission, STORY_SUBMIT_TOOL_NAME } from './domain/story-tool-submission.js'
 import { forkTurnsByMessageId as forkTargetsFromSession, floorsIndex as floorsIndexFromChat } from './domain/conversation-fork-targets.js'
 import { createTavernRetryLimiter } from './domain/tavern-retry-limiter.js'
 import { lastTavernHelperVariables, projectTavernHelperContext, hydrateTavernHelperMessages, replaceTavernHelperVariables, HELPER_MESSAGE_COLD_WINDOW } from './domain/tavern-helper-context.js'
@@ -672,6 +679,7 @@ export async function apply(ctx) {
     return (idx !== undefined && typeof idx === 'object') ? idx : { cards: [], chats: [] }
   }
   async function writeIndex(idx) { await writeJson('index.json', idx) }
+  async function updateIndex(updater) { return await profileData.updateJson('index.json', value => updater(value || { cards: [], chats: [] })) }
   const fileResources = createFileResourceStore({ dataRoot })
   const resourceWorkspaceProjection = createResourceWorkspaceProjection({ root: dataRoot + '/resources' })
   const mobileCardImport = createMobileCardImport({ runtimeHost: process.env.DSH_TAVERN_RUNTIME_HOST })
@@ -937,7 +945,7 @@ export async function apply(ctx) {
       readLinks: async function () { return await readJson('sessions.json') },
       updateLinks: async function (updater) { return await profileData.updateJson('sessions.json', updater) },
       readIndex,
-      writeIndex,
+      updateIndex,
       readChat,
       readChatState: id => chatPersistence.readSessionState(id, {scoped:true}),
       readBackgroundConfig: chatPersistence.readBackgroundConfig,
@@ -1013,11 +1021,13 @@ export async function apply(ctx) {
     }, { source: 'history-recall', touchUpdatedAt: false })
     return result
   }
+  const castAssets = createCastAssets({ store: profileData })
   resourceGraph = createResourceGraph({
+    castAssets,
     cardOrganization,
     resources: fileResources,
     presets: runtimePresets,
-    chats: { readIndex, writeIndex, readChat, writeChat },
+    chats: { readIndex, updateIndex, readChat, writeChat },
     operations: {
       read: async function () { return await readJson('resource-graph-operation.json') },
       write: async function (operation) { await writeJson('resource-graph-operation.json', operation) },
@@ -1125,16 +1135,18 @@ export async function apply(ctx) {
   })
   const openingPreparation = createOpeningPreparation({ readCard, worldBooks, extensionSettings: tavernExtensionSettings,
     readRuntimeExtensions: async cardPath => tavernRemoteAssets.pinExtensions(await readCardExtensions(cardPath)),
-    generateRaw: (config, context) => generateHelperRaw(config, { ...context, callModel: opts => callModel({ ...opts, background: true, signal: context.signal }) }),
-    generate: async (config, context) => {
-      validateHelperGenerateConfig(config)
-      const presetSnapshot = await helperGenerationPreset(config.preset_name, context.presetSnapshot)
-      const activeSnapshot = config.preset_name && config.preset_name !== 'in_use'
-        ? await helperGenerationPreset('in_use', context.presetSnapshot) : presetSnapshot
-      context.signal?.throwIfAborted()
-      return generateHelper(config, { ...context, presetSnapshot, presetRegexScripts: activeSnapshot?.regexScripts || [], callModel: opts => callModel({ ...opts, background: true, signal: context.signal }) })
-    }
+    generateRaw: (config, context) => defaultOrderedRawConfig(config) ? openingGenerate(defaultOrderedRawConfig(config), context)
+      : generateHelperRaw(config, { ...context, callModel: opts => callModel({ ...opts, background: true, signal: context.signal }) }),
+    generate: (config, context) => openingGenerate(config, context)
   })
+  async function openingGenerate(config, context) {
+    validateHelperGenerateConfig(config)
+    const presetSnapshot = await helperGenerationPreset(config.preset_name, context.presetSnapshot)
+    const activeSnapshot = config.preset_name && config.preset_name !== 'in_use'
+      ? await helperGenerationPreset('in_use', context.presetSnapshot) : presetSnapshot
+    context.signal?.throwIfAborted()
+    return generateHelper(config, { ...context, presetSnapshot, presetRegexScripts: activeSnapshot?.regexScripts || [], callModel: opts => callModel({ ...opts, background: true, signal: context.signal }) })
+  }
   ctx.effect(() => () => openingPreparation.dispose())
   async function getCardOpenings(cardPath, userName, requestMode, previewTransport) {
     const startedAt = performance.now(), stages = {}
@@ -1214,25 +1226,7 @@ export async function apply(ctx) {
       })
     }
   }
-  async function updateCard(cardPath, patch, revision, rawOperations) {
-    const workspace = await readCardWorkspace(cardPath)
-    if (workspace === undefined) throw new Error('人物卡不存在: ' + cardPath)
-    const change = cardPreparation.update({ kind: 'card', card: workspace, patch: patch, revision: revision, rawOperations: rawOperations })
-    const savedWorkspace = change.card
-    if (!change.changed) {
-      const unchangedCard = change.view
-      unchangedCard.path = cardPath
-      unchangedCard.extensions = cardPreparation.present({ card: savedWorkspace, as: 'card-extensions' })
-      return Object.assign({}, change, { card: unchangedCard })
-    }
-    await fileResources.writeWorking(normalizeResourcePath(cardPath, 'card'), JSON.stringify(savedWorkspace, null, 2))
-    await bumpCardProjectionRevision(cardPath)
-    const savedCard = change.view
-    savedCard.path = cardPath
-    savedCard.extensions = cardPreparation.present({ card: savedWorkspace, as: 'card-extensions' })
-    if (change.nameChanged) await syncCardName(cardPath, savedCard.name)
-    return Object.assign({}, change, { card: savedCard })
-  }
+  const updateCard = createCardEditor({ readCardWorkspace, cardPreparation, fileResources, bumpCardProjectionRevision, syncCardName })
   async function replaceCardVariables(cardPath, variables) {
     const workspace = await readCardWorkspace(cardPath)
     if (workspace === undefined) throw new Error('人物卡不存在: ' + cardPath)
@@ -1244,9 +1238,9 @@ export async function apply(ctx) {
     return structuredClone(variables)
   }
   async function syncCardName(cardPath, cardName) {
-    const idx = await readIndex()
-    idx.chats = (idx.chats || []).map(function (item) { return item.cardPath === cardPath ? Object.assign({}, item, { cardName: cardName }) : item })
-    await writeIndex(idx)
+    const idx = await updateIndex(current => ({ ...current,
+      chats: (current.chats || []).map(item => item.cardPath === cardPath ? { ...item, cardName } : item)
+    }))
     for (const item of (idx.chats || []).filter(function (entry) { return entry.cardPath === cardPath })) {
       const linked = await readChat(item.id)
       if (linked !== undefined && linked.cardName !== cardName) {
@@ -1454,6 +1448,7 @@ export async function apply(ctx) {
     if (!Array.isArray(events) || !events.some(event => event?.type === 'turn/end')) throw new Error('存档包已损坏：缺少模型会话记录')
     if (events.some((event, index) => event?.seq !== index)) throw new Error('存档包已损坏：模型会话记录不连续')
   }
+  const prepareGameSaveResources = createGameSaveResources({ resources: fileResources, cardPreparation })
   async function importGameSave(args) {
     if (typeof args?.fileB64 !== 'string' || !args.fileB64) throw new Error('请选择 .dshsave 存档文件')
     const save = readGameSave(Buffer.from(args.fileB64, 'base64'), { tavernVersion: TAVERN_PACKAGE_VERSION })
@@ -1465,18 +1460,12 @@ export async function apply(ctx) {
     if (!/^[a-zA-Z0-9_-]+$/.test(sourceChatId) || !/^[a-zA-Z0-9_-]+$/.test(sourceSessionId)) throw new Error('存档包里的游戏编号无效')
     if (importingGameSaves.has(sourceChatId)) throw new Error('这份存档正在导入，请稍候')
     importingGameSaves.add(sourceChatId)
+    let importedResources
     try {
       const chatId = uid('chat'), sessionId = 'session-' + randomUUID()
-      // 1. Card: reuse an identical local card; otherwise import the packaged one as a new card.
-      let cardPath = str(save.chat.cardPath), importedCard = ''
-      if (save.card?.payload) {
-        let local = null
-        try { local = await fileResources.originalCardPayload(cardPath) } catch {}
-        if (!local || JSON.stringify(local) !== JSON.stringify(save.card.payload)) cardPath = importedCard = (await importCard(save.card.payload)).path
-      }
-      if (save.script && (save.chat.mode || 'story') === 'script' && !await fileResources.scriptForCard(cardPath)) {
-        await importScript(cardPath, { name: str(save.script.path).split('/').pop() || '剧本.txt', text: str(save.script.text) })
-      }
+      // 1. Reuse matching resources; isolate conflicting cards and scripts.
+      importedResources = await prepareGameSaveResources(save)
+      const { cardPath } = importedResources
       // 2. Images: store each picture here, then point every reference at the stored copy.
       const replacedRefs = new Map()
       for (const attachment of save.scene?.attachments || []) {
@@ -1581,18 +1570,20 @@ export async function apply(ctx) {
           await pluginApi.importGame({ targetChatId: chatId, targetSessionId: sessionId, keyMap: pluginKeys, data: save.plugins.data, media: save.plugins.media,
             attachment: ref => files.has(ref.attachmentId) ? { ...ref, ...files.get(ref.attachmentId) } : null })
         }
+        await conversationRegistry.publish(saved)
       } catch (error) {
         if (created) {
           try { await (await ctx.get('workspaceRegistry')?.resolveByPath(cwd))?.detachSession(sessionId) } catch {}
           try { await rm(path.dirname(ctx.get('sessionPersistence').locate({ id: sessionId, cwd }).path), { recursive: true, force: true }) } catch {}
         }
         if (written) try { await conversationRegistry.remove(chatId) } catch {}
-        if (importedCard) try { await fileResources.remove(importedCard) } catch {}
         try { await rm(path.join(dataRoot, 'scene-images', createHash('sha256').update(chatId).digest('hex')), { recursive: true, force: true }) } catch {}
         throw error
       }
-      await conversationRegistry.publish(saved)
       return { chatId, sessionId, cardPath, mode: str(save.chat.mode) || 'story', title: saved.title, revisions: save.revisions.length, images: replacedRefs.size }
+    } catch (error) {
+      try { await importedResources?.rollback() } catch {}
+      throw error
     } finally { importingGameSaves.delete(sourceChatId) }
   }
   async function exportTavernLogs(sessionId) {
@@ -2000,7 +1991,6 @@ export async function apply(ctx) {
       mode: chat.mode || 'story',
       requestMode: chat.requestMode === 'sillytavern' ? 'sillytavern' : 'dsh',
       playerName: str(chat.macroState && chat.macroState.userName).trim() || '你',
-      storyToolCallEnabled: chat.storyToolCallEnabled === true,
       userProfile: {
         enabled: chat.userProfileEnabled === true,
         revision: Math.max(0, Number(chat.userProfileRevision) || 0)
@@ -2488,7 +2478,7 @@ export async function apply(ctx) {
     resolveWebSearch: async input => (await backgroundConfigForSession(input.sessionId))?.webSearchEnabled === true,
     backgroundTools: BACKGROUND_TOOLS,
     // Set up after the runner: plugin tools are read when a background Session is set up.
-    pluginSettlement: () => pluginApi.settlement,
+    settlementItems: () => settlementItems,
     pluginCandidate: () => pluginApi.candidate,
     sharedTools: [sharedWorldbookSearch(searchWorldbook), {
       tool: HISTORY_RECALL_TOOL,
@@ -2657,6 +2647,48 @@ export async function apply(ctx) {
     worldbooks: sceneWorldbooks
   })
   const pluginSettlementProgress = createPluginSettlementProgress()
+  // Dialogue speakers and emotions, annotated by settlement (docs/design/cast-presentation.md).
+  const castPresentation = createCastPresentation({
+    enabled: async () => (await readTavernSettings()).castPresentation === true,
+    turns: pluginTurns,
+    data: pluginData,
+    publish: sessionId => sessionSignals.publish(sessionId, { kind: 'cast', version: String(Date.now()) + ':' + Math.random().toString(36).slice(2) })
+  })
+  // Work riding on the main settlement call: Tavern's own items first, then plugins.
+  const settlementItems = createSettlementItems({ items: () => [castPresentation.settlement], plugins: () => pluginApi.settlement })
+  const postureItem = createPostureItem({ prompt: () => runtimePrompt('posture-settlement'), tool: POSTURE_SUBMIT_TOOL })
+  function castAssetView(cardPath, manifest) {
+    const key = castAssets.keyOf(cardPath)
+    const url = file => file ? '/api/dsh-tavern/cast-asset?' + new URLSearchParams({ card: key, file }).toString() : ''
+    return manifest.characters.map(character => ({ name: character.name, aliases: character.aliases || [], avatarUrl: url(character.avatar),
+      sprites: Object.fromEntries(Object.entries(character.sprites || {}).map(([emotion, file]) => [emotion, url(file)])) }))
+  }
+  async function castCardOf(sessionId) {
+    const header = await chatHeaderForSession(str(sessionId), ['cardPath', 'cardName', 'mode', 'macroState'])
+    if (!header || !header.cardPath || !['story', 'script'].includes(header.mode || 'story')) throw new Error('这一局没有绑定人物卡')
+    return { path: str(header.cardPath), name: str(header.cardName), player: str(header.macroState && header.macroState.userName).trim() || '你' }
+  }
+  // The stage reads the latest turns as plain text, with their annotations and the card's cast.
+  async function castStage(sessionId, count) {
+    const card = await castCardOf(sessionId)
+    const state = await sessionStateForSession(str(sessionId))
+    const storyTurns = [...new Set((state?.messages || []).filter(message => message?.role === 'assistant').map(message => Number(message.turn || (message.greeting ? 1 : 0))).filter(turn => turn > 0))]
+    const wanted = storyTurns.slice(-Math.max(1, Math.min(10, Number(count) || 5)))
+    const annotated = await castPresentation.forTurns(str(sessionId), wanted)
+    const turns = []
+    for (const turn of wanted) {
+      const material = await pluginTurns.readTurn(str(sessionId), turn).catch(() => null) || (turn === wanted.at(-1) ? await pluginTurns.readPendingTurn(str(sessionId)).catch(() => null) : null)
+      if (material && material.turn === turn) turns.push({ turn, text: material.text, lines: annotated.turns[turn] || [] })
+    }
+    return { enabled: annotated.enabled, player: card.player, card: { name: card.name, imageUrl: '/api/dsh-tavern/card-image?path=' + encodeURIComponent(card.path) },
+      cast: castAssetView(card.path, await castAssets.read(card.path)), turns }
+  }
+  async function castEdit(sessionId, edit) {
+    const card = await castCardOf(sessionId)
+    const result = await edit(card.path, card)
+    const manifest = result?.cast || result
+    return { ...(result?.cast ? { imported: result.imported, skipped: result.skipped, characters: result.characters } : {}), cast: castAssetView(card.path, manifest) }
+  }
   // ---------- 插件接口：读人物卡与历史、改变量、后台任务（docs/plugin-api.md） ----------
   const pluginStoryTurn = message => Number(message?.turn || (message?.greeting ? 1 : 0))
   const pluginSource = message => str(message?.projectionText ?? message?.sourceText ?? message?.text)
@@ -2691,26 +2723,14 @@ export async function apply(ctx) {
         text: projectedSceneText(source, macroState), rawText: source }
     })
   }
-  // The latest turn's shown variables; refused while a turn is written or settled.
-  async function writePluginVariables(material, variables) {
-    const sessionId = material.sessionId
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const state = await sessionStateForSession(sessionId)
-      if (!state || state.regenInProgress || backgroundTasks.activity(state).busy || agentRegistry.get(sessionId)?.phase?.kind === 'running') {
-        throw Object.assign(new Error('正文生成或后台处理进行中，请稍后再改变量'), { code: 'TAVERN_PLUGIN_BUSY' })
-      }
-      const selected = await chatSliceForSession(sessionId, [material.index], ['_storageRevision'])
-      const row = selected?.chat?.messages?.[0]
-      if (!row || row.role !== 'assistant' || pluginStoryTurn(row) !== material.turn) throw Object.assign(new Error('这一轮已经变化'), { code: 'TAVERN_PLUGIN_STALE_VERSION' })
-      const next = Array.isArray(row.variables) ? row.variables.slice() : []
-      next[Math.max(0, Number(row.swipeId) || 0)] = variables
-      const saved = await patchChat(selected.chat.id, selected.chat._storageRevision,
-        [{ op: 'set', path: ['messages', material.index, 'variables'], value: JSON.parse(JSON.stringify(next)) }], { source: 'plugin.variables' })
-      if (saved) return
-      if (await pluginTurns.currentKey(sessionId, material.turn) !== material.key) break
-    }
-    throw Object.assign(new Error('存档刚刚变化，变量没有写入，请重新读取后再试'), { code: 'TAVERN_PLUGIN_STALE_VERSION' })
-  }
+  const writePluginVariables = createPluginVariableWriter({
+    readState: sessionStateForSession,
+    readSlice: chatSliceForSession,
+    activity: state => backgroundTasks.activity(state),
+    generating: sessionId => agentRegistry.get(sessionId)?.phase?.kind === 'running',
+    currentKey: (sessionId, turn) => pluginTurns.currentKey(sessionId, turn),
+    patch: patchChat
+  })
   // A plugin's one-off task: a fresh background Session, never the resident one settlement uses.
   async function runPluginTask({ gameId, owner, prompt, tools, call, signal }) {
     const selection = backgroundModelSelection(await backgroundConfigForSession(gameId))
@@ -2731,6 +2751,26 @@ export async function apply(ctx) {
     ...pluginTurns,
     backgroundModel: async sessionId => backgroundModelSelection(await backgroundConfigForSession(sessionId)),
     readCard: readPluginCard,
+    readCharacterDesigns: async sessionId => projectCharacterDesignDocument((await chatForSession(sessionId))?.characterDesignDocument),
+    saveCharacterDesign: async (sessionId, input) => {
+      const chat = await chatForSession(sessionId)
+      if (!chat) throw Object.assign(new Error('这一局不存在'), { code: 'TAVERN_PLUGIN_NOT_FOUND' })
+      return JSON.parse(await characterDesignDocuments.execute(chat.id, { name: CHARACTER_DESIGN_SAVE_TOOL.name, arguments: input }))
+    },
+    listCards,
+    readCardRaw: async card => {
+      const cardPath = normalizeResourcePath(card, 'card')
+      const workspace = await readCardWorkspace(cardPath)
+      return workspace === undefined ? null : cardPreparation.present({ card: workspace, as: 'raw' })
+    },
+    updateCardRaw: async (card, operations, owner) => {
+      const cardPath = normalizeResourcePath(card, 'card')
+      if (await readCardWorkspace(cardPath) === undefined) throw Object.assign(new Error('人物卡不存在：' + card), { code: 'TAVERN_PLUGIN_NOT_FOUND' })
+      return (await updateCard(cardPath, {}, { ts: Date.now(), summary: '插件 ' + owner + ' 修改' }, operations)).changed === true
+    },
+    // Tavern decides where its own tools show; a plugin may only scope the tools it registered.
+    isControlledTool: name => controlledToolNames.has(name),
+    skills: tavernSkills,
     readCardImage: async sessionId => {
       const header = await chatHeaderForSession(sessionId, ['cardPath'])
       const cardPath = str(header?.cardPath)
@@ -3094,17 +3134,6 @@ export async function apply(ctx) {
     await writeChat(chat, { source: 'player-name.set' })
     return name
   }
-  async function setStoryToolCallEnabled(sessionId, enabled) {
-    if (typeof enabled !== 'boolean') throw new Error('正文走工具调用设置必须是布尔值')
-    const chat = await chatForSession(sessionId)
-    if (chat === undefined) throw new Error('当前会话没有绑定人物卡')
-    if (chat.mode === 'card') throw new Error('卡片工作台不使用正文工具提交')
-    const session = agentRegistry.get(sessionId)?.session || sessionStore.get(sessionId)
-    if (activeStoryTurn(session) !== null) throw new Error('请等待当前生成结束后再修改正文输出方式')
-    chat.storyToolCallEnabled = enabled
-    await writeChat(chat, { source: 'story-tool-call.set' })
-    return enabled
-  }
   async function setRequestMode(sessionId, requestMode) {
     const chat = await chatForSession(sessionId)
     if (chat === undefined) throw new Error('当前会话没有绑定人物卡')
@@ -3273,199 +3302,14 @@ export async function apply(ctx) {
       if (snapshot === null) return
       const taskRun = await backgroundTasks.begin(snapshot, 'settlement', { reuseSnapshot: true })
       snapshot = taskRun.chat
-      let backgroundSessionId = str(taskRun.participantRequest.sessionId)
-      let backgroundBoundary = null
+      const trace = { sessionId: str(taskRun.participantRequest.sessionId), boundary: null }
       try {
         signal?.throwIfAborted()
         const card = await readChatCard(snapshot)
         signal?.throwIfAborted()
-        const variableRetry = snapshot.messages?.some(message => message.mvu?.pending && message.mvu?.variableRetry === true)
-        // Seam to the plugin layer: a plugin may replace the posture settlement of a game
-        // without official MVU. Any failure falls back to Tavern's own settlement.
-        const settleByPlugin = async function () {
-          const latest = [...(snapshot.messages || [])].reverse().find(message => message?.role === 'assistant')
-          const replaced = await pluginApi.replaceSettlement({ gameId: snapshot.sessionId, turn: settlementTurn(snapshot), signal,
-            onStart: plugin => pluginSettlementProgress.begin(snapshot.sessionId, plugin),
-            text: latest ? projectAgentMessageText(latest, { charName: card && card.name, macroState: snapshot.macroState }) : '',
-            posture: str(snapshot.posture), tasks: { posture: backgroundTasksSettings.posture === true } })
-          if (!replaced) return false
-          result = replaced.posture ? { ...normalizePostureSubmission({ posture: replaced.posture }, { charName: card && card.name, macroState: snapshot.macroState }) } : {}
-          text = JSON.stringify({ plugin: replaced.owner, ...result })
-          return true
-        }
-        const backgroundTasksSettings = normalizeBackgroundTasks(variableRetry ? { variables: true, posture: false, characterDesign: false } : snapshot.backgroundTasks)
-        const mvuTarget = snapshot.mvu && snapshot.mvu.enabled === true && snapshot.mvu.owner === 'official'
-          ? pendingMvuTarget(snapshot)
-          : null
-        let text = ''
-        let result = null
-        let mvuResult = null
-        if (mvuTarget !== null && (backgroundTasksSettings.variables !== false || mvuTarget.message.mvu.pendingSubmission)) {
-          if (!mvuTarget.message.mvuBaseline || mvuTarget.message.mvuBaseline.swipeId !== mvuTarget.swipeId) {
-            mvuTarget.message.mvuBaseline = { swipeId: mvuTarget.swipeId, variables: structuredClone(mvuTarget.variables) }
-            await taskRun.checkpointMessage(mvuTarget.messageId, function (draft, target) {
-              if (!target || Number(target.swipeId || 0) !== mvuTarget.swipeId
-                || Number(draft.tavernHelperLifecycleRevision || 0) !== Number(snapshot.tavernHelperLifecycleRevision || 0)) throw new Error('MVU 任务目标已过期')
-              target.mvuBaseline = structuredClone(mvuTarget.message.mvuBaseline)
-            })
-          }
-          const saveDelivery = async function (submission, prepared) {
-            signal?.throwIfAborted()
-            await taskRun.checkpointMessage(mvuTarget.messageId, function (draft, target) {
-              if (!target || Number(target.swipeId || 0) !== mvuTarget.swipeId
-                || Number(draft.tavernHelperLifecycleRevision || 0) !== Number(snapshot.tavernHelperLifecycleRevision || 0)) throw new Error('MVU 任务目标已过期')
-              target.mvu.pendingSubmission = structuredClone(submission)
-              target.mvu.delivery = {
-                version: 1, taskId: target.mvu.delivery?.taskId || taskRun.operationId, operationId: taskRun.operationId,
-                branchId: taskRun.basedOn.branchId, revision: taskRun.basedOn.revision,
-                lifecycleRevision: Number(snapshot.tavernHelperLifecycleRevision || 0),
-                swipeId: mvuTarget.swipeId,
-                posture: prepared?.posture ?? target.mvu.delivery?.posture,
-                ...(prepared ? { prepared: structuredClone({ submission: prepared.submission, receipt: prepared.receipt, effect: prepared.effect, posture: prepared.posture }) } : {})
-              }
-            })
-          }
-          const settlementInput = {
-            onSubmission: submission => saveDelivery(submission),
-            onPrepared: prepared => saveDelivery(prepared.submission, prepared),
-            guidance: mvuTarget.message.mvu.guidance || '',
-            preserveForeground: variableRetry,
-            onPersistentSessionReady: id => taskRun.bindSession(id, { stateOnly: true }),
-            backgroundTasks: backgroundTasksSettings,
-            operationId: taskRun.operationId,
-            chatId: snapshot.id,
-            branchId: taskRun.basedOn.branchId,
-            basedOnRevision: taskRun.basedOn.revision,
-            sessionId: snapshot.sessionId,
-            turn: settlementTurn(snapshot),
-            messageId: mvuTarget.messageId,
-            swipeId: mvuTarget.swipeId,
-            expectedLifecycleRevision: Math.max(0, Number(snapshot.tavernHelperLifecycleRevision) || 0),
-            storyText: projectAgentMessageText(mvuTarget.message, { charName: card && card.name, macroState: snapshot.macroState }),
-            currentVariables: mvuTarget.variables,
-            helperContext: collectMvuHelperContext(snapshot.messages, mvuTarget.messageId),
-            guides: Array.isArray(snapshot.guides) ? snapshot.guides : [],
-            variableSchema: mvuTarget.variables.schema,
-            charName: card && card.name,
-            macroState: snapshot.macroState,
-            updateRules: await mvuUpdateRules(snapshot, card),
-            webSearchEnabled: snapshot.webSearchEnabled === true
-          }
-          const pendingSubmission = mvuTarget.message.mvu && mvuTarget.message.mvu.pendingSubmission
-          const delivery = mvuTarget.message.mvu?.delivery
-          if (delivery && (delivery.branchId !== taskRun.basedOn.branchId || delivery.revision !== taskRun.basedOn.revision
-            || delivery.lifecycleRevision !== Number(snapshot.tavernHelperLifecycleRevision || 0) || delivery.swipeId !== mvuTarget.swipeId)) throw new Error('MVU 任务目标已过期，旧任务未执行')
-          if (delivery?.prepared) {
-            mvuResult = structuredClone(delivery.prepared)
-          } else if (pendingSubmission && typeof pendingSubmission === 'object') {
-            mvuResult = await mvuSettlement.resumeVariables({ ...settlementInput, submission: pendingSubmission })
-          } else {
-            const selection = backgroundModelSelection(snapshot)
-            if (selection === null) throw new Error('没有可用的模型配置，请先在当前会话的模型选择器中选择模型')
-            mvuResult = await mvuSettlement.settleVariables({
-              ...settlementInput,
-              system: backgroundTasksSettings.posture ? runtimePrompt('posture-settlement') : '',
-              selection,
-              persistentSessionId: backgroundSessionId,
-              signal
-            })
-          }
-          if (mvuResult.posture === undefined && delivery?.posture !== undefined) mvuResult.posture = delivery.posture
-          text = str(mvuResult.text) || JSON.stringify({ posture: mvuResult.posture })
-          backgroundSessionId = str(mvuResult.traceSessionId) || backgroundSessionId
-          backgroundBoundary = Number.isSafeInteger(mvuResult.traceBoundary) ? mvuResult.traceBoundary : null
-          if (mvuResult.receipt?.status === 'pending') {
-            const runtimeState = tavernScriptDispatch.status(snapshot.sessionId)
-            if (runtimeState.initializationError) throw new Error(runtimeState.initializationError)
-            await taskRun.defer({
-              participant: taskRun.participant({ sessionId: backgroundSessionId, boundary: backgroundBoundary }),
-              apply(draft) {
-                const target = draft.messages[mvuTarget.messageId]
-                target.mvu.pendingSubmission = structuredClone(mvuResult.submission || pendingSubmission)
-                target.mvu.receipt = structuredClone(mvuResult.receipt)
-                if (target.mvu.delivery && mvuResult.posture !== undefined) target.mvu.delivery.posture = mvuResult.posture
-                draft.settleStatus = 'pending'
-                draft.settleError = null
-              }
-            })
-            return
-          }
-          if (['error', 'partial'].includes(mvuResult.receipt?.status)) {
-            const error = new Error(mvuResult.receipt.summary || mvuResult.receipt.failures?.[0]?.message || '变量结算失败，请重试结算')
-            error.mvuReceipt = mvuResult.receipt
-            throw error
-          }
-          result = { posture: mvuResult.posture }
-        } else if (!backgroundTasksSettings.posture && !backgroundTasksSettings.characterDesign) {
-          result = {}
-        } else if (await settleByPlugin()) {
-          // A plugin replaced this settlement; its validated result is committed like Tavern's own.
-        } else {
-          const selection = backgroundModelSelection(snapshot)
-          if (selection === null) throw new Error('没有可用的模型配置，请先在当前会话的模型选择器中选择模型')
-          let submittedPosture = null
-          let settlementToolTail = Promise.resolve()
-          const run = await backgroundAgentRunner.run({
-            onPersistentSessionReady: id => taskRun.bindSession(id, { stateOnly: true }),
-            task: 'settlement',
-            turn: settlementTurn(snapshot),
-            backgroundTasks: backgroundTasksSettings,
-            persistent: true,
-            persistentSessionId: backgroundSessionId,
-            rewindTo: taskRun.participantRequest.rewindTo,
-            selection,
-            messages: [{
-              id: 'settle-' + Date.now().toString(36),
-              role: 'user',
-              regexPlacement: 2,
-              content: [{ type: 'text', text: settleUserText(snapshot, backgroundTasksSettings.posture, taskRun.participantRequest.rewindTo == null ? lastSubmittedPosture(backgroundSessionId && (agentRegistry.get(backgroundSessionId)?.session || sessionStore.get(backgroundSessionId))) : '') }],
-              source: { kind: 'plugin', plugin: 'dsh-tavern' }
-            }],
-            system: [
-              backgroundTasksSettings.posture ? runtimePrompt('posture-settlement') : '本轮不生成或提交姿势。完成启用的后台任务后简短回复完成。',
-              ...(backgroundTasksSettings.characterDesign ? ['若发现重要人物需要建立、补全或修订长期设计，在当前后台 Agent 内调用 skill 加载 character-design，并按 Skill 读取或保存人物档案；无需也不得创建另一个 Agent。',
-              '人物设计保存独立于姿势结算；完成设计后继续当前任务。'] : []),
-              backgroundTasksSettings.posture ? 'posture_submit 是本任务最后一步。' : ''
-            ].join('\n\n'),
-            tools: [...(backgroundTasksSettings.posture ? [POSTURE_SUBMIT_TOOL] : []), ...(backgroundTasksSettings.characterDesign ? [CHARACTER_DESIGN_READ_TOOL, CHARACTER_DESIGN_SAVE_TOOL] : [])],
-            maxToolCalls: 12,
-            temperature: 0.2,
-            sessionId: snapshot.sessionId,
-            webSearchEnabled: snapshot.webSearchEnabled === true,
-            signal,
-            stopToolsWhen: function () { return submittedPosture !== null },
-            acceptWithoutText: function () { return submittedPosture !== null },
-            onToolCall(call) {
-              const pending = settlementToolTail.then(async function () {
-                if (call && (call.name === CHARACTER_DESIGN_READ_TOOL.name || call.name === CHARACTER_DESIGN_SAVE_TOOL.name)) {
-                  if (!backgroundTasksSettings.characterDesign) return JSON.stringify({ ok: false, error: '人物设计已关闭' })
-                  if (submittedPosture !== null) return JSON.stringify({ ok: false, retryable: false, error: '姿势已经提交，本轮后台任务已结束' })
-                  return await characterDesignDocuments.execute(snapshot.id, call)
-                }
-                if (!backgroundTasksSettings.posture || !call || call.name !== POSTURE_SUBMIT_TOOL_NAME) {
-                  return JSON.stringify({ ok: false, retryable: true, error: '当前任务只允许调用人物设计工具和 posture_submit' })
-                }
-                try {
-                  submittedPosture = normalizePostureSubmission(call.arguments, {
-                    charName: card && card.name,
-                    macroState: snapshot.macroState
-                  })
-                  return JSON.stringify({ ok: true })
-                } catch (error) {
-                  return JSON.stringify({ ok: false, retryable: true, error: str(error && error.message || error) })
-                }
-              })
-              settlementToolTail = pending.catch(function () {})
-              return pending
-            }
-          })
-          await settlementToolTail
-          if (backgroundTasksSettings.posture && submittedPosture === null) throw new Error('后台 Agent 未调用 posture_submit 提交有效姿势')
-          result = { ...(submittedPosture || {}) }
-          text = str(run.text) || JSON.stringify(result)
-          backgroundSessionId = str(run.traceSessionId)
-          backgroundBoundary = Number.isSafeInteger(run.traceBoundary) ? run.traceBoundary : null
-        }
+        const engine = await runSettlementEngine({ snapshot, taskRun, card, signal, trace })
+        if (engine.deferred) return
+        const { text, result, mvuResult, mvuTarget, backgroundTasksSettings } = engine
         signal?.throwIfAborted()
         let stat = { postureUpdated: false }
         // Settlement always belongs to the currently selected version of the
@@ -3482,7 +3326,7 @@ export async function apply(ctx) {
             ? {messageIndices:settlementMessageIndices} : {}),
           stateChanged: Boolean(mvuResult?.effect?.changes?.length) || Boolean(mvuResult && mvuResult.receipt && mvuResult.receipt.status === 'updated') ||
             str(result && result.posture).trim() !== '',
-          participant: taskRun.participant({ sessionId: backgroundSessionId, boundary: backgroundBoundary }),
+          participant: taskRun.participant({ sessionId: trace.sessionId, boundary: trace.boundary }),
           apply(draft, scope) {
             if (mvuResult && mvuResult.effect) applyMvuSettlementEffect(draft, mvuResult.effect, scope)
             stat = applySettlement(draft, result)
@@ -3533,15 +3377,15 @@ export async function apply(ctx) {
       } catch (err) {
         if (signal?.aborted) return
         const failedSessionId = str(err && err.traceSessionId)
-        if (failedSessionId && failedSessionId !== backgroundSessionId) {
-          backgroundSessionId = failedSessionId
-          backgroundBoundary = null
+        if (failedSessionId && failedSessionId !== trace.sessionId) {
+          trace.sessionId = failedSessionId
+          trace.boundary = null
         }
-        if (backgroundBoundary === null && Number.isSafeInteger(err && err.traceBoundary)) backgroundBoundary = err.traceBoundary
+        if (trace.boundary === null && Number.isSafeInteger(err && err.traceBoundary)) trace.boundary = err.traceBoundary
         const failed = await taskRun.commit({
           status: 'failed',
           stateChanged: false,
-          participant: taskRun.participant({ sessionId: backgroundSessionId, boundary: backgroundBoundary })
+          participant: taskRun.participant({ sessionId: trace.sessionId, boundary: trace.boundary })
         })
         if (failed.status === 'missing') return
         if (failed.status === 'stale') {
@@ -3574,26 +3418,211 @@ export async function apply(ctx) {
   // ---------- 插件任务：结算前后的任务、玩家手动运行的任务（docs/plugin-api.md） ----------
   // A settlement job: plugin tasks before Tavern's settlement, the settlement, plugin tasks after it.
   // Running inside the job, they hold the next turn back (foreground handoff waits for the job).
+  // The main settlement's engine (docs/design/background-task-pipeline.md): official MVU
+  // variables, nothing to do, a plugin's replacement, or Tavern's plain agent run.
+  // `trace` carries the background session the run used, also when it throws.
+  async function runSettlementEngine({ snapshot, taskRun, card, signal, trace }) {
+    const variableRetry = snapshot.messages?.some(message => message.mvu?.pending && message.mvu?.variableRetry === true)
+    // Seam to the plugin layer: a plugin may replace the posture settlement of a game
+    // without official MVU. Any failure falls back to Tavern's own settlement.
+    const settleByPlugin = async function () {
+      const latest = [...(snapshot.messages || [])].reverse().find(message => message?.role === 'assistant')
+      const replaced = await pluginApi.replaceSettlement({ gameId: snapshot.sessionId, turn: settlementTurn(snapshot), signal,
+        onStart: plugin => pluginSettlementProgress.begin(snapshot.sessionId, plugin),
+        text: latest ? projectAgentMessageText(latest, { charName: card && card.name, macroState: snapshot.macroState }) : '',
+        posture: str(snapshot.posture), tasks: { posture: backgroundTasksSettings.posture === true } })
+      if (!replaced) return false
+      result = replaced.posture ? { ...normalizePostureSubmission({ posture: replaced.posture }, { charName: card && card.name, macroState: snapshot.macroState }) } : {}
+      text = JSON.stringify({ plugin: replaced.owner, ...result })
+      return true
+    }
+    const backgroundTasksSettings = normalizeBackgroundTasks(variableRetry ? { variables: true, posture: false, characterDesign: false } : snapshot.backgroundTasks)
+    const mvuTarget = snapshot.mvu && snapshot.mvu.enabled === true && snapshot.mvu.owner === 'official'
+      ? pendingMvuTarget(snapshot)
+      : null
+    let text = ''
+    let result = null
+    let mvuResult = null
+    if (mvuTarget !== null && (backgroundTasksSettings.variables !== false || mvuTarget.message.mvu.pendingSubmission)) {
+      if (!mvuTarget.message.mvuBaseline || mvuTarget.message.mvuBaseline.swipeId !== mvuTarget.swipeId) {
+        mvuTarget.message.mvuBaseline = { swipeId: mvuTarget.swipeId, variables: structuredClone(mvuTarget.variables) }
+        await taskRun.checkpointMessage(mvuTarget.messageId, function (draft, target) {
+          if (!target || Number(target.swipeId || 0) !== mvuTarget.swipeId
+            || Number(draft.tavernHelperLifecycleRevision || 0) !== Number(snapshot.tavernHelperLifecycleRevision || 0)) throw new Error('MVU 任务目标已过期')
+          target.mvuBaseline = structuredClone(mvuTarget.message.mvuBaseline)
+        })
+      }
+      const saveDelivery = async function (submission, prepared) {
+        signal?.throwIfAborted()
+        await taskRun.checkpointMessage(mvuTarget.messageId, function (draft, target) {
+          if (!target || Number(target.swipeId || 0) !== mvuTarget.swipeId
+            || Number(draft.tavernHelperLifecycleRevision || 0) !== Number(snapshot.tavernHelperLifecycleRevision || 0)) throw new Error('MVU 任务目标已过期')
+          target.mvu.pendingSubmission = structuredClone(submission)
+          target.mvu.delivery = {
+            version: 1, taskId: target.mvu.delivery?.taskId || taskRun.operationId, operationId: taskRun.operationId,
+            branchId: taskRun.basedOn.branchId, revision: taskRun.basedOn.revision,
+            lifecycleRevision: Number(snapshot.tavernHelperLifecycleRevision || 0),
+            swipeId: mvuTarget.swipeId,
+            posture: prepared?.posture ?? target.mvu.delivery?.posture,
+            ...(prepared ? { prepared: structuredClone({ submission: prepared.submission, receipt: prepared.receipt, effect: prepared.effect, posture: prepared.posture }) } : {})
+          }
+        })
+      }
+      const settlementInput = {
+        onSubmission: submission => saveDelivery(submission),
+        onPrepared: prepared => saveDelivery(prepared.submission, prepared),
+        guidance: mvuTarget.message.mvu.guidance || '',
+        preserveForeground: variableRetry,
+        onPersistentSessionReady: id => taskRun.bindSession(id, { stateOnly: true }),
+        backgroundTasks: backgroundTasksSettings,
+        operationId: taskRun.operationId,
+        chatId: snapshot.id,
+        branchId: taskRun.basedOn.branchId,
+        basedOnRevision: taskRun.basedOn.revision,
+        sessionId: snapshot.sessionId,
+        turn: settlementTurn(snapshot),
+        messageId: mvuTarget.messageId,
+        swipeId: mvuTarget.swipeId,
+        expectedLifecycleRevision: Math.max(0, Number(snapshot.tavernHelperLifecycleRevision) || 0),
+        storyText: projectAgentMessageText(mvuTarget.message, { charName: card && card.name, macroState: snapshot.macroState }),
+        currentVariables: mvuTarget.variables,
+        helperContext: collectMvuHelperContext(snapshot.messages, mvuTarget.messageId),
+        guides: Array.isArray(snapshot.guides) ? snapshot.guides : [],
+        variableSchema: mvuTarget.variables.schema,
+        charName: card && card.name,
+        macroState: snapshot.macroState,
+        updateRules: await mvuUpdateRules(snapshot, card),
+        webSearchEnabled: snapshot.webSearchEnabled === true
+      }
+      const pendingSubmission = mvuTarget.message.mvu && mvuTarget.message.mvu.pendingSubmission
+      const delivery = mvuTarget.message.mvu?.delivery
+      if (delivery && (delivery.branchId !== taskRun.basedOn.branchId || delivery.revision !== taskRun.basedOn.revision
+        || delivery.lifecycleRevision !== Number(snapshot.tavernHelperLifecycleRevision || 0) || delivery.swipeId !== mvuTarget.swipeId)) throw new Error('MVU 任务目标已过期，旧任务未执行')
+      if (delivery?.prepared) {
+        mvuResult = structuredClone(delivery.prepared)
+      } else if (pendingSubmission && typeof pendingSubmission === 'object') {
+        mvuResult = await mvuSettlement.resumeVariables({ ...settlementInput, submission: pendingSubmission })
+      } else {
+        const selection = backgroundModelSelection(snapshot)
+        if (selection === null) throw new Error('没有可用的模型配置，请先在当前会话的模型选择器中选择模型')
+        mvuResult = await mvuSettlement.settleVariables({
+          ...settlementInput,
+          system: backgroundTasksSettings.posture ? postureItem.requirement() : '',
+          selection,
+          persistentSessionId: trace.sessionId,
+          signal
+        })
+      }
+      if (mvuResult.posture === undefined && delivery?.posture !== undefined) mvuResult.posture = delivery.posture
+      text = str(mvuResult.text) || JSON.stringify({ posture: mvuResult.posture })
+      trace.sessionId = str(mvuResult.traceSessionId) || trace.sessionId
+      trace.boundary = Number.isSafeInteger(mvuResult.traceBoundary) ? mvuResult.traceBoundary : null
+      if (mvuResult.receipt?.status === 'pending') {
+        const runtimeState = tavernScriptDispatch.status(snapshot.sessionId)
+        if (runtimeState.initializationError) throw new Error(runtimeState.initializationError)
+        await taskRun.defer({
+          participant: taskRun.participant({ sessionId: trace.sessionId, boundary: trace.boundary }),
+          apply(draft) {
+            const target = draft.messages[mvuTarget.messageId]
+            target.mvu.pendingSubmission = structuredClone(mvuResult.submission || pendingSubmission)
+            target.mvu.receipt = structuredClone(mvuResult.receipt)
+            if (target.mvu.delivery && mvuResult.posture !== undefined) target.mvu.delivery.posture = mvuResult.posture
+            draft.settleStatus = 'pending'
+            draft.settleError = null
+          }
+        })
+        return { deferred: true }
+      }
+      if (['error', 'partial'].includes(mvuResult.receipt?.status)) {
+        const error = new Error(mvuResult.receipt.summary || mvuResult.receipt.failures?.[0]?.message || '变量结算失败，请重试结算')
+        error.mvuReceipt = mvuResult.receipt
+        throw error
+      }
+      result = { posture: mvuResult.posture }
+    } else if (!backgroundTasksSettings.posture && !await settlementItems.wanted()) {
+      result = {}
+    } else if (await settleByPlugin()) {
+      // A plugin replaced this settlement; its validated result is committed like Tavern's own.
+    } else {
+      const selection = backgroundModelSelection(snapshot)
+      if (selection === null) throw new Error('没有可用的模型配置，请先在当前会话的模型选择器中选择模型')
+      let submittedPosture = null
+      let settlementToolTail = Promise.resolve()
+      const plan = plainSettlementPlan({ posture: backgroundTasksSettings.posture ? postureItem : null })
+      const run = await backgroundAgentRunner.run({
+        onPersistentSessionReady: id => taskRun.bindSession(id, { stateOnly: true }),
+        task: 'settlement',
+        turn: settlementTurn(snapshot),
+        backgroundTasks: backgroundTasksSettings,
+        persistent: true,
+        persistentSessionId: trace.sessionId,
+        rewindTo: taskRun.participantRequest.rewindTo,
+        selection,
+        messages: [{
+          id: 'settle-' + Date.now().toString(36),
+          role: 'user',
+          regexPlacement: 2,
+          content: [{ type: 'text', text: settleUserText(snapshot, backgroundTasksSettings.posture, taskRun.participantRequest.rewindTo == null ? lastSubmittedPosture(trace.sessionId && (agentRegistry.get(trace.sessionId)?.session || sessionStore.get(trace.sessionId))) : '') }],
+          source: { kind: 'plugin', plugin: 'dsh-tavern' }
+        }],
+        system: plan.system,
+        tools: plan.tools,
+        maxToolCalls: 12,
+        temperature: 0.2,
+        sessionId: snapshot.sessionId,
+        webSearchEnabled: snapshot.webSearchEnabled === true,
+        signal,
+        stopToolsWhen: function () { return submittedPosture !== null },
+        acceptWithoutText: function () { return submittedPosture !== null },
+        onToolCall(call) {
+          const pending = settlementToolTail.then(async function () {
+            if (!backgroundTasksSettings.posture || !call || call.name !== POSTURE_SUBMIT_TOOL_NAME) {
+              return JSON.stringify({ ok: false, retryable: true, error: '当前任务只允许调用人物设计工具和 posture_submit' })
+            }
+            try {
+              submittedPosture = normalizePostureSubmission(call.arguments, {
+                charName: card && card.name,
+                macroState: snapshot.macroState
+              })
+              return JSON.stringify({ ok: true })
+            } catch (error) {
+              return JSON.stringify({ ok: false, retryable: true, error: str(error && error.message || error) })
+            }
+          })
+          settlementToolTail = pending.catch(function () {})
+          return pending
+        }
+      })
+      await settlementToolTail
+      if (backgroundTasksSettings.posture && submittedPosture === null) throw new Error('后台 Agent 未调用 posture_submit 提交有效姿势')
+      result = { ...(submittedPosture || {}) }
+      text = str(run.text) || JSON.stringify(result)
+      trace.sessionId = str(run.traceSessionId)
+      trace.boundary = Number.isSafeInteger(run.traceBoundary) ? run.traceBoundary : null
+    }
+    return { text, result, mvuResult, mvuTarget, backgroundTasksSettings }
+  }
   async function runSettlementCycle(chatId, signal) {
     const state = await taskStateReader.read(chatId).catch(() => null)
     const gameId = str(state?.sessionId)
     const onStart = label => pluginSettlementProgress.begin(gameId, label)
     const activity = state ? backgroundTasks.activity(state) : null
-    if (gameId && activity?.role === 'settlement' && ['pending', 'running'].includes(activity.phase)) {
-      await pluginApi.runSettlementTasks({ gameId, phase: 'before', signal, onStart })
-    }
-    await runSettlement(chatId, signal)
-    if (!gameId || signal?.aborted) return
-    // Tavern's settlement is committed by now: a plugin-task operation keeps the game busy (and stoppable).
-    await pluginApi.runSettlementTasks({ gameId, phase: 'after', signal, onStart, around: work => inPluginTaskOperation(chatId, work) })
+    // The turn's pipeline (docs/design/background-task-pipeline.md): before-tasks, the main settlement, after-tasks.
+    await runPipelineStages([
+      { id: 'before', when: () => Boolean(gameId) && activity?.role === 'settlement' && ['pending', 'running'].includes(activity.phase),
+        run: () => pluginApi.runSettlementTasks({ gameId, phase: 'before', signal, onStart }) },
+      { id: 'settle', run: () => runSettlement(chatId, signal) },
+      // Tavern's settlement is committed by now: a plugin-task operation keeps the game busy (and stoppable).
+      { id: 'after', when: () => Boolean(gameId) && !signal?.aborted,
+        run: () => pluginApi.runSettlementTasks({ gameId, phase: 'after', signal, onStart, around: work => inPluginTaskOperation(chatId, work) }) }
+    ])
   }
   async function inPluginTaskOperation(chatId, work) {
-    let taskRun = null
-    try { taskRun = await backgroundTasks.begin(await taskStateReader.read(chatId), 'plugin-task') }
-    catch (error) { console.warn('dsh-tavern: 插件任务未登记为后台任务:', str(error?.message || error)) }
-    try { await work() }
-    finally { if (taskRun) await taskRun.commit({ stateChanged: false }).catch(error => console.warn('dsh-tavern: 插件任务收尾失败:', str(error?.message || error))) }
+    const taskRun = await backgroundTasks.begin(await taskStateReader.read(chatId), 'plugin-task')
+    try { await work(taskRun.operationId) }
+    finally { await taskRun.commit({ stateChanged: false }).catch(error => console.warn('dsh-tavern: 插件任务收尾失败:', str(error?.message || error))) }
   }
+
   const pluginTaskJobs = new Map()
   // A manual plugin task: an exclusive background task, like the ledger; returns once started.
   async function startPluginTask(sessionId, key, input) {
@@ -3603,7 +3632,7 @@ export async function apply(ctx) {
     if (pluginTaskJobs.has(chat.id)) throw new Error('已有插件任务在运行，请等它完成')
     await pluginApi.manualTaskFor(chat.sessionId, key, input)
     const taskRun = await backgroundTasks.begin(chat, 'plugin-task')
-    const job = pluginApi.runManualTask({ gameId: chat.sessionId, key, input, signal: new AbortController().signal,
+    const job = pluginApi.runManualTask({ gameId: chat.sessionId, key, input, operationId: taskRun.operationId, signal: new AbortController().signal,
       onStart: label => pluginSettlementProgress.begin(chat.sessionId, label) })
       .catch(error => console.warn('dsh-tavern: 插件任务失败:', str(error?.message || error)))
       .finally(async () => {
@@ -3807,17 +3836,16 @@ export async function apply(ctx) {
     const card = cardPreparation.project(workspace)
     const cardPath = await fileResources.importCard({ name: card.name + '.json', text: JSON.stringify(workspace.raw, null, 2) }, workspace)
     card.path = cardPath
-    const idx = await readIndex()
-    for (const row of idx.chats || []) {
-      if (row.id === chat.id) { row.cardPath = cardPath; row.cardName = card.name }
-    }
-    await writeIndex(idx)
+    await updateIndex(current => ({ ...current,
+      chats: (current.chats || []).map(row => row.id === chat.id ? { ...row, cardPath, cardName: card.name } : row)
+    }))
     return { path: cardPath, card }
   }
   const foregroundFrameBuilder = createForegroundFrameBuilder()
   const foregroundFrameSessionAdapter = createForegroundFrameSessionAdapter({ id: randomUUID })
   const turnOrchestrator = createTurnOrchestrator({
     captureSceneWorldbook,
+    storyToolCall: async () => (await readTavernSettings()).storyToolCall,
     store: {
       chatForSession,
       storyContextForSession: sessionId => storyContext({ sessionId }),
@@ -3889,7 +3917,9 @@ export async function apply(ctx) {
       if (!chat) return 0
       const availability = rollbackAvailability(chat, { events: sessionEvents(session), nodes: session.surface?.nodes || [] })
       let cleared = 0
-      for (const turn of availability.unclearedTurns || []) cleared += clearFailedTurnSurface({ session, turn })
+      // A turn the server stopped in the middle never ended, so nothing cleaned it up.
+      const turns = new Set([...(availability.unclearedTurns || []), ...interruptedSurfaceTurns({ events: sessionEvents(session), nodes: session.surface?.nodes || [] })])
+      for (const turn of turns) cleared += clearFailedTurnSurface({ session, turn })
       if (cleared) await sessionStore.flush(session)
       else if (!availability.canRollback && availability.reason && /失败回合/.test(availability.reason)) console.warn('dsh-tavern: 上一次失败回合的残留无法清理，本轮请求可能带上它:', availability.reason)
       return cleared
@@ -3963,6 +3993,7 @@ export async function apply(ctx) {
     cancelSettlement,
     present: presentStory,
     sessionPatch,
+    repairNative: (sessionId, session) => repairNativeStory(sessionId, session, '回退或重新生成时找不到原生位置'),
   })
 
   // 楼层操作（切换/编辑/删除）按需带上一楼：分页存档里默认窗口只有最新几轮，
@@ -3985,6 +4016,7 @@ export async function apply(ctx) {
     },
     present: presentStory,
     sessionPatch,
+    repairNative: (sessionId, session) => repairNativeStory(sessionId, session, '编辑正文时找不到原生位置'),
   })
 
   // 切换某一楼正文的版本（swipe）：文字、变量与结算随最新楼层一起切换。
@@ -4104,14 +4136,17 @@ export async function apply(ctx) {
           const backgroundCall = opts => callModel({ ...opts, background: true, signal })
           if (method === 'generateTavernHelperRaw' && args.completion) return { text: await generateHelperCompletion(args.completion, { callModel: backgroundCall, sessionId: chat.sessionId }) }
           const context = { callModel: backgroundCall, sessionId: chat.sessionId, history: helperGenerationHistory(chat) }
-          if (method === 'generateTavernHelperRaw') return { text: await generateHelperRaw(args.config, context) }
-          validateHelperGenerateConfig(args.config)
+          // generateRaw without an order is Tavern Helper's default-order request: build it like generate.
+          const defaultOrder = method === 'generateTavernHelperRaw' ? defaultOrderedRawConfig(args.config) : null
+          if (method === 'generateTavernHelperRaw' && !defaultOrder) return { text: await generateHelperRaw(args.config, context) }
+          const config = defaultOrder || args.config
+          validateHelperGenerateConfig(config)
           const card = await readChatCard(chat)
-          const presetSnapshot = await helperGenerationPreset(args.config.preset_name, chat.runtimePresetSnapshot || null)
+          const presetSnapshot = await helperGenerationPreset(config.preset_name, chat.runtimePresetSnapshot || null)
           const worldBook = await worldBooks.bound(chat.cardPath, card, chat)
           const extensions = await readCardExtensions(chat.cardPath, chat)
           signal.throwIfAborted()
-          return { text: await generateHelper(args.config, { ...context, chat, card, worldBook, presetSnapshot, extensions,
+          return { text: await generateHelper(config, { ...context, chat, card, worldBook, presetSnapshot, extensions,
             presetRegexScripts: chat.runtimePresetSnapshot?.regexScripts || [], characterVariables: extensions?.variables || {} }) }
         }, args?.generationToken)
       }
@@ -4288,7 +4323,7 @@ export async function apply(ctx) {
       case 'getConversationBackgroundConfig': {
         const chat = await backgroundConfigForSession(str(args?.sessionId))
         if (!chat || groupOfMode(chat.mode) !== 'play') throw new Error('请先打开游玩会话')
-        return { backgroundModel: chat.backgroundModelSelection || null, imageModel: chat.imageModelSelection || null, backgroundTasks: normalizeBackgroundTasks(chat.backgroundTasks), webSearchEnabled: chat.webSearchEnabled === true, sceneImagesEnabled: chat.sceneImagesEnabled === true, sceneImagesAvailable: TAVERN_RELEASE_CAPABILITIES.sceneImages, modelCatalog: await tavernModelCatalog() }
+        return { backgroundModel: chat.backgroundModelSelection || null, imageModel: chat.imageModelSelection || null, backgroundTasks: normalizeBackgroundTasks(chat.backgroundTasks), webSearchEnabled: chat.webSearchEnabled === true, sceneImagesEnabled: chat.sceneImagesEnabled === true, sceneImagesAvailable: TAVERN_RELEASE_CAPABILITIES.sceneImages, mvuCard: chat.mvu?.enabled === true && chat.mvu.owner === 'official', modelCatalog: await tavernModelCatalog() }
       }
       case 'setConversationBackgroundModel':
       case 'setConversationBackgroundConfig': {
@@ -4310,7 +4345,7 @@ export async function apply(ctx) {
         return { backgroundModel: saved.backgroundModelSelection || null, imageModel: saved.imageModelSelection || null, backgroundTasks: normalizeBackgroundTasks(saved.backgroundTasks), webSearchEnabled: saved.webSearchEnabled === true, sceneImagesEnabled: saved.sceneImagesEnabled === true }
       }
       case 'getBackgroundModelReasoning': return { reasoning: await readBackgroundModelReasoning(llm, args) }
-      case 'getDisplayPreferences': return { hideContextAndReasoning: (await readTavernSettings()).hideContextAndReasoning }
+      case 'getDisplayPreferences': { const settings = await readTavernSettings(); return { hideContextAndReasoning: settings.hideContextAndReasoning } }
       case 'getCandidatePreferences': return { candidateDismissMode: (await readTavernSettings()).candidateDismissMode }
       case 'getTavernSettings': return { settings: await readTavernSettings(), modelCatalog: await tavernModelCatalog(), releaseCapabilities: TAVERN_RELEASE_CAPABILITIES }
       case 'getSceneImageSettings': {
@@ -4328,6 +4363,13 @@ export async function apply(ctx) {
       case 'listSceneImageModels': return await enabledSceneIllustrations().listModels(args)
       case 'testSceneImageGeneration': return await enabledSceneIllustrations().testGenerate()
       case 'pluginMediaForTurn': return await pluginMediaForTurn(args && args.sessionId, args && args.turn)
+      case 'castForTurns': return await castPresentation.forTurns(str(args && args.sessionId), args && args.turns)
+      case 'castStage': return await castStage(args && args.sessionId, args && args.count)
+      case 'castSetImage': return await castEdit(args && args.sessionId, cardPath => castAssets.setImage({ cardPath, name: args.name, slot: args.slot, bytes: Buffer.from(str(args.data), 'base64') }))
+      case 'castRemoveImage': return await castEdit(args && args.sessionId, cardPath => castAssets.removeImage({ cardPath, name: args.name, slot: args.slot }))
+      case 'castSetCharacter': return await castEdit(args && args.sessionId, cardPath => castAssets.setCharacter({ cardPath, name: args.name, rename: args.rename, aliases: args.aliases }))
+      case 'castRemoveCharacter': return await castEdit(args && args.sessionId, cardPath => castAssets.removeCharacter({ cardPath, name: args.name }))
+      case 'castImportSpritePack': return await castEdit(args && args.sessionId, (cardPath, card) => castAssets.importSpritePack({ cardPath, name: str(args.name).trim() || card.name || undefined, bytes: Buffer.from(str(args.data), 'base64') }))
       case 'pluginMediaTurns': return await pluginMediaTurns(args && args.sessionId)
       case 'sceneImageStatus': return { illustration: await enabledSceneIllustrations().status(args.sessionId, args.turn) }
       case 'recordSceneImageInteraction': {
@@ -4642,7 +4684,6 @@ export async function apply(ctx) {
         return { statusBarPlacement: args.placement }
       }
       case 'setPlayerName': return { playerName: await setPlayerName(args && args.sessionId, args && args.userName) }
-      case 'setStoryToolCallEnabled': return { storyToolCallEnabled: await setStoryToolCallEnabled(args && args.sessionId, args && args.enabled) }
       case 'setRequestMode': return { requestMode: await setRequestMode(args && args.sessionId, args && args.requestMode) }
       case 'ensureOpening': return { view: await ensureNativeOpening(args && args.sessionId) }
       case 'getChoices': return { candidates: await candidateGenerator.find({ sessionId: args && args.sessionId, messageId: args && args.messageId }) }
@@ -4800,6 +4841,7 @@ export async function apply(ctx) {
 
   registerTavernHttpRoutes({
     ctx,
+    castAssets,
     exposeHandler: handle => { tavernHttpHandle = handle },
     pluginAssets: createPluginAssets({ pluginsDir: userPluginPaths(dataRoot).plugins }),
     dispatch,
@@ -4873,9 +4915,32 @@ export async function apply(ctx) {
     } finally { reconciling.delete(sessionId) }
   }
 
+  async function repairNativeStory(sessionId, session, reason) {
+    const chat = await chatForSession(sessionId)
+    if (!chat || chat.regenInProgress || !['story', 'script'].includes(chat.mode || 'story')) return null
+    try {
+      const result = repairNativeSurface(session, chat, { repairId: randomUUID() })
+      if (result.applied) await sessionStore.flush(session)
+      await updateChat(chat.id, current => recordNativeSurfaceRepair(current, chat, result.anchors) ? current : undefined, { source: 'native-repair' })
+      if (result.applied) console.warn('dsh-tavern: 模型上下文与存档不一致（' + reason + '），已按存档重写最近 ' + result.plan.rounds.length + ' 轮')
+      return result
+    } catch (error) {
+      console.warn('dsh-tavern: 模型上下文修复失败，下次打开或操作时重试：' + str(error?.message || error))
+      await markNativeStale(chat.id, reason).catch(() => {})
+      return null
+    }
+  }
+  async function markNativeStale(chatId, reason) {
+    await updateChat(chatId, current => {
+      if (current.nativeSync?.status === 'stale') return undefined
+      current.nativeSync = { status: 'stale', reason: str(reason), at: Date.now() }
+      return current
+    }, { source: 'native-repair.stale' })
+  }
+
   // The save's latest player rounds, oldest first: enough rows to cover the native window.
   async function storyAlignmentInput(sessionId, nativeCount) {
-    const fields = ['mode', 'nativeCommits', 'suppressedDshTurns', 'regeneratedDshTurns', 'regenInProgress']
+    const fields = ['id', 'mode', 'nativeCommits', 'suppressedDshTurns', 'regeneratedDshTurns', 'regenInProgress', 'nativeSync']
     const head = await chatSliceForSession(sessionId, [], fields)
     let header, rows
     if (head?.chat) {
@@ -4889,13 +4954,22 @@ export async function apply(ctx) {
     }
     if (!header) return null
     const story = rows.filter(message => message?.role === 'assistant' && !message.greeting)
-    return { header, storyTurns: story.map(message => Number(message.turn)), storyAnchors: story.map(message => message.nativeAnchor).filter(Boolean) }
+    return { header, rows, storyTurns: story.map(message => Number(message.turn)), storyAnchors: story.map(message => message.nativeAnchor).filter(Boolean) }
   }
 
   // Bring the save and the native session back into agreement before anything
   // acts on "the latest round" (#196): record a round the save missed, re-shadow
   // a rolled-back round the model still sees, and report what cannot be repaired.
   // Never blocks the action that asked for it.
+  // Turn numbers can agree while the text drifted (an edit that never reached the model):
+  // the repair planner checks the latest rounds' text against the rows already read.
+  function alignStory(session, input) {
+    const report = inspectStoryAlignment({ session, ...input })
+    if (report.state === 'regenerating') return report
+    const textDrift = planNativeSurfaceRepair({ chat: { id: input.header.id, messages: input.rows }, events: sessionEvents(session), nodes: session.surface?.nodes || [] }).status !== 'intact'
+    const nativeSync = input.header.nativeSync?.status || ''
+    return { ...report, textDrift, nativeSync, aligned: report.aligned && !textDrift && nativeSync !== 'stale' }
+  }
   async function reconcileStory(sessionId, { repair = true, stillIdle = () => true } = {}) {
     try {
       sessionId = str(sessionId)
@@ -4903,7 +4977,7 @@ export async function apply(ctx) {
       if (!session) return null
       const input = await storyAlignmentInput(sessionId, nativeStoryTurns(session).length)
       if (!input || !['story', 'script'].includes(input.header.mode || 'story')) return null
-      const report = inspectStoryAlignment({ session, ...input })
+      const report = alignStory(session, input)
       if (!repair || report.aligned || report.state === 'regenerating') return report
       for (const round of report.adopt) {
         if (!stillIdle()) return report
@@ -4915,8 +4989,13 @@ export async function apply(ctx) {
         await sessionStore.flush(session)
         console.warn('dsh-tavern: 第 ' + shadowed.join('、') + ' 轮已回退但模型仍能看到，已重新隐藏')
       }
-      const after = inspectStoryAlignment({ session, ...(await storyAlignmentInput(sessionId, nativeStoryTurns(session).length)) })
-      if (after.state === 'mismatch') console.warn('dsh-tavern: 存档与模型上下文的轮次不一致，未自动修复：' + JSON.stringify(after.mismatch))
+      let after = alignStory(session, await storyAlignmentInput(sessionId, nativeStoryTurns(session).length))
+      // The save is the truth: rewrite the native tail after the last round both still agree on.
+      if (!after.aligned && stillIdle()) {
+        await repairNativeStory(sessionId, session, after.state === 'mismatch' ? '轮次不一致' : after.nativeSync === 'stale' ? '上次同步失败' : after.textDrift ? '正文不一致' : '找不到原生位置')
+        after = alignStory(session, await storyAlignmentInput(sessionId, nativeStoryTurns(session).length))
+      }
+      if (after.state === 'mismatch') console.warn('dsh-tavern: 存档与模型上下文的轮次修复后仍不一致：' + JSON.stringify(after.mismatch))
       return after
     } catch (error) {
       console.warn('dsh-tavern: 存档与模型上下文核对失败：' + str(error?.message || error))
@@ -5080,7 +5159,8 @@ export async function apply(ctx) {
       ensureSessionPrefix: async function (input) {
         return await ensureNativeSystemPrefix(input.payload.agent.session, input.chat)
       },
-      controlledToolNames
+      controlledToolNames,
+      pluginToolModes: name => pluginApi.toolModesFor(name)
     }
   })
 
@@ -5147,6 +5227,7 @@ export async function apply(ctx) {
   if (tools !== undefined) {
     tools.register(defineTool(createStorySubmissionTool({
       chatForSession,
+      enabled: async () => (await readTavernSettings()).storyToolCall,
       isBackground: function (sessionId) { return backgroundAgentRunner.owns(sessionId) }
     })))
     registerGameplayTools({

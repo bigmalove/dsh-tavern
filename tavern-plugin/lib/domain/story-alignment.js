@@ -1,6 +1,7 @@
 import { sessionEvents } from './session-events.js'
 import { uncommittedRounds } from './uncommitted-rounds.js'
 import { createRoundAnchorResolver, validAnchor } from './round-anchor.js'
+import { isFailedTurnEnd } from './session-turn-input.js'
 
 // The story save and the native session are two records of one game. Every
 // regenerate, rollback and edit writes both; an interruption between the two
@@ -27,7 +28,7 @@ export function nativeStoryTurns(session) {
     // The seed exchange and the opening are not player rounds.
     if (!(turn > 1) || String(message.id || '').startsWith('tavern-seed-trajectory:') || String(message.id || '').startsWith('tavern-opening:')) continue
     // A failed or still running turn is not story yet; its cleanup is separate.
-    if (!ended.has(turn) || ['error', 'aborted'].includes(ended.get(turn))) continue
+    if (!ended.has(turn) || isFailedTurnEnd(ended.get(turn))) continue
     if (turns.at(-1) !== turn && !turns.includes(turn)) turns.push(turn)
   }
   return turns

@@ -13,6 +13,10 @@ export function apply(ctx) {
     async *stream(input) {
       if (process.env.TAVERN_E2E_COMPACTION_DIR) { yield* compactionStream(input); return }
       const tools = new Set((input.tools || []).map(tool => tool.name))
+      // Every settlement request verbatim, to compare refactors of the background pipeline.
+      if (process.env.TAVERN_E2E_SETTLEMENT_DUMP && JSON.stringify(input.messages || []).includes('任务类型：状态结算')) {
+        await appendFile(process.env.TAVERN_E2E_SETTLEMENT_DUMP, JSON.stringify({ system: input.system, tools: (input.tools || []).map(tool => tool.name), messages: input.messages }) + '\n')
+      }
       if (process.env.TAVERN_E2E_MEMORY_AUDIT) {
         await appendFile(process.env.TAVERN_E2E_MEMORY_AUDIT, JSON.stringify({ system: input.system, messages: input.messages, tools: input.tools }) + '\n')
         if (tools.has('tavern_memory_search')) {
@@ -46,6 +50,11 @@ export function apply(ctx) {
         yield { type: 'finish', reason: { kind: block.type === 'tool-call' ? 'tool-calls' : 'stop' } }
         return
       }
+      // Native repair scenario: record what each foreground body request lets the model read.
+      if (process.env.TAVERN_E2E_CONTEXT_AUDIT && !tools.has('mvu_submit_update') && !tools.has('candidate_submit_choices') && !tools.has('posture_submit')) {
+        await appendFile(process.env.TAVERN_E2E_CONTEXT_AUDIT, JSON.stringify({ at: Date.now(), messages: input.messages.map(message => ({ role: message.role,
+          text: (Array.isArray(message.content) ? message.content : []).filter(block => block.type === 'text').map(block => block.text).join('') })) }) + '\n')
+      }
       // Truncation scenario: only the latest user input decides, so later turns answer normally.
       const latestUser = JSON.stringify(input.messages.slice(input.messages.findLastIndex(message => message.role === 'assistant') + 1))
       if (process.env.E2E_TRUNCATE_LOG) await appendFile(process.env.E2E_TRUNCATE_LOG, JSON.stringify({ at: Date.now(), tools: [...tools], tail: input.messages.slice(-4).map(m => ({ role: m.role, content: JSON.stringify(m.content).slice(0, 160) })) }) + '\n')
@@ -75,6 +84,30 @@ export function apply(ctx) {
         }
         yield { type: 'block-end', index: 0, block: { type: 'text', text: '<content>\n' + '雨一直下，'.repeat(40) } }
         yield { type: 'finish', reason: { kind: 'stop' } }
+        return
+      }
+      // Tool round trips before the story (#222): two steps that only think and read variables, then the text.
+      // This round so far: everything after the last reply that was not a tool step.
+      const sinceUser = input.messages.slice(input.messages.findLastIndex(message => message.role === 'assistant' && !(message.content || []).some(block => block.type === 'tool-call')) + 1)
+      if (tools.has('tavern_read_variables') && JSON.stringify(sinceUser).includes('E2E_TOOL_STEPS')) {
+        const since = sinceUser
+        const reads = since.flatMap(message => message.content || []).filter(block => block.type === 'tool-result' && String(block.toolCallId).startsWith('e2e-read-')).length
+        if (reads < 2) {
+          const block = { type: 'tool-call', id: 'e2e-read-' + reads + '-' + Date.now(), name: 'tavern_read_variables', arguments: JSON.stringify({ action: 'list' }) }
+          // Reasoning models think before each call, so the step has an Assistant node of its own.
+          yield { type: 'block-start', index: 0, blockType: 'reasoning' }
+          yield { type: 'text-delta', index: 0, text: '先查一下数值。' }
+          yield { type: 'block-end', index: 0, block: { type: 'reasoning', text: '先查一下数值。' } }
+          yield { type: 'block-start', index: 1, blockType: 'tool-call' }
+          yield { type: 'block-end', index: 1, block }
+          yield { type: 'finish', reason: { kind: 'tool-calls' } }
+          return
+        }
+      }
+      // Ordinary provider failure (not moderation): the round fails before any text.
+      if (!tools.has('mvu_submit_update') && !tools.has('candidate_submit_choices') && !tools.has('posture_submit')
+        && latestInput.includes('E2E_PROVIDER_ERROR')) {
+        yield { type: 'finish', reason: { kind: 'error', failure: { message: '503 Service Unavailable', code: 'PI_AI_ERROR' } } }
         return
       }
       // Mid-stream filter: part of the body already streamed, then the provider cuts it off.
@@ -146,6 +179,12 @@ export function apply(ctx) {
       const goldId = perf ? 'perf-gold-' + perf.id : 'e2e-gold-' + gold, postureId = 'e2e-posture-' + gold
       const blocks = []
       if (tools.has('candidate_submit_choices')) blocks.push({ type: 'tool-call', id: 'e2e-choices', name: 'candidate_submit_choices', arguments: JSON.stringify({ actions: ['再次领取奖励', '向店主道谢', '查看任务告示', '清点背包'], scene: '夜幕降临酒馆' }) })
+      // Dialogue annotation: name every numbered quote of the settlement note.
+      const castNote = /【本轮台词】[^【]*/.exec(input.messages.flatMap(message => message.content || []).map(block => block.text || '').filter(item => item.includes('【本轮台词】')).at(-1) || '')?.[0]
+      if (tools.has('cast_submit') && castNote && !done.has('e2e-cast-' + gold)) blocks.push({
+        type: 'tool-call', id: 'e2e-cast-' + gold, name: 'cast_submit',
+        arguments: JSON.stringify({ lines: [...castNote.matchAll(/^(\d+)\. (.*)$/gm)].map(([, n, quote]) => ({ n: Number(n), speaker: quote.includes('谢谢') ? '你' : '店主', emotion: quote.includes('谢谢') ? 'gratitude' : 'joy' })) })
+      })
       if (tools.has('mvu_submit_update') && !done.has(goldId)) blocks.push({
         type: 'tool-call', id: goldId, name: 'mvu_submit_update',
         arguments: JSON.stringify({ operations: [{ op: 'replace', path: cardUpdate ? '/stat_data/coins' : '/stat_data/gold',
@@ -155,7 +194,7 @@ export function apply(ctx) {
         type: 'tool-call', id: postureId, name: 'posture_submit',
         arguments: JSON.stringify({ posture: '站在柜台前，收下奖励。' })
       })
-      if (!blocks.length) blocks.push({ type: 'text', text: (cardUpdate ? '更新后的世界中，你又获得十枚金币。' : presetRound ? `预设切换后继续游玩，金币 ${gold}。` : gold === 30 ? '雨夜里，你重新领取了奖励。' : gold === 20 ? '你再次领取了奖励，金币累计二十枚。' : '你获得了十枚金币。') + (process.env.TAVERN_E2E_PERFORMANCE_DIR && process.env.TAVERN_PERF_HISTORY_READY === '1' ? '\n' + '这是性能测试的合成剧情，不对应真实存档。'.repeat(Number(process.env.TAVERN_PERF_BODY_REPEATS || 60)) : '') + '\n\n<StatusPlaceHolderImpl/>' })
+      if (!blocks.length) blocks.push({ type: 'text', text: (process.env.TAVERN_E2E_CAST === '1' ? '店主笑着说：“欢迎回来，这是你的奖励。”\n你接过钱袋：「谢谢。」\n' : '') + (cardUpdate ? '更新后的世界中，你又获得十枚金币。' : presetRound ? `预设切换后继续游玩，金币 ${gold}。` : gold === 30 ? '雨夜里，你重新领取了奖励。' : gold === 20 ? '你再次领取了奖励，金币累计二十枚。' : '你获得了十枚金币。') + (process.env.TAVERN_E2E_PERFORMANCE_DIR && process.env.TAVERN_PERF_HISTORY_READY === '1' ? '\n' + '这是性能测试的合成剧情，不对应真实存档。'.repeat(Number(process.env.TAVERN_PERF_BODY_REPEATS || 60)) : '') + '\n\n<StatusPlaceHolderImpl/>' })
       if (cardUpdate && process.env.TAVERN_E2E_REQUEST_AUDIT) await appendFile(process.env.TAVERN_E2E_REQUEST_AUDIT, JSON.stringify({cardUpdate:true,newWorldbook:text.includes(tools.has('mvu_submit_update') ? 'E2E_LIVE_MVU_RULES_V2' : 'E2E_LIVE_WORLDBOOK_V2'),settlement:tools.has('mvu_submit_update') || tools.has('posture_submit')})+'\n')
       if (presetRound && blocks.some(block => block.type === 'text') && process.env.TAVERN_E2E_REQUEST_AUDIT) {
         await appendFile(process.env.TAVERN_E2E_REQUEST_AUDIT, JSON.stringify({ gold,

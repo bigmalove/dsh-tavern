@@ -915,7 +915,7 @@ export function createTurnOrchestrator(options) {
     if (chat === undefined) return []
     const mode = chat.mode || 'story'
     const webTools = chat.webSearchEnabled === true ? ['web_search'] : []
-    const storyTools = storyToolCallEnabled(chat) ? [STORY_SUBMIT_TOOL_NAME] : []
+    const storyTools = storyToolCallEnabled(chat, await options.storyToolCall?.()) ? [STORY_SUBMIT_TOOL_NAME] : []
     if (mode === 'script') return ['tavern_read_variables', 'skill', 'tavern_read_skill_reference', 'tavern_read_script', 'tavern_recall_history', 'worldbook_search', ...webTools, ...storyTools]
     // 写作模式与游玩同一套工具：没有人物卡时变量/世界书内容为空，但工具本身与游玩一致。
     if (mode === 'writing') return ['tavern_read_variables', 'skill', 'tavern_read_skill_reference', 'tavern_recall_history', 'worldbook_search', ...webTools, ...storyTools]

@@ -147,3 +147,92 @@ test('插件资源地址：assetUrl 按插件名指向 assets/ 下的文件，�
   assert.equal(plugin.assetUrl('map/森林 1.png'), '/api/dsh-tavern/plugin-assets/dsh-tavern-battle/map/' + encodeURIComponent('森林 1.png'))
   for (const bad of ['', '../x.png', 'a/../../b', '.env', '/abs.png']) assert.throws(() => plugin.assetUrl(bad), /相对路径/, bad)
 })
+
+test('人物卡列表视图：插件视图拿到筛选后的卡片和动作，批量管理时点卡只勾选；出错或返回 null 时退回内置列表', () => {
+  const ui = load()
+  const plugin = { ctx: { fiber: { name: 'dsh-tavern-grid' } } }
+  Object.setPrototypeOf(plugin, ui.service)
+  let seen = null
+  const dispose = plugin.registerCardListView({ id: 'grid', label: '瀑布', render: input => { seen = input; return input.place === 'play' ? null : 'grid' } })
+  assert.throws(() => plugin.registerCardListView({ id: 'grid', label: '重复', render() {} }), /已注册/)
+  assert.throws(() => plugin.registerCardListView({ id: 'Bad', label: 'x', render() {} }), /id/)
+  assert.throws(() => plugin.registerCardListView({ id: 'x', label: '', render() {} }), /label/)
+
+  const start = source.indexOf('const TAVERN_CARD_LIST_VIEW_KEY')
+  const end = source.indexOf('\n\t\t}\n', source.indexOf('function TavernCardList(props)', start)) + 4
+  const h = (type, props, ...children) => ({ type, props, children: children.flat() })
+  const stored = new Map()
+  const List = vm.runInNewContext(source.slice(start, end) + '; TavernCardList', {
+    React: { createElement: h, Fragment: 'Fragment', useState: init => [typeof init === 'function' ? init() : init, () => {}] },
+    useTavernUiExtensions() {}, tavernUiExtensions: ui, tavernPluginBoundary: () => 'Boundary',
+    window: { localStorage: { getItem: key => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value) } }
+  })
+  const cards = [{ path: 'cards/甲.png', name: '甲', hasImage: true, script: { path: 's', title: '剧本一' }, group: '常玩', starred: true }, { path: 'cards\\乙.json', name: '乙', hasImage: false, script: null, readError: '坏了' }]
+  const opened = [], toggled = []
+  let managing = false
+  const batch = { get managing() { return managing }, isSelected: path => path === 'cards/甲.png', toggle: path => toggled.push(path) }
+  const props = place => ({ place, cards, batch, busy: false, open: card => opened.push(card.path), menu: place === 'library' ? card => 'menu:' + card.name : undefined, mention: place === 'library' ? card => '@' + card.name : undefined, builtin: () => 'builtin' })
+
+  // Nothing chosen yet: Tavern's own list, with a switcher for its grid and the plugin view.
+  let tree = List(props('library'))
+  assert.equal(tree.children[1], 'builtin')
+  const choices = tree.children[0].children
+  assert.deepEqual(choices.map(button => button.children[0]), ['列表', '宫格', '瀑布'])
+  choices[2].props.onClick()
+  assert.equal(stored.get('dsh-tavern-card-list-view'), 'dsh-tavern-grid:grid')
+
+  tree = List(props('library'))
+  const boundary = tree.children[1]
+  assert.equal(boundary.type, 'Boundary')
+  assert.equal(boundary.props.fallback, 'builtin')
+  const body = boundary.children[0]
+  assert.equal(body.type(body.props), 'grid')
+  assert.deepEqual(JSON.parse(JSON.stringify(seen.cards)), [
+    { path: 'cards/甲.png', name: '甲', fileName: '甲.png', imageUrl: '/api/dsh-tavern/card-image?path=' + encodeURIComponent('cards/甲.png'), script: { title: '剧本一' }, group: '常玩', starred: true, error: '' },
+    { path: 'cards\\乙.json', name: '乙', fileName: '乙.json', imageUrl: '', script: null, group: '', starred: false, error: '坏了' }])
+  assert.equal(seen.selecting, false)
+  assert.equal(seen.isSelected('cards/甲.png'), false)
+  assert.equal(seen.menu('cards/甲.png'), 'menu:甲')
+  assert.equal(seen.mention('cards/甲.png'), '@甲')
+  seen.open('cards/甲.png'); seen.open('cards/不存在.png')
+  assert.deepEqual(opened, ['cards/甲.png'])
+
+  managing = true
+  tree = List(props('library'))
+  tree.children[1].children[0].type(tree.children[1].children[0].props)
+  assert.equal(seen.selecting, true)
+  assert.equal(seen.isSelected('cards/甲.png'), true)
+  assert.equal(seen.menu('cards/甲.png'), null)
+  assert.equal(seen.mention('cards/甲.png'), null)
+  seen.open('cards/甲.png')
+  assert.deepEqual(opened, ['cards/甲.png'])
+  assert.deepEqual(toggled, ['cards/甲.png'])
+
+  // A view that returns null for a place leaves Tavern's own list there.
+  tree = List(props('play'))
+  assert.equal(tree.children[1].children[0].type(tree.children[1].children[0].props), 'builtin')
+  assert.equal(seen.mention('cards/甲.png'), null)
+
+  dispose()
+  tree = List(props('library'))
+  assert.deepEqual(tree.children[0].children.map(button => button.children[0]), ['列表', '宫格'])
+  assert.equal(tree.children[1], 'builtin')
+
+  // Tavern's own grid: covers and names; a broken card cannot start a game; corner holds @ and ⋯.
+  stored.set('dsh-tavern-card-list-view', 'dsh-tavern:grid')
+  managing = false
+  const gridOf = place => { const t = List(props(place)).children[1].children[0]; return t.type(t.props) }
+  let grid = gridOf('library')
+  assert.equal(grid.props.className, 'dsh-tavern-card-grid')
+  const [first, second] = grid.children
+  const open = first.children[0]
+  assert.equal(open.children[0].props.src, '/api/dsh-tavern/card-image?path=' + encodeURIComponent('cards/甲.png'))
+  assert.equal(open.children[1].children[0], '甲')
+  assert.equal(second.children[0].children[0].children[0], '乙')
+  assert.deepEqual(first.children[2].children, ['@甲', 'menu:甲'])
+  open.props.onClick()
+  assert.deepEqual(opened.slice(-1), ['cards/甲.png'])
+  grid = gridOf('play')
+  assert.equal(grid.children[1].children[0].props.disabled, true)
+  assert.equal(grid.children[0].children[2], null)
+})

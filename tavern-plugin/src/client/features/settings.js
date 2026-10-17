@@ -143,22 +143,22 @@
             let value = null, revision = 0;
             const listeners = new Set();
             const key = "dsh-tavern:display-preferences-changed";
-            function apply(hidden) {
-                value = hidden === true;
-                document.documentElement.classList.toggle("dsh-tavern-hide-process", value);
+            function apply(settings) {
+                value = { hideContextAndReasoning: settings.hideContextAndReasoning === true };
+                document.documentElement.classList.toggle("dsh-tavern-hide-process", value.hideContextAndReasoning);
                 listeners.forEach(listener => listener());
             }
             async function refresh() {
                 const request = ++revision;
-                try { const result = await rpc("getDisplayPreferences"); if (request === revision) apply(result.hideContextAndReasoning); } catch (_) {}
+                try { const result = await rpc("getDisplayPreferences"); if (request === revision) apply(result); } catch (_) {}
             }
             return {
                 subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
                 snapshot: () => value,
-                async save(hidden) {
+                async save(patch) {
                     ++revision;
-                    const result = await rpc("updateTavernSettings", { patch: { hideContextAndReasoning: hidden } });
-                    ++revision; apply(result.settings.hideContextAndReasoning);
+                    const result = await rpc("updateTavernSettings", { patch });
+                    ++revision; apply(result.settings);
                     try { window.localStorage.setItem(key, String(Date.now())); } catch (_) {}
                 },
                 start() {
@@ -173,20 +173,24 @@
             };
         })();
         function DisplayPreferencesSettings() {
-            const hidden = React.useSyncExternalStore(displayPreferences.subscribe, displayPreferences.snapshot, displayPreferences.snapshot);
+            const preferences = React.useSyncExternalStore(displayPreferences.subscribe, displayPreferences.snapshot, displayPreferences.snapshot);
             const [busy, setBusy] = React.useState(false), [notice, setNotice] = React.useState("");
-            async function save(value) {
+            async function save(patch) {
                 setBusy(true); setNotice("");
-                try { await displayPreferences.save(value); setNotice("已保存，对所有对话立即生效"); }
+                try { await displayPreferences.save(patch); setNotice("已保存，对所有对话立即生效"); }
                 catch (error) { setNotice("保存失败：" + String(error.message || error)); }
                 finally { setBusy(false); }
             }
             const h = React.createElement;
+            function row(title, description, checked, patch) {
+                return h("label", { key: title, className: "dsh-tavern-settings-row dsh-tavern-background-task" },
+                    h("div", { className: "dsh-tavern-settings-copy" }, h("strong", { className: "dsh-tavern-settings-title" }, title),
+                        h("p", { className: "dsh-tavern-settings-desc" }, description)),
+                    h("input", { type: "checkbox", role: "switch", "aria-label": title, checked, disabled: preferences === null || busy, onChange: event => save(patch(event.target.checked)) }));
+            }
             return h("section", { className: "dsh-tavern-settings-group dsh-tavern-display-preferences" },
-                h("label", { className: "dsh-tavern-settings-row dsh-tavern-background-task" },
-                    h("div", { className: "dsh-tavern-settings-copy" }, h("strong", { className: "dsh-tavern-settings-title" }, "隐藏上下文注入和思考过程"),
-                        h("p", { className: "dsh-tavern-settings-desc" }, "隐藏对话中的上下文注入、已思考和思考过程。仅影响显示，正文、模型请求和存档内容不变。")),
-                    h("input", { type: "checkbox", role: "switch", "aria-label": "隐藏上下文注入和思考过程", checked: hidden === true, disabled: hidden === null || busy, onChange: event => save(event.target.checked) })),
+                row("隐藏上下文注入和思考过程", "隐藏对话中的上下文注入、已思考和思考过程。仅影响显示，正文、模型请求和存档内容不变。",
+                    preferences?.hideContextAndReasoning === true, value => ({ hideContextAndReasoning: value })),
                 notice ? h("p", { className: "dsh-tavern-settings-desc", role: "status" }, notice) : null);
         }
 

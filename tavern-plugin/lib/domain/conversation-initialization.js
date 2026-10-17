@@ -1,6 +1,6 @@
 import { applyOpeningCommand } from './opening-command.js'
 import { sessionEvents, appendSessionEvent } from './session-events.js'
-import { createHash } from 'node:crypto'
+import { nativeOpeningMessageId } from './native-opening.js'
 import { cardOpeningChoices, resolveCardOpening } from './card-openings.js'
 import { projectAgentContent, projectOpeningCommit } from './runtime-content-projection.js'
 import { OFFICIAL_MVU_VERSION } from './official-mvu-assets.js'
@@ -266,11 +266,7 @@ export function createConversationInitialization(options) {
     return projection.renderedText
   }
 
-  function openingId(chat) {
-    // Stable identity in the existing message.id field: a retry after flush/crash
-    // can recognize its own greeting without another save-format field or event.
-    return 'tavern-opening:' + createHash('sha256').update(str(chat.id)).digest('hex')
-  }
+  function openingId(chat) { return nativeOpeningMessageId(chat.id) }
 
   function appendOpeningEvents(session, chat, text, recovering) {
     // DSH adds a seed boundary on restore; it is not part of the opening turn.
