@@ -170,6 +170,7 @@ import { createServerScriptExecutor } from './domain/server-script-executor.js'
 import { createDisplayRuntimeStore, displayRuntimeReceipt } from './domain/display-runtime-store.js'
 import { createPhoneChat } from './domain/phone-chat.js'
 import { createPresetLibrary } from './domain/preset-library.js'
+import { applyConversationPresetToCurrent } from './domain/conversation-preset-application.js'
 import { createForegroundOrchestrationStrategies } from './domain/foreground-orchestration-strategies.js'
 import { clearFailedTurnSurface, rollbackAvailability, reshadowRolledBackRounds } from './domain/rollback-surface.js'
 import { assistantResultForTurn } from './domain/session-turn-result.js'
@@ -4198,11 +4199,7 @@ export async function apply(ctx) {
         if (typeof args.path !== 'string') throw new Error('请选择预设')
         if ((await sessionActivity(sessionId))?.busy || agentRegistry.get(sessionId)?.phase?.kind === 'running') throw new Error('请等待当前生成和后台任务完成后再应用预设')
         const snapshot = args.path === '' ? null : await runtimePresets.fullSnapshot(args.path)
-        const saved = await updateChat(chat.id, current => {
-          if (current._storageRevision !== chat._storageRevision) throw new Error('当前游戏已变化，请刷新后重试')
-          current.runtimePresetSnapshot = snapshot
-          return current
-        }, { source: 'preset.apply-conversation' })
+        const saved = await updateChat(chat.id, current => applyConversationPresetToCurrent(current, chat, snapshot), { source: 'preset.apply-conversation' })
         return { runtimePreset: saved.runtimePresetSnapshot === null ? null : { id: saved.runtimePresetSnapshot.presetPath, name: saved.runtimePresetSnapshot.presetName } }
       }
       case 'getPreset': return { preset: await presetLibrary.detail(args && args.path) }

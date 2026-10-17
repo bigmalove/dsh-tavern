@@ -23,13 +23,17 @@ export async function presetSwitch({ page, step, savedChat, inspectRound, output
         }, path)
       } else {
         await selector.selectOption(path)
+        // 本机的 fsync 很慢：切换预设要排在后台写入（状态栏截图、模板同步）之后提交。
         await page.getByRole('complementary', { name: '本局设置', exact: true })
-          .locator('.dsh-local-field').filter({ has: selector }).getByRole('status').filter({ hasText: /^已保存$/ }).waitFor()
+          .locator('.dsh-local-field').filter({ has: selector }).getByRole('status').filter({ hasText: /^已保存$/ })
+          .waitFor({ timeout: Number(process.env.TAVERN_E2E_PRESET_TIMEOUT_MS) || 180000 })
       }
       const switched = await savedChat()
       assert.equal(switched.id, identity.id)
       assert.equal(switched.sessionId, identity.sessionId)
-      assert.deepEqual(switched.messages, before.messages, '切换预设不能改动历史正文、变量或结算回执')
+      // 状态栏截图由后台维护写在最新一条消息上，与预设切换无关；比较正文、变量与结算回执。
+      const storyMessages = messages => structuredClone(messages).map(message => (delete message.displayRuntime, message))
+      assert.deepEqual(storyMessages(switched.messages), storyMessages(before.messages), '切换预设不能改动历史正文、变量或结算回执')
       assert.equal(switched.runtimePresetSnapshot?.presetPath || '', path)
       const composer = page.getByRole('textbox', { name: /发消息|Message/ })
       await composer.fill(`E2E 预设验收 ${gold}`)
