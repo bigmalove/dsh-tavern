@@ -3,9 +3,9 @@ set -euo pipefail
 
 DSH_ROOT="${DSH_HOME:-${HOME}/.dsh}"
 APP_DIR="${DSH_TAVERN_SOURCE_ROOT:-${DSH_TAVERN_ANDROID_APP_DIR:-${DSH_ROOT}/apps/dsh-tavern}}"
-DEFAULT_REPOSITORY="https://github.com/flizzywine/dsh-tavern.git"
+DEFAULT_REPOSITORY="https://github.com/bigmalove/dsh-tavern.git"
 REPOSITORY="${DSH_TAVERN_REPOSITORY:-${DEFAULT_REPOSITORY}}"
-DEFAULT_TARBALL_URL="https://codeload.github.com/flizzywine/dsh-tavern/tar.gz/refs/heads/main"
+DEFAULT_TARBALL_URL="https://codeload.github.com/bigmalove/dsh-tavern/tar.gz/refs/heads/main"
 TARBALL_URL="${DSH_TAVERN_TARBALL_URL:-${DEFAULT_TARBALL_URL}}"
 SOURCE_MARKER=".dsh-tavern-tarball-source"
 TEMP_ROOT=""

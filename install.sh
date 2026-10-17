@@ -15,7 +15,7 @@ case ${INSTALL_HOST} in
   *) echo "安装失败：不支持的安装宿主 ${INSTALL_HOST}" >&2; exit 1 ;;
 esac
 
-REPOSITORY=${DSH_TAVERN_REPOSITORY:-flizzywine/dsh-tavern}
+REPOSITORY=${DSH_TAVERN_REPOSITORY:-bigmalove/dsh-tavern}
 REPOSITORY_URL=${DSH_TAVERN_GIT_URL:-https://github.com/${REPOSITORY}.git}
 ARCHIVE_URL=${DSH_TAVERN_ARCHIVE_URL:-https://codeload.github.com/${REPOSITORY}/tar.gz/refs/heads/main}
 COMMIT_URL=${DSH_TAVERN_COMMIT_URL:-https://api.github.com/repos/${REPOSITORY}/commits/main}
