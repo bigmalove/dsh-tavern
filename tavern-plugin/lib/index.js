@@ -1,3 +1,5 @@
+import { sceneSaveKeyMap } from './domain/scene-save.js'
+import { createGameSaveSnapshot } from './domain/game-save-snapshot.js'
 import { createGameSaveResources } from './domain/game-save-resources.js'
 import { createCardEditor } from './domain/card-editor.js'
 import { ensureSessionVariableDirectory } from './domain/session-variable-directory.js'
@@ -358,6 +360,7 @@ export async function apply(ctx) {
   const regexLibrary = createRegexLibrary({ store: profileData })
   const userPreferenceProfile = createUserPreferenceProfile({ store: profileData })
   const sceneWorldbooks = TAVERN_RELEASE_CAPABILITIES.sceneImages ? createSceneWorldbooks({ store: profileData }) : null
+  const sceneWorldbookArchive = sceneWorldbooks || createSceneWorldbooks({ store: profileData })
   const imageHostDiagnostic = createSceneImageHostLogger(ctx.logger)
   const sceneDiagnostics = TAVERN_RELEASE_CAPABILITIES.sceneImages ? createSceneImageDiagnostics(profileData, { onDiagnostic: imageHostDiagnostic }) : null
   async function captureSceneWorldbook(chat, card, preparedBook, turn) {
@@ -756,9 +759,7 @@ export async function apply(ctx) {
   }
   async function importScript(cardPath, payload) {
     const prepared = prepareTextImport(payload, '剧本文件为空')
-    const existing = (await listSources()).find(function (source) { return source.title === prepared.name })
-    const materialPath = existing ? existing.path : await fileResources.importText('source', prepared)
-    await fileResources.bindMaterial(cardPath, materialPath)
+    await fileResources.importBoundScript(cardPath, prepared)
     const script = await readScript(cardPath)
     return { path: script.path, title: script.title, sourceChars: script.sourceChars, chunkSize: 500, chunkCount: script.chunks.length, importedAt: Date.now() }
   }
@@ -1363,49 +1364,52 @@ export async function apply(ctx) {
     for (const [key, child] of Object.entries(value)) if (!skip.has(key) && child && typeof child === 'object') attachmentRefs(child, found, skip)
     return found
   }
+  const gameSaveSnapshot = createGameSaveSnapshot({
+    readChat,
+    assertIdle: chat => assertConversationForkable(chat, { agentRunning: agentRegistry.get(chat.sessionId)?.phase?.kind === 'running' }),
+    readSession: async sessionId => {
+      const live = sessionStore.get(sessionId)
+      if (live) await sessionStore.flush(live)
+      const handle = await ctx.get('sessionPersistence').open(sessionId, 'read')
+      try { return { header: handle.header, inheritedEventCount: handle.inheritedEventCount, events: (await handle.read(0)).events } }
+      finally { await handle.close() }
+    }
+  })
   async function exportGameSave(sessionId, options = {}) {
     const header = await chatForSession(str(sessionId))
     if (!header) throw new Error('当前 Session 没有绑定 Tavern 对话')
-    const chat = await readChat(header.id)
-    if (!chat || !['story', 'script', 'writing'].includes(chat.mode || 'story')) throw new Error('只有正文对话可以导出存档')
-    assertConversationForkable(chat, { agentRunning: agentRegistry.get(chat.sessionId)?.phase?.kind === 'running' })
-    const revisions = await collectSaveRevisions(chat, readChatRevision)
-    const live = sessionStore.get(chat.sessionId)
-    if (live) await sessionStore.flush(live)
-    const handle = await ctx.get('sessionPersistence').open(chat.sessionId, 'read')
-    let session
-    try { session = { header: handle.header, inheritedEventCount: handle.inheritedEventCount, events: (await handle.read(0)).events } }
-    finally { await handle.close() }
-    let cardPayload = null
-    try { cardPayload = await fileResources.originalCardPayload(chat.cardPath) } catch {}
-    if (!cardPayload && chat.cardDefinitionSnapshot?.raw) cardPayload = { kind: 'text', name: str(chat.cardName || 'card') + '.json', text: JSON.stringify(chat.cardDefinitionSnapshot.raw) }
-    let script = null
-    if ((chat.mode || 'story') === 'script') {
-      const scriptPath = await fileResources.scriptForCard(chat.cardPath)
-      const text = scriptPath ? await fileResources.readText(normalizeResourcePath(scriptPath, resourceKind(scriptPath))) : undefined
-      if (text !== undefined) script = { path: scriptPath, text }
-    }
-    let scene = null
-    const media = attachmentRefs(session.events)
-    if (options.images !== false) {
-      const files = await gameFootprint.readSceneFiles(chat.id)
-      for (const file of files) attachmentRefs(JSON.parse(file.content.toString('utf8')), media, new Set(['deletedVersions']))
-      const digest = chat.sceneOpeningWorldbook?.digest
-      const book = digest ? (sceneWorldbooks ? await sceneWorldbooks.exportSnapshot(digest) : null) ?? await gameFootprint.readSceneWorldbook(digest) : null
-      scene = { files, worldbooks: book ? [{ digest, content: book }] : [], attachments: [] }
-    }
-    const attachments = []
-    for (const ref of media.values()) {
-      try { const image = await ctx.get('attachments').readImage(ref); attachments.push({ attachmentId: ref.attachmentId, mediaType: ref.mediaType, data: Buffer.from(image.data) }) }
-      catch { /* A missing picture must not block the save; the game keeps its reference. */ }
-    }
-    if (scene) scene.attachments = attachments
-    else if (attachments.length) scene = { files: [], worldbooks: [], attachments }
-    const plugins = await pluginSaveContents(chat)
-    const buffer = buildGameSave({ chat, revisions, session, card: { path: chat.cardPath, payload: cardPayload }, script, scene, plugins,
-      tavernVersion: TAVERN_PACKAGE_VERSION, exportedAt: Date.now() })
-    const name = (sessionTitleOf(session.events) || str(chat.title) || str(chat.cardName) || 'game').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 60)
-    return { filename: name + '.dshsave', base64: buffer.toString('base64'), bytes: buffer.length, revisions: revisions.length, images: attachments.length }
+    return await gameSaveSnapshot(header.id, header.sessionId, async ({ chat, session }) => {
+      const revisions = await collectSaveRevisions(chat, readChatRevision)
+      let cardPayload = null
+      try { cardPayload = await fileResources.originalCardPayload(chat.cardPath) } catch {}
+      if (!cardPayload && chat.cardDefinitionSnapshot?.raw) cardPayload = { kind: 'text', name: str(chat.cardName || 'card') + '.json', text: JSON.stringify(chat.cardDefinitionSnapshot.raw) }
+      let script = null
+      if ((chat.mode || 'story') === 'script') {
+        const scriptPath = await fileResources.scriptForCard(chat.cardPath)
+        const text = scriptPath ? await fileResources.readText(normalizeResourcePath(scriptPath, resourceKind(scriptPath))) : undefined
+        if (text !== undefined) script = { path: scriptPath, text }
+      }
+      let scene = null
+      const media = attachmentRefs(session.events)
+      if (options.images !== false) {
+        const files = await gameFootprint.readSceneFiles(chat.id)
+        for (const file of files) attachmentRefs(JSON.parse(file.content.toString('utf8')), media, new Set(['deletedVersions']))
+        const worldbooks = await sceneWorldbookArchive.exportForSave([chat, ...revisions.map(item => item.state)])
+        scene = { files, worldbooks, attachments: [] }
+      }
+      const attachments = []
+      for (const ref of media.values()) {
+        try { const image = await ctx.get('attachments').readImage(ref); attachments.push({ attachmentId: ref.attachmentId, mediaType: ref.mediaType, data: Buffer.from(image.data) }) }
+        catch { /* A missing picture must not block the save; the game keeps its reference. */ }
+      }
+      if (scene) scene.attachments = attachments
+      else if (attachments.length) scene = { files: [], worldbooks: [], attachments }
+      const plugins = await pluginSaveContents(chat)
+      const buffer = buildGameSave({ chat, revisions, session, card: { path: chat.cardPath, payload: cardPayload }, script, scene, plugins,
+        tavernVersion: TAVERN_PACKAGE_VERSION, exportedAt: Date.now() })
+      const name = (sessionTitleOf(session.events) || str(chat.title) || str(chat.cardName) || 'game').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 60)
+      return { filename: name + '.dshsave', base64: buffer.toString('base64'), bytes: buffer.length, revisions: revisions.length, images: attachments.length }
+    })
   }
   // Plugin data and media of the story line shown now, with the files the media point at.
   async function pluginSaveContents(chat) {
@@ -1481,12 +1485,7 @@ export async function apply(ctx) {
         return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, withRefs(child)]))
       }
       // 3. Scene image keys hash the chat id; map the current branch's keys to the new id.
-      const keyMap = new Map()
-      for (const message of save.chat.messages || []) {
-        if (message?.role !== 'assistant') continue
-        const turn = Number(message.turn || (message.greeting ? 1 : 0))
-        try { keyMap.set(computeSceneTarget(save.chat, turn).key, computeSceneTarget({ ...save.chat, id: chatId }, turn).key) } catch {}
-      }
+      const keyMap = sceneSaveKeyMap([save.chat, ...save.revisions.map(item => item.state)], chatId)
       const rename = text => {
         let out = text.split(sourceChatId).join(chatId).split(sourceSessionId).join(sessionId)
         for (const [from, to] of keyMap) out = out.split(from).join(to)
@@ -1549,7 +1548,7 @@ export async function apply(ctx) {
         if (save.scene) {
           for (const file of save.scene.files) await profileData.writeBytes('scene-images/' + createHash('sha256').update(chatId).digest('hex') + '/' + rename(file.path),
             Buffer.from(JSON.stringify(renameJson(JSON.parse(file.content.toString('utf8'))))))
-          for (const book of save.scene.worldbooks) if (/^[a-zA-Z0-9_-]+$/.test(book.digest)) await profileData.writeBytes('scene-images/worldbooks/' + book.digest + '.json', book.content)
+          await sceneWorldbookArchive.importForSave(chatId, [save.chat, ...save.revisions.map(item => item.state)], save.scene.worldbooks)
         }
         // 7. Plugin data and media, re-keyed to the new game's text versions; their content is the plugins' own.
         if (save.plugins) {
@@ -1578,6 +1577,7 @@ export async function apply(ctx) {
           try { await rm(path.dirname(ctx.get('sessionPersistence').locate({ id: sessionId, cwd }).path), { recursive: true, force: true }) } catch {}
         }
         if (written) try { await conversationRegistry.remove(chatId) } catch {}
+        try { await sceneWorldbookArchive.forgetChat(chatId) } catch {}
         try { await rm(path.join(dataRoot, 'scene-images', createHash('sha256').update(chatId).digest('hex')), { recursive: true, force: true }) } catch {}
         throw error
       }
@@ -2478,6 +2478,9 @@ export async function apply(ctx) {
   const BACKGROUND_TOOLS = [...WORLD_BOOK_FILTER_TOOLS, POSTURE_SUBMIT_TOOL, CHARACTER_DESIGN_READ_TOOL, CHARACTER_DESIGN_SAVE_TOOL, CHARACTER_DESIGN_REUSE_TOOL, MVU_SUBMIT_UPDATE_TOOL, CANDIDATE_SUBMIT_TOOL, SCRIPT_READ_TOOL, SCRIPT_POINT_TOOL, LEDGER_SUBMIT_TOOL]
   const backgroundAgentRunner = createBackgroundAgentRunner({
     retirement: backgroundRetirement,
+    // The browser's session list keeps a disposed subagent as an idle row until the list is
+    // reloaded; tell the game's page so its header count drops the retired worker at once.
+    onRetired: (_id, parentId) => sessionSignals.publish(parentId, { kind: 'subagents', version: String(Date.now()) + ':' + Math.random().toString(36).slice(2) }),
     systemAppend: () => runtimePrompt('system-append'),
     imageSystemPrompt: () => runtimePrompt('scene-image-system'),
     resolveModelSelection: async input => backgroundModelSelection(await backgroundConfigForSession(input.sessionId)) || input.selection,

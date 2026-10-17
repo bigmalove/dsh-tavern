@@ -112,11 +112,13 @@ export async function saveFloorPatch({ chat, index, message, intent, detachedInt
   const { messages: [row], ...head } = edited
   const changes = diffJson({ ...header, messages: [] }, { ...head, messages: [] }).filter(change => !['_storageRevision', 'updatedAt'].includes(change.path[0]))
   for (const change of diffJson(message, row)) changes.push({ ...change, path: ['messages', index, ...change.path] })
+  // A floor the native surface cannot carry (null seq) is saved first and handed
+  // to repair by the caller; a located one must stay where it was read.
   const saved = await chats.patch(chat.id, chat._storageRevision, changes, { source, assertCurrent() {
-    if (!agent.session.surface?.nodes.includes(seq)) throw new Error(reason)
+    if (seq != null && !agent.session.surface?.nodes.includes(seq)) throw new Error(reason)
   } })
   if (!saved) return undefined
-  await synchronizeBodyEdits(agent.session, { messages: [row] }, sessions.flush)
+  if (seq != null) await synchronizeBodyEdits(agent.session, { messages: [row] }, sessions.flush)
   return saved
 }
 
@@ -172,7 +174,12 @@ export function createBodyEditor({ chats, sessions, timeline, activity, project,
       chat = repaired
       floor = resolveFloor(chat, input)
       located = locate(agent.session, chat, floor)
-      if (!located) throw new Error(floor.role === 'user' ? '这一楼已不在当前上下文中，无法编辑' : '正文已不在当前上下文中，无法编辑')
+      // The save is the truth: a latest reply the native surface cannot carry is
+      // still editable — it is saved without a marker and repair carries the text
+      // over on the next round. Older floors need their native node to stay put.
+      if (!located && (!floor.latest || floor.role === 'user')) {
+        throw new Error(floor.role === 'user' ? '这一楼已不在当前上下文中，无法编辑' : '正文已不在当前上下文中，无法编辑')
+      }
     }
     guards.assertRescueHistoryEditable(chat, floor.message)
     return { chat, agent, floor, located }
@@ -207,8 +214,9 @@ export function createBodyEditor({ chats, sessions, timeline, activity, project,
       const before = floor.role === 'user' ? str(floor.message.text) : source(floor.message)
       if (text === before) return present(chat)
       const patch = floor.role === 'user'
-        ? { text, bodyEdit: { id: 'tavern-body-edit:' + randomUUID(), seq: located.seq, turn: located.turn, role: 'user' } }
-        : { sourceText: text, projectionText: text, bodyEdit: { id: 'tavern-body-edit:' + randomUUID(), seq: located.seq, turn: located.turn, role: 'assistant' } }
+        ? { text }
+        : { sourceText: text, projectionText: text }
+      if (located) patch.bodyEdit = { id: 'tavern-body-edit:' + randomUUID(), seq: located.seq, turn: located.turn, role: floor.role }
       if (floor.role !== 'user') {
         // Project against the floor itself: its macros and status blocks belong
         // to that round, never to the current scene.
@@ -229,23 +237,29 @@ export function createBodyEditor({ chats, sessions, timeline, activity, project,
       // A rejected host event must never publish an edit that future requests
       // will keep trying (and failing) to synchronize. Accepted writes retain
       // the existing journal-first recovery path for disk/flush failures.
-      const preview = agent.session.constructor.fromRestore(agent.session.id, structuredClone(sessionEvents(agent.session)), structuredClone(agent.session.header), agent.session.inheritedEventCount, 'detached')
-      await synchronizeBodyEdits(preview, { messages: [{ ...floor.message, ...patch }] }, async () => {})
+      if (located) {
+        const preview = agent.session.constructor.fromRestore(agent.session.id, structuredClone(sessionEvents(agent.session)), structuredClone(agent.session.header), agent.session.inheritedEventCount, 'detached')
+        await synchronizeBodyEdits(preview, { messages: [{ ...floor.message, ...patch }] }, async () => {})
+      }
       const saved = await saveFloorPatch({
-        chat, index: floor.index, message: floor.message, seq: located.seq,
+        chat, index: floor.index, message: floor.message, seq: located?.seq ?? null,
         intent: floor.latest ? intent : { ...intent, index: floor.index },
         detachedIntent: floor.latest ? intent : { ...intent, index: 0 },
         reason: '模型上下文已变化，请重新打开编辑', source: 'foreground.body-edit'
       }, { chats, sessions, timeline, agent })
-      if (saved !== undefined) return present(saved)
+      if (saved !== undefined) {
+        if (!located) await repairNative(sessionId, agent.session)
+        return present(saved)
+      }
       const next = await chats.update(chat.id, current => {
         guards.assertIdle(current, agent, '编辑')
         const currentFloor = resolveFloor(current, input)
         if (floorToken(current, currentFloor.message) !== input.token) throw new Error('正文或会话已变化，请重新打开编辑')
-        if (!agent.session.surface?.nodes.includes(located.seq)) throw new Error('模型上下文已变化，请重新打开编辑')
+        if (located && !agent.session.surface?.nodes.includes(located.seq)) throw new Error('模型上下文已变化，请重新打开编辑')
         return timeline.apply({ chat: current, intent: floor.latest ? intent : { ...intent, index: currentFloor.index } }).chat
       }, { source: 'foreground.body-edit' })
-      await synchronizeBodyEdits(agent.session, next, sessions.flush)
+      if (located) await synchronizeBodyEdits(agent.session, next, sessions.flush)
+      else await repairNative(sessionId, agent.session)
       return present(next)
     } finally { pending.delete(sessionId) }
   }

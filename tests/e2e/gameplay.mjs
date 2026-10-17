@@ -578,7 +578,7 @@ try {
     await page.route('**/api/dsh-tavern/getSession',route)
     try{
       await page.reload({waitUntil:'domcontentloaded'})
-      const button=page.getByRole('button',{name:'导出 ▾',exact:true})
+      const button=page.getByRole('button',{name:'导出',exact:true})
       await button.waitFor({timeout:5000})
       await button.click()
       await page.getByRole('menuitem',{name:'故事正文',exact:true}).waitFor({timeout:1000})
