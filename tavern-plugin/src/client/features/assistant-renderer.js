@@ -308,7 +308,7 @@
 				const time = Number.isFinite(Number(data.time)) ? new Date(Number(data.time)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
 				return React.createElement("div", { className: "dsh-tavern-user-row" },
 					React.createElement("div", { className: "dsh-tavern-user-stack" }, renderedImages, (text !== "" || extras.length > 0) ? React.createElement("div", { className: "dsh-tavern-user-bubble" }, liveState.view?.inputTemplateDisplays?.[turn] ? React.createElement(TavernMessageFrame, {content:liveState.view.inputTemplateDisplays[turn],sessionId:props.sessionId,turn:turn,partIndex:"user-template",frameOwner:props.frameOwner,eager:true}) : React.createElement("div", { style: { whiteSpace: "pre-wrap" } }, text), extras) : null),
-					React.createElement("div", { className: "dsh-tavern-user-actions" }, time ? React.createElement("span", null, time) : null, React.createElement(TavernFloorEditButton, { sessionId: props.sessionId, messageId: data.id, variant: "user" }), React.createElement(TavernDeleteMessageAction, { sessionId: props.sessionId, messageId: data.id, variant: "user" }), React.createElement(DshUi.Tooltip, { label: copied ? "已复制" : "复制", side: "bottom" }, React.createElement("button", { type: "button", className: "dsh-tavern-user-copy", "aria-label": copied ? "已复制" : "复制", onClick: copy }, React.createElement(copied ? DshUi.IconCheckOutline16 : DshUi.IconCopyOutline16, null))))
+					React.createElement("div", { className: "dsh-tavern-user-actions" }, time ? React.createElement("span", null, time) : null, React.createElement(TavernFloorEditButton, { sessionId: props.sessionId, seq: data.seq, variant: "user" }), React.createElement(TavernDeleteMessageAction, { sessionId: props.sessionId, seq: data.seq, variant: "user" }), React.createElement(DshUi.Tooltip, { label: copied ? "已复制" : "复制", side: "bottom" }, React.createElement("button", { type: "button", className: "dsh-tavern-user-copy", "aria-label": copied ? "已复制" : "复制", onClick: copy }, React.createElement(copied ? DshUi.IconCheckOutline16 : DshUi.IconCopyOutline16, null))))
 				);
 			}
 			// While a picture is being made: a placeholder frame where it will appear
@@ -730,12 +730,24 @@
 			}
 			// 任意未被压缩的楼层都能改文字：助手正文、开场白与玩家输入。
 			// 只改这一楼的文字，不重跑模型、不重算结算。
+			// 助手楼层用 messageId 定位；玩家消息的 node.data 只有 {kind, seq, time,
+			// content, source}，没有 id，所以按 seq 查同一份楼层表。
+			function floorOf(view, messageId, seq) {
+				if (!view) return null;
+				if (seq !== undefined && seq !== null && view.floorsBySeq) {
+					const bySeq = view.floorsBySeq[String(seq)];
+					if (bySeq) return bySeq;
+				}
+				if (messageId === undefined || messageId === null || messageId === "") return null;
+				return view.floorsByMessageId ? (view.floorsByMessageId[String(messageId)] || null) : null;
+			}
 			function TavernFloorEditButton(props) {
-				const liveState = useScopedLiveTavernView(props.sessionId, String(props.messageId || ""), [
-					["mode"], ["floorsByMessageId", String(props.messageId || "")], ["activity", "busy"]
+				const key = String(props.messageId || props.seq || "");
+				const liveState = useScopedLiveTavernView(props.sessionId, key, [
+					["mode"], ["floorsByMessageId", String(props.messageId || "")], ["floorsBySeq", String(props.seq || "")], ["activity", "busy"]
 				]);
 				const view = liveState.view;
-				const floor = view && view.floorsByMessageId ? view.floorsByMessageId[String(props.messageId || "")] : null;
+				const floor = floorOf(view, props.messageId, props.seq);
 				const [busy, setBusy] = React.useState(false);
 				if (!floor || !isBodyMode(view && view.mode)) return null;
 				// 不可编辑（后台结算、上下文已压缩、救援导入）时保留按钮但禁用：
@@ -762,11 +774,12 @@
 			// 删除单条消息：只移除这一条，玩家输入与相邻楼层都不动。
 			function TavernDeleteMessageAction(props) {
 				const askConfirm = useTavernConfirm(props.sessionId);
-				const liveState = useScopedLiveTavernView(props.sessionId, String(props.messageId || ""), [
-					["mode"], ["floorsByMessageId", String(props.messageId || "")], ["activity", "busy"]
+				const key = String(props.messageId || props.seq || "");
+				const liveState = useScopedLiveTavernView(props.sessionId, key, [
+					["mode"], ["floorsByMessageId", String(props.messageId || "")], ["floorsBySeq", String(props.seq || "")], ["activity", "busy"]
 				]);
 				const view = liveState.view;
-				const floor = view && view.floorsByMessageId ? view.floorsByMessageId[String(props.messageId || "")] : null;
+				const floor = floorOf(view, props.messageId, props.seq);
 				const [busy, setBusy] = React.useState(false);
 				if (!floor || !isBodyMode(view && view.mode)) return null;
 				const blocked = floor.editable !== true;

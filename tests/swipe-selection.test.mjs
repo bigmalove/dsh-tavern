@@ -4,7 +4,7 @@ import { Session } from './fixtures/dsh-session-host.mjs'
 import { appendSessionEvent, sessionEvents } from '../tavern-plugin/lib/domain/session-events.js'
 import { createSwipeSelection } from '../tavern-plugin/lib/domain/swipe-selection.js'
 import { createStoryTimeline } from '../tavern-plugin/lib/domain/story-timeline.js'
-import { floorsByMessageId } from '../tavern-plugin/lib/domain/conversation-fork-targets.js'
+import { floorsByMessageId, floorsIndex } from '../tavern-plugin/lib/domain/conversation-fork-targets.js'
 import { floorToken, locateFloor } from '../tavern-plugin/lib/domain/floor-location.js'
 import { lastTavernHelperVariables } from '../tavern-plugin/lib/domain/tavern-helper-context.js'
 import { projectReplyLayers } from '../tavern-plugin/lib/domain/reply-presentation.js'
@@ -336,6 +336,24 @@ test('连续两条玩家输入各自成楼，前一条不漏', () => {
   assert.equal(floors.u2b.index, 3)
   assert.equal(floors.a2.index, 4)
   for (const floor of Object.values(floors)) assert.equal(floor.editable, true)
+})
+
+test('按 surface seq 索引：玩家消息节点只带 seq、没有 id', () => {
+  const h = fixture()
+  const index = floorsIndex(h.chat, h.session, { busy: false })
+  const floors = index.byMessageId
+  // 每个楼层都带 seq，且 bySeq 能用它反查同一份事实。
+  for (const [messageId, floor] of Object.entries(floors)) {
+    assert.ok(Number.isSafeInteger(floor.seq), messageId + ' 缺少 seq')
+    const viaSeq = index.bySeq[String(floor.seq)]
+    assert.ok(viaSeq, 'seq ' + floor.seq + ' 没有索引')
+    assert.equal(viaSeq.index, floor.index)
+    assert.equal(viaSeq.role, floor.role)
+  }
+  // 玩家输入的 seq 与 surface 上 user/message 事件的 seq 一致。
+  const inputSeq = sessionEvents(h.session).find(event => event.type === 'user/message' && event.data?.id === 'u2').seq
+  assert.equal(index.bySeq[String(inputSeq)].role, 'user')
+  assert.equal(index.bySeq[String(inputSeq)].index, 1)
 })
 
 test('纯函数：追加、删除、插入版本时三个数组始终对齐', () => {

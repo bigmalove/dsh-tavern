@@ -175,7 +175,7 @@ import { createForegroundOrchestrationStrategies } from './domain/foreground-orc
 import { clearFailedTurnSurface, rollbackAvailability, reshadowRolledBackRounds } from './domain/rollback-surface.js'
 import { assistantResultForTurn } from './domain/session-turn-result.js'
 import { activeStoryTurn, createStorySubmissionTool, foldStorySubmission, STORY_SUBMIT_TOOL_NAME } from './domain/story-tool-submission.js'
-import { forkTurnsByMessageId as forkTargetsFromSession, floorsByMessageId as floorsFromChat } from './domain/conversation-fork-targets.js'
+import { forkTurnsByMessageId as forkTargetsFromSession, floorsIndex as floorsIndexFromChat } from './domain/conversation-fork-targets.js'
 import { createTavernRetryLimiter } from './domain/tavern-retry-limiter.js'
 import { lastTavernHelperVariables, projectTavernHelperContext, hydrateTavernHelperMessages, replaceTavernHelperVariables, HELPER_MESSAGE_COLD_WINDOW } from './domain/tavern-helper-context.js'
 import { projectTavernHelperWorldbook } from './domain/tavern-helper-worldbook.js'
@@ -2023,7 +2023,8 @@ export async function apply(ctx) {
       forkTurnsByMessageId,
       // 完整投影与增量投影必须带同一份楼层事实：客户端只在带这个字段的视图上
       // 才渲染换版本/编辑/删除按钮，缺了就是整排按钮消失。
-      floorsByMessageId: floorsForChat(chat, activity),
+      // 玩家消息节点只带 seq（没有 id），所以另发一份按 seq 索引的。
+      ...floorsViewFields(chat, activity),
       latestAssistantTurn: latestStoryTurn,
       inputSources,
       inputTemplateDisplays,
@@ -2176,13 +2177,21 @@ export async function apply(ctx) {
   }
   // Per-floor swipe/edit facts for the rendered nodes, same live-event basis as
   // the fork mapping; a floor outside the loaded window has no entry.
+  // Two indexes over one pass: replies are found by message id, player inputs
+  // by surface seq (their node data carries no id at all).
   function floorsForChat(chat, activity) {
+    const empty = { byMessageId: {}, bySeq: {} }
     const session = sessionStore.get(str(chat?.sessionId)) || agentRegistry.get(str(chat?.sessionId))?.session
-    if (!session) return {}
-    return floorsFromChat(chat, session, { busy: Boolean(activity && activity.busy) })
+    if (!session) return empty
+    return floorsIndexFromChat(chat, session, { busy: Boolean(activity && activity.busy) }) || empty
+  }
+  // Flatten one floors pass into the two view fields.
+  function floorsViewFields(chat, activity) {
+    const floors = floorsForChat(chat, activity)
+    return { floorsByMessageId: floors.byMessageId, floorsBySeq: floors.bySeq }
   }
   function volatileSessionViewFields(chat, activity, changes) {
-    return { ...sessionStateView.volatile(chat, activity, changes), forkTurnsByMessageId: forkTurnsForChat(chat), floorsByMessageId: floorsForChat(chat, activity) }
+    return { ...sessionStateView.volatile(chat, activity, changes), forkTurnsByMessageId: forkTurnsForChat(chat), ...floorsViewFields(chat, activity) }
   }
 
   async function projectCachedSessionView(chat, previous, activity) {
