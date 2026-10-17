@@ -59,9 +59,14 @@ export function floorsIndex(chat, session, { busy = false } = {}) {
   for (const [story, native] of Object.entries(chat.regeneratedDshTurns || {})) {
     if (Number.isSafeInteger(Number(story)) && Number.isSafeInteger(Number(native))) nativeByStory.set(Number(story), Number(native))
   }
+  // 每个回合的候选 id：正文编辑/重新生成会在同一回合里写入新的 assistant 节点，
+  // 页面上渲染出来的可能是原始节点，也可能是替换节点。给每个出现过的 id 都挂一份
+  // 楼层事实，客户端拿哪个都能查得到——这是"有的楼层有按钮、有的没有"的正解。
+  const replyIdsByTurn = new Map()
+  const inputIdsByTurn = new Map()
   const lastReply = new Map()
   const lastInput = new Map()
-  // 玩家输入按 surface 顺序收集：连续两条输入（例如两次"继续推进剧情"）时，
+  // 玩家输入按时间顺序收集：连续两条输入（例如两次"继续推进剧情"）时，
   // 只看 turn 的映射会把先出现的那条漏掉，而按顺序配对能逐条对上。
   const inputNodes = []
   const visibleTurns = new Set()
@@ -74,20 +79,27 @@ export function floorsIndex(chat, session, { busy = false } = {}) {
       currentTurn = Math.max(0, Number(event.data?.turn) || 0)
       continue
     }
-    if (!nodes.has(event.seq)) continue
+    const onSurface = nodes.has(event.seq)
+    const isInput = event.type === 'user/message' && event.data?.id && isTurnInput(event.data)
     // 顺序收集先做：首条玩家输入可能排在它所属回合的 turn/start 之前，
-    // 按 turn 反查会漏掉它，但它在 surface 上的次序仍然有效。
-    if (event.type === 'user/message' && event.data?.id && isTurnInput(event.data)) {
-      inputNodes.push({ id: String(event.data.id), seq: event.seq })
-    }
+    // 按 turn 反查会漏掉它，但它在时间线上的次序仍然有效。
+    if (isInput && onSurface) inputNodes.push({ id: String(event.data.id), seq: event.seq })
     const stamped = Number(event.data?.turn)
     const turn = Number.isSafeInteger(stamped) && stamped > 0 ? stamped : currentTurn
     if (!Number.isSafeInteger(turn) || turn < 1) continue
     if (event.type === 'assistant/message' && event.data?.message?.source?.kind === 'model' && event.data.message.id) {
-      lastReply.set(turn, { id: String(event.data.message.id), seq: event.seq })
-      visibleTurns.add(turn)
-    } else if (event.type === 'user/message' && event.data?.id && isTurnInput(event.data)) {
-      lastInput.set(turn, { id: String(event.data.id), seq: event.seq })
+      const id = String(event.data.message.id)
+      lastReply.set(turn, { id, seq: event.seq, onSurface })
+      if (!replyIdsByTurn.has(turn)) replyIdsByTurn.set(turn, [])
+      const ids = replyIdsByTurn.get(turn)
+      if (!ids.includes(id)) ids.push(id)
+      if (onSurface) visibleTurns.add(turn)
+    } else if (isInput) {
+      const id = String(event.data.id)
+      lastInput.set(turn, { id, seq: event.seq, onSurface })
+      if (!inputIdsByTurn.has(turn)) inputIdsByTurn.set(turn, [])
+      const nodesForTurn = inputIdsByTurn.get(turn)
+      if (!nodesForTurn.some(node => node.id === id)) nodesForTurn.push({ id, seq: event.seq })
     }
   }
   const chatInputCount = messages.filter(message => message && message.role === 'user').length
@@ -126,10 +138,11 @@ export function floorsIndex(chat, session, { busy = false } = {}) {
     const messageId = located.id
     // 顺序配对取到的节点本身就在 surface 上，不需要再按 turn 反查。
     const inContext = ordered !== undefined || visibleTurns.has(storyTurn) || visibleTurns.has(nativeTurn)
+    // 不在当前上下文里的楼层（被压缩 / 已移出 surface）不提供控件入口。
+    if (!inContext) return
     const rescued = isRescuedHistoryMessage(chat, message)
-    const editable = inContext && !busy && !rescued
+    const editable = !busy && !rescued
     const reason = rescued ? '存档救援导入的历史不可操作，请发送新消息继续'
-      : !inContext ? '这一楼已不在当前模型上下文中（可能已被压缩）'
       : busy ? '请等待当前生成或后台处理完成后再操作'
       : ''
     const floor = {
@@ -145,6 +158,17 @@ export function floorsIndex(chat, session, { busy = false } = {}) {
       ...(greeting ? { greeting: true } : {})
     }
     byMessageId[messageId] = floor
+    // 同一回合里换过的节点（原始 / 正文编辑替换 / 重新生成）都指向这同一楼。
+    // 只对仍在上下文里的回合展开：被压缩掉的回合不该留下控件入口。
+    const candidateIds = message.role === 'user' ? inputIdsByTurn : replyIdsByTurn
+    if (inContext) for (const turn of [storyTurn, nativeTurn]) {
+      for (const candidate of candidateIds.get(turn) || []) {
+        const id = typeof candidate === 'string' ? candidate : candidate.id
+        if (!Object.hasOwn(byMessageId, id)) byMessageId[id] = floor
+        // 玩家节点只带 seq：同一回合出现过的每个输入 seq 都要能查到这一楼。
+        if (typeof candidate !== 'string' && !Object.hasOwn(bySeq, String(candidate.seq))) bySeq[String(candidate.seq)] = floor
+      }
+    }
     // 同一 seq 只对应一个楼层，重复写入说明映射错位，保留首次的即可。
     if (!Object.hasOwn(bySeq, String(located.seq))) bySeq[String(located.seq)] = floor
   })

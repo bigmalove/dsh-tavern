@@ -790,7 +790,7 @@
 					setBusy(true);
 					try {
 						const result = await rpc("deleteFloorMessage", { index: floor.index, turn: floor.turn, role: floor.role }, props.sessionId);
-						liveTavernView.setView(props.sessionId, result.view);
+						applyTavernResultView(props.sessionId, result.view);
 						notifyTavernDataChanged(["sessions"], "play-controls");
 						tavernCoordination.invalidate(props.sessionId);
 					} catch (error) { tavernErrorHub.report("删除消息", error); }
@@ -851,7 +851,7 @@
 				setBusy(true);
 				try {
 					const result = await rpc("deleteFloorVersion", { index: floor.index, turn: floor.turn, swipeId: current, token: floor.token }, props.sessionId);
-					liveTavernView.setView(props.sessionId, result.view);
+					applyTavernResultView(props.sessionId, result.view);
 					notifyTavernDataChanged(["sessions"], "play-controls");
 					tavernCoordination.invalidate(props.sessionId);
 				} catch (error) { tavernErrorHub.report("删除正文版本", error); }

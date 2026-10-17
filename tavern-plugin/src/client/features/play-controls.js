@@ -735,7 +735,7 @@
                 setBusy(true);
                 try {
                     const result = await rpc("undoFloorDeletion", {}, props.sessionId);
-                    liveTavernView.setView(props.sessionId, result && result.view);
+                    applyTavernResultView(props.sessionId, result && result.view);
                     notifyTavernDataChanged(["sessions"], "play-controls");
                 } catch (error) { tavernErrorHub.report("撤销删除", error); }
                 finally { setBusy(false); liveTavernView.invalidate(props.sessionId); tavernCoordination.invalidate(props.sessionId); }
@@ -775,7 +775,7 @@
 				setBodyEditPanel(Object.assign({}, panel, { busy: true, error: "" }));
 				try {
 					const result = await rpc("saveBodyEdit", { token: panel.edit.token, index: panel.edit.index, turn: panel.edit.turn, role: panel.edit.role, latest: panel.edit.latest === true, texts: panel.texts }, props.sessionId);
-					liveTavernView.setView(props.sessionId, result.view);
+					applyTavernResultView(props.sessionId, result.view);
 					notifyTavernDataChanged(["sessions"], "play-controls");
 					tavernCoordination.invalidate(props.sessionId);
 					setBodyEditPanel(null);
@@ -1253,7 +1253,7 @@
                     sessionId: props.sessionId, storage: window.localStorage, hiddenTurns: hiddenTurns, replayTurn: replayTurn,
                     onToggle: !Array.isArray(hiddenTurns) ? undefined : async function (turn, hidden) {
                         const result = await rpc("setFailedErrorVisibility", { sessionId: props.sessionId, turn: turn, hidden: hidden });
-                        liveTavernView.setView(props.sessionId, result.view);
+                        applyTavernResultView(props.sessionId, result.view);
                     },
                     onReplay: replayTurn === null ? undefined : async function () {
                         try { await submitFailedTurnReplay(props.sessionId); }

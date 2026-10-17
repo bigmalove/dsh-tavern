@@ -2295,7 +2295,11 @@ export async function apply(ctx) {
   async function presentStory(chat) {
     const window = chat?.sessionId ? await readOpeningWindow(chat.sessionId, templateHistoryFrom.get(chat.sessionId)) : null
     if (window) return projectOpeningWindow(window)
-    const full = Array.isArray(chat?.messages) && !isScopedMessages(chat.messages) ? chat : await readChat(chat.id)
+    // 写入类 RPC 传回来的 Chat 可能只有头部（messages 为空或稀疏），
+    // 直接投影会得到一份"没有楼层表、没有正文"的空视图——客户端把它当成
+    // 当前视图，按钮就整排消失、正文也不刷新。缺消息时一律重新读全量。
+    const complete = Array.isArray(chat?.messages) && chat.messages.length > 0 && !isScopedMessages(chat.messages)
+    const full = complete ? chat : await readChat(chat.id)
     return view(full, await readChatCard(full))
   }
   async function projectOpeningWindow(window, options = {}) {
