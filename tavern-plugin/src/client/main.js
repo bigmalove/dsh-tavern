@@ -750,19 +750,13 @@ window.__ModuleLoader__.load({
 		// 的观察者也要用同一份，否则两边各藏一份、互相对不上。
 		const tavernHistoryProjection = createTurnHistoryProjection();
 
-		// 写入类 RPC 返回的视图可能是"只有头部"的投影（没有正文、没有楼层表）。
-		// 直接 setView 会让整排楼层按钮消失、正文也不刷新，所以这种视图一律丢弃，
-		// 改为让缓存失效、重新走一次完整读取。
+		// 写入类 RPC 返回的视图来自"只有头部"的 Chat（messages 为空或稀疏），
+		// 用它直接 setView 会让整排楼层按钮消失、正文也不刷新。这里一律不采纳
+		// 返回值，改为让缓存失效、重新走一次完整读取——只有落盘后的全量投影才可信。
 		function applyTavernResultView(sessionId, view) {
-			const previous = liveTavernView.getSnapshot(sessionId).view;
-			const next = view && typeof view === "object" ? view : null;
-			const bodyMode = next && ["story", "script", "writing"].includes(String(next.mode || ""));
-			const previousFloors = previous && previous.floorsByMessageId ? Object.keys(previous.floorsByMessageId).length : 0;
-			const nextFloors = next && next.floorsByMessageId ? Object.keys(next.floorsByMessageId).length : 0;
-			const degraded = !next || (bodyMode && previousFloors > 0 && nextFloors === 0);
-			if (degraded) { liveTavernView.invalidate(sessionId); return previous || null; }
-			liveTavernView.setView(sessionId, next);
-			return next;
+			void view;
+			liveTavernView.invalidate(sessionId);
+			return liveTavernView.getSnapshot(sessionId).view || null;
 		}
 
 // @include features/assistant-renderer.js

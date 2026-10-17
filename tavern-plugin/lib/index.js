@@ -2190,13 +2190,38 @@ export async function apply(ctx) {
     const floors = floorsForChat(chat, activity)
     return { floorsByMessageId: floors.byMessageId, floorsBySeq: floors.bySeq }
   }
-  function volatileSessionViewFields(chat, activity, changes) {
-    return { ...sessionStateView.volatile(chat, activity, changes), forkTurnsByMessageId: forkTurnsForChat(chat), ...floorsViewFields(chat, activity) }
+  // 缓存/增量投影拿到的 Chat 可能是被裁剪的稀疏消息（只有占位），拿它算楼层表会把
+  // 版本数算成 1（页面就显示 1/1）。这类投影一律沿用上一次完整投影的结果，只在
+  // 忙碌状态变化时改可编辑标记；真正的正文变化由写操作强制重拉完整视图。
+  function carryFloors(previous, activity) {
+    const busy = Boolean(activity && activity.busy)
+    const source = previous && previous.floorsByMessageId
+    if (!source || typeof source !== 'object') return {}
+    const byMessageId = {}
+    const byIndex = new Map()
+    for (const [id, floor] of Object.entries(source)) {
+      if (!floor || typeof floor !== 'object') continue
+      const next = busy && floor.editable === true
+        ? { ...floor, editable: false, reason: '请等待当前生成或后台处理完成后再操作' }
+        : (busy ? floor : (floor.reason === '请等待当前生成或后台处理完成后再操作'
+          ? { ...floor, editable: true, reason: '' } : floor))
+      byMessageId[id] = next
+      byIndex.set(next.index, next)
+    }
+    const bySeq = {}
+    for (const [seq, floor] of Object.entries(previous.floorsBySeq || {})) {
+      bySeq[seq] = floor && byIndex.has(floor.index) ? byIndex.get(floor.index) : floor
+    }
+    return { floorsByMessageId: byMessageId, floorsBySeq: bySeq }
+  }
+  function volatileSessionViewFields(chat, activity, changes, previous) {
+    const floors = previous ? carryFloors(previous, activity) : floorsViewFields(chat, activity)
+    return { ...sessionStateView.volatile(chat, activity, changes), forkTurnsByMessageId: forkTurnsForChat(chat), ...floors }
   }
 
   async function projectCachedSessionView(chat, previous, activity) {
     const mode = chat.mode || 'story'
-    const reused = Object.assign({}, previous, volatileSessionViewFields(chat, activity, {baseRevision:chat._storageRevision,indices:[],layoutChanged:false}))
+    const reused = Object.assign({}, previous, volatileSessionViewFields(chat, activity, {baseRevision:chat._storageRevision,indices:[],layoutChanged:false}, previous))
     if (mode === 'script') reused.scriptProgress = await scriptProgressOf(chat)
     return reused
   }
@@ -2214,7 +2239,7 @@ export async function apply(ctx) {
     const mode = chat.mode || 'story'
     const previousMessages = previous.tavernHelper.messages
     const changes = {baseRevision:previous.tavernHelper.stateRevision,indices:[...dirtyMessageIndices],layoutChanged,changedHeaderFields}
-    const next = Object.assign({}, previous, volatileSessionViewFields(chat, activity, changes), {
+    const next = Object.assign({}, previous, volatileSessionViewFields(chat, activity, changes, previous), {
       posture: chat.posture || '',
       guides: Array.isArray(chat.guides) ? chat.guides : [],
       // Header state a background task rewrites without touching any message.
