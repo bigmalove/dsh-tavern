@@ -13994,25 +13994,28 @@ function bindTavernFontZoom(node, win) {
 				} catch (err) { setError(String(err && err.message || err)); }
 				finally { setBusy(false); }
 			}
-			async function forkConversation(item, currentTitle, turn) {
+			// target: { sessionId, chatId, mode }. Only the Session is required — the server resolves
+			// the Chat from it, so a fork never depends on the sidebar list being up to date.
+			async function forkConversation(target, currentTitle, turn) {
 				setMenuSession(null);
 				setBusy(true); setError("");
 				let targetSessionId = "";
 				let forkCreated = false;
 				try {
-					const plan = await call("prepareConversationFork", { chatId: item.chatId, sessionId: item.sessionId, turn: Number(turn) || 0 });
-					targetSessionId = await props.conversationHost.forkSession(item.sessionId, plan.atSeq);
-					await call("forkChat", {
-						chatId: item.chatId,
-						sessionId: item.sessionId,
+					const plan = await call("prepareConversationFork", { chatId: target.chatId || "", sessionId: target.sessionId, turn: Number(turn) || 0 });
+					targetSessionId = await props.conversationHost.forkSession(target.sessionId, plan.atSeq);
+					const receipt = await call("forkChat", {
+						chatId: target.chatId || "",
+						sessionId: target.sessionId,
 						targetSessionId: targetSessionId,
 						turn: plan.turn, sourceRevision: plan.sourceRevision, atSeq: plan.atSeq
 					});
 					forkCreated = true;
-					const forkTitle = (currentTitle || item.cardName + "的新对话") + " · 分支";
+					const forkTitle = (currentTitle || "对话") + " · 分支";
 					try { await props.renameSession(targetSessionId, forkTitle); }
 					catch (renameError) { console.warn("dsh-tavern: 分叉已创建，但自动命名失败", renameError); }
-					const pending = { sessionId: targetSessionId, targetMode: item.mode };
+					// The fork inherits the source mode (story / script / writing); trust the server.
+					const pending = { sessionId: targetSessionId, targetMode: (receipt && receipt.fork && receipt.fork.mode) || target.mode || "story" };
 					setPendingOpen(pending);
 					await finishPendingOpen(pending);
 				} catch (err) {
@@ -14026,13 +14029,19 @@ function bindTavernFontZoom(node, win) {
 			React.useEffect(function () {
 				return tavernConversationForkRequests.bind(function (request) {
 					if (busy) throw new Error("当前有其他操作正在进行，请稍后再分叉");
-					const item = history.find(function (entry) { return entry.sessionId === request.sessionId && isPlayMode(entry.mode); });
-					if (!item) throw new Error("找不到当前游玩存档");
-					const summary = summaries[item.sessionId];
-					const title = item.title || (summary && summary.displayTitle ? summary.displayTitle : item.cardName + "的新对话");
-					return forkConversation(item, title, request.turn);
+					// Forking is about the Session, not about a saved 游玩 record: story, script and
+					// writing sessions all carry a Chat with body text. The sidebar list is not a
+					// precondition either — it drops SillyTavern-compatibility games and sessions that
+					// were created after the last refresh.
+					const item = history.find(function (entry) { return entry.sessionId === request.sessionId && isBodyMode(entry.mode); });
+					const summary = summaries[request.sessionId];
+					const mode = (item && item.mode) || tavernSessionModes.values[request.sessionId] || (uiMode === "card" ? "card" : uiMode === "writing" ? "writing" : "story");
+					// Card games have no body to fork from; the button never shows for them.
+					if (mode === "card") throw new Error("卡片对话没有正文，不能分叉");
+					const title = (item && item.title) || (summary && summary.displayTitle) || (item && item.cardName ? item.cardName + "的新对话" : "对话");
+					return forkConversation({ sessionId: request.sessionId, chatId: (item && item.chatId) || "", mode: mode }, title, request.turn);
 				});
-			}, [history, summaries, busy]);
+			}, [history, summaries, busy, uiMode]);
 			async function checkUpdate() {
 				const status = updateStatusRef.current;
 				if (updateActionRef.current.pending || isUpdateBusy(status) || ["restart-required", "installed-restart-required", "package-managed"].includes(status.phase)) return;

@@ -17,6 +17,8 @@ export function conversationForkReceipt(chat, replayed = {}) {
   return {
     chatId: str(chat && chat.id),
     sessionId: str(chat && chat.sessionId),
+    // The fork keeps the source mode (story / script / writing); the client opens it in that mode.
+    mode: str(chat && chat.mode) || 'story',
     lastTurn: Math.max(0, Number(replayed.lastTurn) || 0),
     messageCount: Math.max(0, Number(replayed.messageCount) || 0)
   }
@@ -84,7 +86,7 @@ export function forkConversationChat(source, options = {}) {
 
 export function assertConversationForkable(chat, options = {}) {
   if (!chat) throw new Error('找不到要分叉的对话')
-  if (!['story', 'script', 'writing'].includes(str(chat.mode) || 'story')) throw new Error('只有游玩对话可以分叉')
+  if (!['story', 'script', 'writing'].includes(str(chat.mode) || 'story')) throw new Error('卡片对话没有正文，不能分叉')
   // A historical snapshot may have been saved while the source was regenerating a later
   // turn (its pre-regeneration checkpoint). Its content up to the fork turn is settled; only
   // the live source's in-flight work blocks forking.
