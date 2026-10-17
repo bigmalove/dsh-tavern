@@ -145,3 +145,113 @@ test('插件整段替换正文：HTML 块必须原样保留，只改文字', asy
   await h.editor.replaceText(h.session.id, '雨停了，灯亮了。\n\n' + block)
   assert.equal(h.chat.messages[1].sourceText, '雨停了，灯亮了。\n\n' + block)
 })
+
+// Three committed rounds: the middle reply, the player input that opened it and
+// the card greeting are all editable; only the latest round owns the scene state.
+function history() {
+  let session = Session.create('body-floor-test')
+  appendSessionEvent(session, 'assistant/message', { turn: 1, step: 1, message: { id: 'opening', role: 'assistant', content: [{ type: 'text', text: '开场白' }], source: { kind: 'model', provider: 'dsh-tavern', model: 'character-card' } } }, { surfaceOp: 'append', sourceEventSeqs: [] })
+  for (const [turn, input, body] of [[2, '推门', '第一段正文'], [3, '继续', '第二段正文'], [4, '追问', '第三段正文']]) {
+    appendSessionEvent(session, 'user/message', { id: 'u' + turn, turn, role: 'user', content: [{ type: 'text', text: input }], source: { kind: 'user' } }, { surfaceOp: 'append' })
+    appendSessionEvent(session, 'assistant/message', { turn, step: 1, message: { id: 'a' + turn, role: 'assistant', content: [{ type: 'text', text: body }], source: { kind: 'model', provider: 'fixture', model: 'fixture' } } }, { surfaceOp: 'append', sourceEventSeqs: [] })
+  }
+  let chat = {
+    id: 'chat', sessionId: session.id, mode: 'story', _storageRevision: 1, timeline: { schemaVersion: 1, branchId: 'b1', revision: 7, checkpoints: [], participants: { background: { role: 'background', lifetime: 'chat', sessionId: 'bg', status: 'ready', boundary: 4 } }, operations: {}, updatedAt: 0 },
+    posture: '第三段的姿势', settleStatus: 'done', lastSettle: { ts: 1, posture: true, raw: '第三段' }, candidates: ['继续'], variables: { hp: 31 },
+    messages: [
+      { role: 'assistant', greeting: true, text: '开场白', sourceText: '开场白', swipes: ['开场白', '备用开场'], swipeId: 0 },
+      { role: 'user', text: '推门' },
+      { role: 'assistant', turn: 2, text: '第一段正文', sourceText: '第一段正文', swipes: ['第一段正文'], swipeId: 0, variables: [{ hp: 10 }] },
+      { role: 'user', text: '继续' },
+      { role: 'assistant', turn: 3, text: '第二段正文', sourceText: '第二段正文', swipes: ['第二段正文'], swipeId: 0, variables: [{ hp: 20 }] },
+      { role: 'user', text: '追问' },
+      { role: 'assistant', turn: 4, text: '第三段正文', sourceText: '第三段正文', swipes: ['第三段正文'], swipeId: 0, variables: [{ hp: 31 }] }
+    ]
+  }
+  const agent = { get session() { return session }, phase: { kind: 'idle', lastTurn: 4 } }
+  let busy = false
+  const options = {
+    chats: { forSession: async () => structuredClone(chat), update: async (_id, fn) => { chat = fn(structuredClone(chat)); chat._storageRevision++; return structuredClone(chat) } },
+    sessions: { get: () => agent, flush: async () => {} },
+    timeline: createStoryTimeline({ id: prefix => prefix + '-fixed', now: () => 5 }),
+    activity: () => ({ busy }), project: async text => projectReplyLayers(text), present: async value => structuredClone(value)
+  }
+  return { editor: createBodyEditor(options), get chat() { return chat }, get session() { return session }, agent, busy(value) { busy = value },
+    change(fn) { fn(chat) } }
+}
+
+test('编辑旧楼层只换该楼文字，当前姿势、结算与变量不动', async () => {
+  const h = history()
+  const edit = await h.editor.read(h.session.id, { index: 4, turn: 3, role: 'assistant' })
+  assert.equal(edit.role, 'assistant')
+  assert.equal(edit.latest, false)
+  assert.deepEqual(edit.parts.map(part => part.kind), ['text'])
+  const view = await h.editor.save(h.session.id, { index: 4, turn: 3, role: 'assistant', token: edit.token, texts: ['第二段改写'] })
+  assert.equal(view.messages[4].text, '第二段改写')
+  assert.equal(view.messages[4].sourceText, '第二段改写')
+  assert.equal(h.chat.posture, '第三段的姿势')
+  assert.equal(h.chat.settleStatus, 'done')
+  assert.deepEqual(h.chat.lastSettle, { ts: 1, posture: true, raw: '第三段' })
+  assert.deepEqual(h.chat.variables, { hp: 31 })
+  assert.equal(h.chat.timeline.revision, 8)
+  // 原生消息面只替换这一楼；后台参与者必须重新对齐到新文字。
+  assert.deepEqual(h.session.deriveMessages().map(message => message.content[0].text), ['开场白', '推门', '第一段正文', '继续', '第二段改写', '追问', '第三段正文'])
+  assert.equal(h.chat.timeline.participants.background.status, 'needs-rewind')
+  assert.equal(h.chat.candidates, null)
+})
+
+test('编辑玩家输入同步原生 user 消息，角色与轮次校验拒绝错楼层', async () => {
+  const h = history()
+  const edit = await h.editor.read(h.session.id, { index: 3, turn: 3, role: 'user' })
+  assert.equal(edit.turn, 3)
+  assert.deepEqual(edit.parts, [{ kind: 'text', text: '继续' }])
+  await h.editor.save(h.session.id, { index: 3, turn: 3, role: 'user', token: edit.token, texts: ['继续走下去'] })
+  assert.equal(h.chat.messages[3].text, '继续走下去')
+  const texts = h.session.deriveMessages().map(message => message.content[0].text)
+  assert.equal(texts[3], '继续走下去')
+  // 角色与楼层不符、轮次不符都拒绝，且不写入。
+  await assert.rejects(h.editor.read(h.session.id, { index: 3, turn: 3, role: 'assistant' }), /不存在或已变化/)
+  await assert.rejects(h.editor.read(h.session.id, { index: 4, turn: 2, role: 'assistant' }), /不存在或已变化/)
+  await assert.rejects(h.editor.read(h.session.id, { index: 5, turn: 3, role: 'assistant' }), /不存在或已变化/)
+})
+
+test('编辑开场白：开局后只换文字，版本数组与变量保持', async () => {
+  const h = history()
+  const edit = await h.editor.read(h.session.id, { index: 0, turn: 1, role: 'assistant' })
+  assert.equal(edit.latest, false)
+  await h.editor.save(h.session.id, { index: 0, turn: 1, role: 'assistant', token: edit.token, texts: ['新的开场白'] })
+  assert.equal(h.chat.messages[0].text, '新的开场白')
+  assert.deepEqual(h.chat.messages[0].swipes, ['新的开场白', '备用开场'])
+  assert.equal(h.chat.messages[0].swipeId, 0)
+  assert.equal(h.session.deriveMessages()[0].content[0].text, '新的开场白')
+  assert.equal(h.chat.messages[2].text, '第一段正文')
+})
+
+test('旧楼层编辑被压缩或忙碌时拒绝，token 随楼层内容变化', async () => {
+  const h = history()
+  const edit = await h.editor.read(h.session.id, { index: 4, turn: 3, role: 'assistant' })
+  h.busy(true)
+  await assert.rejects(h.editor.save(h.session.id, { index: 4, turn: 3, role: 'assistant', token: edit.token, texts: ['并发改'] }), /等待/)
+  h.busy(false)
+  h.change(chat => { chat.messages[4].sourceText = '别处改过'; chat.messages[4].text = '别处改过' })
+  await assert.rejects(h.editor.save(h.session.id, { index: 4, turn: 3, role: 'assistant', token: edit.token, texts: ['过时编辑'] }), /已变化/)
+  assert.equal(h.chat.messages[4].text, '别处改过')
+  // 楼层不在模型上下文里（这里把最后一楼的原生节点摘掉）时读写都拒绝。
+  h.session.surface.nodes.splice(6, 1)
+  await assert.rejects(h.editor.read(h.session.id, { index: 6, turn: 4, role: 'assistant' }), /不在当前上下文/)
+})
+
+test('未指定楼层时仍只编辑最后一轮（菜单路径向后兼容）', async () => {
+  const h = history()
+  const edit = await h.editor.read(h.session.id)
+  assert.equal(edit.index, 6)
+  assert.equal(edit.latest, true)
+  await h.editor.save(h.session.id, { token: edit.token, texts: ['第四段改写'] })
+  assert.equal(h.chat.messages[6].text, '第四段改写')
+  assert.equal(h.chat.posture, '')
+  assert.equal(h.chat.settleStatus, 'idle')
+  // 之后又追加了一条玩家输入：旧菜单持有的楼层不再是最后一轮。
+  h.change(chat => { chat.messages.push({ role: 'user', text: '新的行动' }) })
+  await assert.rejects(h.editor.read(h.session.id), /只能编辑最后一轮/)
+})
+

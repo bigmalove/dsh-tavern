@@ -2764,3 +2764,9 @@ body.dsh-tavern-shell-active [data-turn-tail] [data-slot="conversation.chat.assi
 .dsh-tavern-message-swipe:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); }
 .dsh-tavern-message-swipe:disabled { cursor: default; opacity: .4; }
 .dsh-tavern-message-swipe-count { align-items: center; justify-content: center; min-width: 26px; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; font-variant-numeric: tabular-nums; user-select: none; }
+/* 楼层编辑按钮：与版本切换一样挤在助手操作栏里，需要单独放行。 */
+body.dsh-tavern-shell-active [data-turn-tail] [data-slot="conversation.chat.assistant-actions"] > .dsh-tavern-message-edit { display: inline-flex !important; }
+.dsh-tavern-message-edit { display: inline-flex; align-items: center; justify-content: center; width: calc(28px + var(--dsh-content-font-delta, 0px)); height: calc(28px + var(--dsh-content-font-delta, 0px)); padding: 6px; border: 0; border-radius: 999px; background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
+.dsh-tavern-message-edit:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); }
+.dsh-tavern-message-edit:disabled { cursor: wait; opacity: .5; }
+.dsh-tavern-user-actions .dsh-tavern-message-edit { width: 24px; height: 24px; padding: 4px; border-radius: 6px; }

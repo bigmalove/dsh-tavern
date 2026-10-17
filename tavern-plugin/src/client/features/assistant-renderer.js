@@ -308,7 +308,7 @@
 				const time = Number.isFinite(Number(data.time)) ? new Date(Number(data.time)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
 				return React.createElement("div", { className: "dsh-tavern-user-row" },
 					React.createElement("div", { className: "dsh-tavern-user-stack" }, renderedImages, (text !== "" || extras.length > 0) ? React.createElement("div", { className: "dsh-tavern-user-bubble" }, liveState.view?.inputTemplateDisplays?.[turn] ? React.createElement(TavernMessageFrame, {content:liveState.view.inputTemplateDisplays[turn],sessionId:props.sessionId,turn:turn,partIndex:"user-template",frameOwner:props.frameOwner,eager:true}) : React.createElement("div", { style: { whiteSpace: "pre-wrap" } }, text), extras) : null),
-					React.createElement("div", { className: "dsh-tavern-user-actions" }, time ? React.createElement("span", null, time) : null, React.createElement(DshUi.Tooltip, { label: copied ? "已复制" : "复制", side: "bottom" }, React.createElement("button", { type: "button", className: "dsh-tavern-user-copy", "aria-label": copied ? "已复制" : "复制", onClick: copy }, React.createElement(copied ? DshUi.IconCheckOutline16 : DshUi.IconCopyOutline16, null))))
+					React.createElement("div", { className: "dsh-tavern-user-actions" }, time ? React.createElement("span", null, time) : null, React.createElement(TavernFloorEditButton, { sessionId: props.sessionId, messageId: data.id, variant: "user" }), React.createElement(DshUi.Tooltip, { label: copied ? "已复制" : "复制", side: "bottom" }, React.createElement("button", { type: "button", className: "dsh-tavern-user-copy", "aria-label": copied ? "已复制" : "复制", onClick: copy }, React.createElement(copied ? DshUi.IconCheckOutline16 : DshUi.IconCopyOutline16, null))))
 				);
 			}
 			// While a picture is being made: a placeholder frame where it will appear
@@ -728,6 +728,34 @@
 				const shown = Boolean(view && isBodyMode(view.mode) && view.releaseCapabilities && view.releaseCapabilities.sceneImages && turn > 0);
 				return shown ? React.createElement(SceneImageAction, { key: props.sessionId + ":" + turn, sessionId: props.sessionId, turn: turn }) : null;
 			}
+			// 任意未被压缩的楼层都能改文字：助手正文、开场白与玩家输入。
+			// 只改这一楼的文字，不重跑模型、不重算结算。
+			function TavernFloorEditButton(props) {
+				const liveState = useScopedLiveTavernView(props.sessionId, String(props.messageId || ""), [
+					["mode"], ["floorsByMessageId", String(props.messageId || "")], ["activity", "busy"]
+				]);
+				const view = liveState.view;
+				const floor = view && view.floorsByMessageId ? view.floorsByMessageId[String(props.messageId || "")] : null;
+				const [busy, setBusy] = React.useState(false);
+				if (!floor || !isBodyMode(view && view.mode) || floor.editable !== true) return null;
+				async function open() {
+					if (busy) return;
+					setBusy(true);
+					try {
+						const result = await rpc("getBodyEdit", { index: floor.index, turn: floor.turn, role: floor.role }, props.sessionId);
+						const edit = result.edit;
+						setBodyEditPanel({ sessionId: props.sessionId, edit: edit, texts: edit.parts.filter(function (part) { return part.kind === "text"; }).map(function (part) { return part.text; }), busy: false, error: "" });
+					} catch (error) { tavernErrorHub.report("编辑正文", error); }
+					finally { setBusy(false); }
+				}
+				const label = floor.greeting === true ? "编辑开场白" : floor.role === "user" ? "编辑这条输入" : "编辑这段正文";
+				const className = props.variant === "user" ? "dsh-tavern-user-copy dsh-tavern-message-edit" : "dsh-tavern-message-edit";
+				return React.createElement(DshUi.Tooltip, { label: label, side: "bottom" },
+					React.createElement("button", { type: "button", className: className, "aria-label": label, disabled: busy, onClick: open },
+						React.createElement("svg", { width: 15, height: 15, viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: 1.4, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true },
+							React.createElement("path", { d: "M11.2 2.6l2.2 2.2-8.2 8.2-2.9.7.7-2.9z" }),
+							React.createElement("path", { d: "M9.7 4.1l2.2 2.2" }))));
+			}
 			function TavernSwipeControl(props) {
 			const liveState = useScopedLiveTavernView(props.sessionId, String(props.messageId || ""), [
 				["mode"], ["floorsByMessageId", String(props.messageId || "")], ["activity", "busy"], ["regenInProgress"]
@@ -806,6 +834,12 @@
 						priority: -1
 					}, TavernUserNodeView); });
 				}, "dsh-tavern: raw user message renderer");
+			input.ctx.effect(function () {
+				return input.slots.inject("conversation.chat.assistant-actions", function () { return input.slots.register({
+					name: "conversation.chat.assistant-actions", id: "dsh-tavern-floor-edit", order: 9,
+					inject: function (sessionId) { return { sessionId: sessionId }; }
+				}, TavernFloorEditButton); });
+			}, "dsh-tavern: floor text edit action");
 			input.ctx.effect(function () {
 				return input.slots.inject("conversation.chat.assistant-actions", function () { return input.slots.register({
 					name: "conversation.chat.assistant-actions", id: "dsh-tavern-swipe", order: 10,

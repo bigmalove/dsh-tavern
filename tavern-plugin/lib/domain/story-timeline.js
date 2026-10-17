@@ -543,6 +543,27 @@ export function createStoryTimeline(options = {}) {
       chat.candidateAgent = null
       value = { status: 'edited', revision: chat.timeline.revision }
     }
+    else if (intent.kind === 'body.floor') {
+      // An older floor (or the greeting, or a player input) changed text only.
+      // The scene's variables and settlement belong to the latest round and are
+      // left alone; only what already read that text has to catch up.
+      const index = Number(intent.index)
+      const message = chat.messages[index]
+      const role = intent.role === 'user' ? 'user' : 'assistant'
+      if (!Number.isSafeInteger(index) || index < 0 || !message || message.role !== role) throw new Error('正文楼层不存在或已变化')
+      const turn = role === 'user'
+        ? Number(chat.messages[index + 1]?.turn) || Number(intent.turn) || 0
+        : Number(message.turn) || (message.greeting === true ? 1 : 0)
+      if (!Number.isSafeInteger(turn) || turn < 1 || turn !== Number(intent.turn)) throw new Error('正文楼层不存在或已变化')
+      Object.assign(message, intent.patch)
+      delete message.displayRuntime
+      chat.timeline.revision++
+      chat.timeline.updatedAt = now()
+      rewindParticipants(chat)
+      chat.candidateAgent = null
+      chat.candidates = null
+      value = { status: 'edited', revision: chat.timeline.revision }
+    }
     else if (intent.kind === 'body.swipe') {
       // Switching one floor's version: the floor keeps its turn and only its
       // projection changes. The latest floor carries the story's variables and

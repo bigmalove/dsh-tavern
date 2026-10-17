@@ -758,7 +758,7 @@
 			async function save() {
 				setBodyEditPanel(Object.assign({}, panel, { busy: true, error: "" }));
 				try {
-					const result = await rpc("saveBodyEdit", { token: panel.edit.token, texts: panel.texts }, props.sessionId);
+					const result = await rpc("saveBodyEdit", { token: panel.edit.token, index: panel.edit.index, turn: panel.edit.turn, role: panel.edit.role, texts: panel.texts }, props.sessionId);
 					liveTavernView.setView(props.sessionId, result.view);
 					notifyTavernDataChanged(["sessions"], "play-controls");
 					tavernCoordination.invalidate(props.sessionId);
@@ -766,8 +766,9 @@
 				} catch (error) { setBodyEditPanel(Object.assign({}, panel, { busy: false, error: String(error.message || error) })); }
 			}
 			let textIndex = 0;
-			return h("div", { className: "dsh-tavern-question", role: "region", "aria-label": "编辑正文" },
-				h("div", { className: "dsh-tavern-question-head" }, h("span", null, "编辑正文")),
+			const label = panel.edit.greeting === true ? "编辑开场白" : panel.edit.role === "user" ? "编辑这条输入" : "编辑正文";
+			return h("div", { className: "dsh-tavern-question", role: "region", "aria-label": label },
+				h("div", { className: "dsh-tavern-question-head" }, h("span", null, label)),
 				panel.error ? h("div", { className: "dsh-tavern-choice-error", role: "alert" }, panel.error) : null,
 				h("div", { style: { maxHeight: "50vh", overflowY: "auto" } }, panel.edit.parts.map(function (part, index) {
 					if (part.kind === "html") return h("div", { key: index, className: "dsh-tavern-question-sub" }, "HTML 内容保持原样");
