@@ -74,7 +74,16 @@ export function floorsIndex(chat, session, { busy = false } = {}) {
   // which round it belongs to.
   let currentTurn = 0
   const nodes = new Set(session.surface?.nodes || [])
+  // 宿主的聊天页只渲染 append 来源的消息，替换副本只给模型看（dsh-client-ui-chat 的
+  // isAppendSurfaceEvent）。正文编辑写出的是替换副本，所以页面上那一楼的节点永远是
+  // 最早 append 的那条。这里沿替换链记下每个节点的 append 来源，好让页面节点查得到楼层。
+  const originOf = new Map()
   for (const event of sessionEvents(session)) {
+    const op = event.surfaceOp
+    if (op && typeof op === 'object' && op.op === 'replace' && Number.isSafeInteger(Number(op.startSeq))) {
+      const start = Number(op.startSeq)
+      originOf.set(event.seq, originOf.get(start) ?? start)
+    }
     if (event.type === 'turn/start') {
       currentTurn = Math.max(0, Number(event.data?.turn) || 0)
       continue
@@ -161,11 +170,18 @@ export function floorsIndex(chat, session, { busy = false } = {}) {
       // Only the newest reply can grow a new version or re-run settlement.
       latest: message.role === 'assistant' && !greeting && index === latestIndex,
       token: floorToken(chat, message),
-      ...(greeting ? { greeting: true } : {})
+      ...(greeting ? { greeting: true } : {}),
+      // 页面显示的是 append 来源的原文节点，看不到替换副本；编辑过的玩家输入把
+      // 当前文字带给页面，否则改完页面上永远是原文。
+      ...(message.role === 'user' && originOf.has(located.seq) ? { text: typeof message.text === 'string' ? message.text : '' } : {})
     }
     byMessageId[messageId] = floor
     // 同一 seq 只对应一个楼层，重复写入说明映射错位，保留首次的即可。
     if (!Object.hasOwn(bySeq, String(located.seq))) bySeq[String(located.seq)] = floor
+    // 页面节点带的是 append 来源的 seq：替换过的楼层也要能按原始 seq 查到，
+    // 否则刷新后按钮就消失了。
+    const origin = originOf.get(located.seq)
+    if (origin !== undefined && !Object.hasOwn(bySeq, String(origin))) bySeq[String(origin)] = floor
     // 同一回合里换过的节点（原始 / 正文编辑替换 / 重新生成）也要指向这一楼，
     // 但留到所有楼层都认领完自己的节点之后再展开（见下面第二轮）。
     // 只对仍在上下文里的回合展开：被压缩掉的回合不该留下控件入口。

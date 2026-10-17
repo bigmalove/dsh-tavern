@@ -114,3 +114,19 @@ test('编辑中间一条输入之后，后面的输入楼层不错位', () => {
   assert.equal(bySeq[String(seqOf(session, 'tavern-body-edit:mid'))].index, 2)
   assert.equal(bySeq[String(seqOf(session, 'in:3'))].index, 4, '第三条输入必须仍指向自己那一楼')
 })
+
+// 宿主聊天页只渲染 append 来源的节点，替换副本只给模型看。页面上那一楼带的永远是
+// 原始 seq：楼层表必须按原始 seq 也查得到，并把编辑后的文字带给页面。
+// 否则改完页面不变，刷新后按钮消失（线上会话 session-90a0bc15 正是这样）。
+test('编辑过的玩家输入：按页面上的原始 seq 查得到楼层，并带回编辑后的文字', () => {
+  const { session, chat } = importedSession()
+  const original = seqOf(session, 'import:4')
+  replaceSessionSurface(session, 'user/message',
+    { id: 'tavern-body-edit:2', role: 'user', content: [{ type: 'text', text: '改过的第二条' }], source: { kind: 'user' } },
+    { start: original, end: original, sourceEventSeqs: [original] })
+  const edited = { ...chat, messages: chat.messages.map((message, index) => index === 2 ? { ...message, text: '改过的第二条' } : message) }
+  const { bySeq } = floorsIndex(edited, session, { busy: false })
+  assert.equal(bySeq[String(original)]?.index, 2, '页面节点的原始 seq 必须查得到这一楼')
+  assert.equal(bySeq[String(original)].text, '改过的第二条')
+  assert.equal(bySeq[String(seqOf(session, 'import:2'))].text, undefined, '没编辑过的楼层不带文字，照常显示原节点')
+})

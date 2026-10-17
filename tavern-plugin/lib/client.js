@@ -12692,8 +12692,12 @@ function bindTavernFontZoom(node, win) {
 				const turnRef = location && (location.kind === "turn" || location.kind === "step") ? location.turn : null;
 				const turn = turnRef ? Number(turnRef.turn) : 0;
 				const liveState = useScopedLiveTavernView(props.sessionId, String(data.time || ""), [["inputSources", String(turn)], ["inputTemplateDisplays", String(turn)]]);
+				// 宿主只渲染 append 来源的原文节点，正文编辑写的是替换副本：编辑过的楼层
+				// 由楼层表带回当前文字，否则改完页面上永远是原文。
+				const floorState = useScopedLiveTavernView(props.sessionId, "user-floor:" + String(data.seq), [["floorsBySeq", String(data.seq)]]);
+				const editedFloor = floorState.view && floorState.view.floorsBySeq ? floorState.view.floorsBySeq[String(data.seq)] : null;
 				const parts = userContentParts(data.content);
-				const text = tavernUserTextForTurn(liveState.view, turn, data.content);
+				const text = editedFloor && typeof editedFloor.text === "string" ? editedFloor.text : tavernUserTextForTurn(liveState.view, turn, data.content);
 				const [copied, setCopied] = React.useState(false);
 				const copyTimer = React.useRef(null);
 				React.useEffect(function () { return function () { if (copyTimer.current !== null) window.clearTimeout(copyTimer.current); }; }, []);
