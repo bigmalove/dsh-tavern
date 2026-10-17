@@ -139,31 +139,39 @@ test('卡片脚本在正文后写入的消息不会让这一轮无法回退，�
   assert.deepEqual(target.shadowedSeqs, [input.seq, reply.seq, script.seq])
 })
 
-test('工具正文重新生成连同回执一起替换，不留下缺少调用的工具结果', async () => {
-  const { planRegenerationSurface, locateRollbackSurface, regenerationProjection, applyRegenerationProjection } = await import('../tavern-plugin/lib/domain/rollback-surface.js')
-  const session = Session.create('regen-story-receipt')
+test('工具正文折叠成一条正文后，重新生成能整轮替换', async () => {
+  const { foldStorySubmission } = await import('../tavern-plugin/lib/domain/story-tool-submission.js')
+  const { planRegenerationSurface, locateRollbackSurface } = await import('../tavern-plugin/lib/domain/rollback-surface.js')
+  const session = Session.create('regen-story-folded')
   appendSessionEvent(session, 'turn/start', { turn: 1 })
   const input = appendSessionEvent(session, 'user/message', user('input-1'), { surfaceOp: 'append' })
-  const old = storyTurn(session, 1, 'old', '旧正文')
+  const submit = (turn, callId, text) => {
+    const call = appendSessionEvent(session, 'assistant/message', storyCall('call-' + callId, turn, callId, text), { surfaceOp: 'append' })
+    appendSessionEvent(session, 'tool/call', { turn, step: 1, callId, name: 'submit_story', arguments: JSON.stringify({ content: text }) })
+    const receipt = appendSessionEvent(session, 'tool/result', storyReceipt('receipt-' + callId, turn, callId, text), { surfaceOp: 'append', sourceEventSeqs: [call.seq] })
+    foldStorySubmission(session, { event: call, index: 0, receiptIndex: receipt.seq }, text)
+    return { call, receipt }
+  }
+  const old = submit(1, 'old', '旧正文')
+  appendSessionEvent(session, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+  // 折叠后只剩玩家输入与一条普通正文，回执不再占用消息面。
+  const folded = session.surface.nodes.map(Number)
+  assert.equal(folded.length, 2)
+  assert.ok(!folded.includes(old.call.seq) && !folded.includes(old.receipt.seq))
+  const rollback = locateRollbackSurface({ events: sessionEvents(session), nodes: session.surface.nodes })
+  assert.equal(rollback.endSeq, folded[1])
+
   const eventStart = sessionEvents(session).length
   appendSessionEvent(session, 'turn/start', { turn: 2 })
   const regen = appendSessionEvent(session, 'user/message', user('regen', 'dsh-tavern-regen'), { surfaceOp: 'append' })
-  const fresh = storyBody(session, 2, 'new', '新正文')
+  const fresh = submit(2, 'new', '新正文')
   appendSessionEvent(session, 'turn/end', { turn: 2, reason: { kind: 'completed' } })
-  assert.deepEqual(session.surface.nodes, [input.seq, old.call.seq, old.receipt.seq, regen.seq, fresh.call.seq, fresh.receipt.seq])
 
-  const plan = planRegenerationSurface({ events: sessionEvents(session), nodes: session.surface.nodes, oldAssistantSeq: old.call.seq, eventStart })
-  assert.deepEqual([plan.start, plan.end], [old.call.seq, fresh.receipt.seq])
-  assert.equal(plan.finalAssistantSeq, fresh.call.seq)
-  assert.deepEqual(plan.shadowedSeqs, [old.call.seq, old.receipt.seq, regen.seq, fresh.call.seq, fresh.receipt.seq])
-  assert.deepEqual(plan.cleanups, [])
-  // The old body's own receipt is consumed with its call; nothing dangles after it.
-  const rollback = locateRollbackSurface({ events: sessionEvents(session), nodes: session.surface.nodes })
-  assert.equal(rollback.endSeq, fresh.receipt.seq)
-
-  const projection = regenerationProjection(plan, { turn: 1, step: 1, message: { id: 'tavern-regen:op', role: 'assistant', content: [{ type: 'text', text: '新正文' }], source: { kind: 'model', provider: 'test', model: 'test' } } }, 'op')
-  applyRegenerationProjection(session, projection)
-  const visible = session.surface.nodes.map(seq => sessionEvents(session).find(event => event.seq === seq))
-  assert.deepEqual(visible.map(event => event.data.message?.id ?? event.data.id), ['input-1', 'tavern-regen:op'])
-  for (const gone of [old.call.seq, old.receipt.seq, regen.seq, fresh.call.seq, fresh.receipt.seq]) assert.ok(!session.surface.nodes.includes(gone))
+  const nodes = session.surface.nodes.map(Number)
+  assert.deepEqual(nodes, [input.seq, folded[1], regen.seq, nodes.at(-1)])
+  const plan = planRegenerationSurface({ events: sessionEvents(session), nodes, oldAssistantSeq: folded[1], eventStart })
+  assert.equal(plan.start, folded[1])
+  assert.equal(plan.end, nodes.at(-1))
+  // 旧回执早已在折叠时被遮蔽，清理范围里不得出现嬀孑回执。
+  assert.ok(!plan.shadowedSeqs.includes(fresh.receipt.seq))
 })

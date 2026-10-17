@@ -25,11 +25,12 @@ function harness() {
     useTavernSessionMode: () => 'story', latestTavernAssistantMessageId: () => 'reply',
     useLiveTavernView: () => ({ view: { canRollback, undoRollbackTurn: undoTurn, ...extraView } }),
     useTavernCoordination: () => ({ view: { activity } }),
-    describeTavernActivity: value => value, isPlayMode: () => true,
+    describeTavernActivity: value => value, isPlayMode: () => true, isBodyMode: () => true, isWritingMode: () => false,
     window: { confirm: () => { calls.push('confirm'); return true } },
     rpc: async () => { calls.push('rpc'); if (fail) throw new Error('本次回复未完成'); return { view: { rollbackWarning: warning } } },
     historyProjection: { rolledBack: () => calls.push('project'), restored: () => calls.push('restore') },
     setCandidatePanel() { calls.push('set-candidate-panel') }, setRegenPanel() { calls.push('set-regen-panel') }, setCandidateGuidePanel() { calls.push('set-guide-panel') },
+    setTavernBodyEditPanel() { calls.push('set-body-edit-panel') }, useTavernBodyEditPanel: () => null,
     liveTavernView: { invalidate: () => calls.push('refresh-view') },
     tavernCoordination: { invalidate: () => calls.push('refresh-activity') },
     notifyTavernDataChanged: () => calls.push('notify'),
@@ -80,12 +81,11 @@ test('开场白不显示正文重生成入口，正式玩家轮次完成后只�
   assert.deepEqual(h.buttons().map(button => button.children[0]), ['生成候选项'])
 })
 
-test('更多菜单第一项是当前对话的正文走工具调用开关', () => {
+test('更多菜单第一项是停止后台结算，正文编辑与回退同行', () => {
   const h = harness()
   const menu = h.more().children[1]
   assert.equal(menu.props.role, 'menu')
-  assert.deepEqual(menu.children.map(child => child.type.name).slice(0, 2), ['TavernStoryToolCallSetting', 'TavernStopBackgroundAction'])
-  assert.equal(menu.children[0].props.key, 'session')
+  assert.deepEqual(menu.children.map(child => child.type.name).slice(0, 3), ['TavernStopBackgroundAction', 'TavernEditBodyAction', 'TavernRollbackAction'])
 })
 
 test('实际回退组件在前台、后台和重生成期间禁用，完成后允许点击', async () => {

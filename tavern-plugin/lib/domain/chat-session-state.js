@@ -170,9 +170,6 @@ export function createSessionStateView({ activity: activityOf, evidence: evidenc
       settleError: activity.reason === 'interrupted' ? '后台结算已中断，请重试结算。' : (chat.settleError || null),
       settlementTurn: rollback.rollbackTargetTurn,
       scriptProgress,
-      // Header-only field: toggling it rewrites no message, so cached and
-      // incremental projections must recompute it instead of reusing a stale one.
-      storyToolCallEnabled: chat.storyToolCallEnabled === true,
       statusBarPlacement: chat.statusBarPlacement === 'body' ? 'body' : 'sidebar',
       updatedAt: chat.updatedAt || 0,
       // Compaction writes only this header field; cached views must not keep a stale notice.
