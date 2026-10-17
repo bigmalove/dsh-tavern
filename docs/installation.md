@@ -47,6 +47,17 @@ dsh --profile tavern
 
 数据位于当前 `DSH_HOME` 下的 `profile-data/tavern/`；未设置 `DSH_HOME` 时通常为 `~/.dsh/profile-data/tavern/`。程序由 Profile 的包管理器维护。更新时先关闭酒馆，重新运行第一条安装命令，再启动。页面中的「查看更新命令」提供同一条命令，不使用原来的源码更新器。
 
+没有 `ssh` 命令的环境（精简容器、CI、部分服务器）会在第一条命令报 `cannot run ssh: No such file or directory`，因为 pnpm 把 `github:` 展开成 `git+ssh://git@github.com/…`。补装 openssh 不能解决：GitHub 不接受匿名 ssh，只会变成 `Permission denied (publickey)`。把该协议改走 https 即可（公开仓库无需凭据）：
+
+```bash
+git config --global --add url."https://github.com/".insteadOf "git+ssh://git@github.com/"
+git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/"
+git config --global --add url."https://github.com/".insteadOf "git@github.com:"
+dsh plugin --profile tavern add github:flizzywine/dsh-tavern
+```
+
+必须用 `--add`：同一条 `url.<base>.insteadOf` 重复设置会覆盖前一条，只剩最后一条生效。安装时 pnpm 若拦下 git 依赖的构建脚本并打印 `allowBuilds` 键，按提示原样加进 Profile 的 `pnpm-workspace.yaml` 后重跑。
+
 当前先支持普通 DSH CLI 的新安装。不要往专用安装器已经管理的 `tavern` Profile 直接叠装；原 CLI、Desktop、Android 安装继续使用各自原有方式。这条路线不会迁移旧 CLI 的独立数据，也不附带 Desktop 的 Pocket 手机访问配置或宿主字体文件修改。侧栏终端复用宿主提供的 `node-pty`；宿主缺少此依赖时，终端会显示修复提示，酒馆仍可使用。
 
 ### 命令行及宿主内安装
