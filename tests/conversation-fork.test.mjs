@@ -39,6 +39,22 @@ test('分叉只接受没有前台或后台未完成工作的游玩对话', () =>
   assert.throws(() => assertConversationForkable(dangling), /尚未产生正文/)
 })
 
+test('分叉不依赖左侧栏列表条目：列表缺失时按 Session 分叉，模式由服务端回执带回', async () => {
+  const source = await import('node:fs/promises').then(fs => fs.readFile(new URL('../tavern-plugin/src/client/features/sidebar.js', import.meta.url), 'utf8'))
+  const start = source.indexOf('return tavernConversationForkRequests.bind(')
+  const end = source.indexOf('}, [history, summaries, busy])', start)
+  assert.ok(start >= 0 && end > start)
+  const flow = source.slice(start, end)
+  // listSessions 会漏掉兼容模式与刚创建的 Session：查不到时不能中止分叉。
+  assert.doesNotMatch(flow, /找不到当前游玩存档/)
+  assert.match(flow, /tavernSessionModes\.values\[request\.sessionId\]/)
+  assert.match(flow, /chatId: \(item && item\.chatId\) \|\| ""/, '没有列表条目时把 Chat 交给服务端按 Session 解析')
+
+  const { conversationForkReceipt } = await import('../tavern-plugin/lib/domain/conversation-fork.js')
+  assert.equal(conversationForkReceipt({ id: 'chat-1', sessionId: 'session-1', mode: 'script' }).mode, 'script')
+  assert.equal(conversationForkReceipt({ id: 'chat-1', sessionId: 'session-1' }).mode, 'story')
+})
+
 test('分叉只保留分叉点及之前的隐藏轮次记录：分叉后续用的原生轮号不会把新回复整轮隐藏', async () => {
   const { forkConversationChat } = await import('../tavern-plugin/lib/domain/conversation-fork.js')
   const { foregroundSuppressedTurns } = await import('../tavern-plugin/lib/domain/rollback-surface.js')

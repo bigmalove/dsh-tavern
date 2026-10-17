@@ -17,6 +17,8 @@ export function conversationForkReceipt(chat, replayed = {}) {
   return {
     chatId: str(chat && chat.id),
     sessionId: str(chat && chat.sessionId),
+    // The fork keeps the source mode (story / script); the client opens it in that mode.
+    mode: str(chat && chat.mode) || 'story',
     lastTurn: Math.max(0, Number(replayed.lastTurn) || 0),
     messageCount: Math.max(0, Number(replayed.messageCount) || 0)
   }
