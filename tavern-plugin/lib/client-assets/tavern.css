@@ -36,7 +36,7 @@ body.dsh-tavern-shell-active,
   letter-spacing: -0.2px;
 }
 
-.dsh-tavern-spacer { flex: 1 1 auto; }
+/* Chromium 的表单控件不继承页面字体，缺省会回落到衬线默认字体；酒馆界面的按钮与输入统一继承容器字体。 */ .dsh-tavern-shell-active :is(button, input, select, textarea), .dsh-tavern-card-picker :is(button, input, select, textarea) { font-family: inherit; } .dsh-tavern-spacer { flex: 1 1 auto; }
 .dsh-tavern-btn {
   background: var(--dsh-tavern-accent-soft);
   color: var(--dsh-tavern-accent-active);

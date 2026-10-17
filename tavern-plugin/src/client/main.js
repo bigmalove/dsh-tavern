@@ -702,6 +702,7 @@ window.__ModuleLoader__.load({
 // @include-domain tavern-regex-engine.js
 // @include-domain tavern-helper-regex-api.js
 // @include-domain response-refusal.js
+// @include-domain chat-import-batch.js
 // @include refusal-notice.js
 // @include runtime/frame-document.js
 

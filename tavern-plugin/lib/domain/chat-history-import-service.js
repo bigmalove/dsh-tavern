@@ -6,6 +6,9 @@ import { parseChatHistory, chatHistoryPreview } from './chat-history-import.js'
 import { buildImportedConversation, appendImportedEvents } from './chat-history-session.js'
 const object = v => v !== null && typeof v === 'object' && !Array.isArray(v)
 
+// 写作导入没有人物卡与前置规划：历史每一轮共用这段固定参考帧，说明这些文字是已经完成的正文。
+const WRITING_IMPORT_FRAME = '以下是从聊天记录迁入的既有正文，按已完成的作品对待；不要复述、解释或回答它。新的写作指令在此正文基础上继续。'
+
 // Static initial values only. Executable templates remain the card runtime's responsibility.
 export function importInitialVariables(card, worldBook) {
   let data = {}
@@ -46,6 +49,8 @@ export function createChatHistoryImportService({ initialization, cards, worldBoo
   const pending = new Map()
   async function inspect(input) {
     const parsed = parseChatHistory(input.text)
+    // 写作模式没有人物卡、世界书与变量结算：记录只作为纯文字正文导入。
+    if (input.writing === true) return { parsed, card: null, worldBook: null, initialVariables: undefined, initialError: '', incompatible: false }
     const card = await cards.read(input.cardPath)
     if (!card) throw new Error('人物卡不存在，请重新选择')
     if (input.rescue) return { parsed, card, worldBook: null, incompatible: false }
@@ -57,6 +62,9 @@ export function createChatHistoryImportService({ initialization, cards, worldBoo
   }
   async function preview(input) {
     const result = await inspect(input)
+    if (input.writing === true) return { ...chatHistoryPreview(result.parsed), writing: true, incompatible: false,
+      warnings: [...result.parsed.warnings.filter(warning => !/MVU/.test(warning)),
+        ...(result.parsed.hasMvu ? ['将忽略变量快照，仅导入文字正文'] : [])] }
     return { ...chatHistoryPreview(result.parsed), incompatible: result.incompatible,
       warnings: [...result.parsed.warnings, ...(result.initialError ? [result.initialError] : []),
         ...(!result.parsed.hasMvu ? ['未找到 MVU 快照；如人物卡有初始变量，将使用初始值'] : [])] }
@@ -64,8 +72,9 @@ export function createChatHistoryImportService({ initialization, cards, worldBoo
   async function perform(input) {
     if (!/^[a-zA-Z0-9-]{8,100}$/.test(input.operationId || '') || !input.sessionId) throw new Error('导入操作或 Session 标识无效')
     const { parsed, card, worldBook, initialVariables, initialError, incompatible } = await inspect(input)
+    const writing = input.writing === true
     if (incompatible && !input.textOnly) throw new Error('变量结构与人物卡不兼容，请换卡或选择仅导入正文')
-    const identity = createHash('sha256').update(JSON.stringify([input.cardPath, parsed.digest, input.textOnly === true, input.userName || parsed.userName, input.rescue || null])).digest('hex')
+    const identity = createHash('sha256').update(JSON.stringify([input.cardPath, parsed.digest, input.textOnly === true, input.userName || parsed.userName, input.rescue || null, writing])).digest('hex')
     const path = 'chat-imports/' + input.operationId + '.json'
     let journal = await store.readJson(path)
     if (journal && (journal.identity !== identity || journal.sessionId !== input.sessionId)) throw new Error('同一导入操作不能更换人物卡、内容或 Session')
@@ -75,7 +84,7 @@ export function createChatHistoryImportService({ initialization, cards, worldBoo
       return { sessionId: input.sessionId, mode: existing.mode || 'story' }
     }
     if (!journal) {
-      const chat = await initialization.prepareImport({ cardPath: input.cardPath, sessionId: input.sessionId, userName: input.userName || parsed.userName })
+      const chat = await initialization.prepareImport({ cardPath: writing ? '' : input.cardPath, sessionId: input.sessionId, userName: input.userName || parsed.userName, ...(writing ? { mode: 'writing' } : {}) })
       if (input.rescue) {
         chat.mvu = input.rescue.mvuSnapshot ? { ...chat.mvu, enabled: true, owner: 'official', runtime: 'magvarupdate' } : { enabled: false }
         chat.variables = {}
@@ -84,10 +93,11 @@ export function createChatHistoryImportService({ initialization, cards, worldBoo
         chat.scriptState = null
         chat.backgroundTasks = { ...chat.backgroundTasks, variables: Boolean(input.rescue.mvuSnapshot) }
       }
-      if (!input.rescue && chat.mvu?.enabled && (input.textOnly || parsed.messages.some(m => !m.variables)) && !initialVariables) throw new Error(initialError || '无法读取这张 MVU 卡的初始变量，请补充有效快照后重试')
+      if (!writing && !input.rescue && chat.mvu?.enabled && (input.textOnly || parsed.messages.some(m => !m.variables)) && !initialVariables) throw new Error(initialError || '无法读取这张 MVU 卡的初始变量，请补充有效快照后重试')
       const plan = await buildImportedConversation(chat, parsed, {
-        operationId: input.operationId, fileName: input.fileName, initialVariables, textOnly: input.textOnly === true,
+        operationId: input.operationId, fileName: input.fileName, initialVariables: writing ? undefined : initialVariables, textOnly: writing ? true : input.textOnly === true,
         prepareFrame: async ({ chat, turn, userText }) => {
+          if (writing) return { text: WRITING_IMPORT_FRAME }
           if (input.rescue) return { text: '以下是从损坏存档迁入的剧情文字，仅作为历史参考。' + rescueHistoryNotice(input.rescue) }
 
           if (projectForegroundWorldbook) {
