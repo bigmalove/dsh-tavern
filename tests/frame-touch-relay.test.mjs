@@ -23,7 +23,7 @@ function body(name) {
 test('正文帧自己滚不动时把拖动接力给会话区', () => {
   const touch = body('installTavernFrameTouch')
   assert.match(touch, /function scrollsItself\(/, '需要探测帧内是否真有可滚区域')
-  assert.match(touch, /scrollsItself\(target\)/, '起手时判定帧内可滚性')
+  assert.match(touch, /frameScrollsItself\(target\)/, '起手时判定帧内可滚性')
   assert.match(touch, /relay: !own/, '帧内滚不动就标记为接力手势')
   assert.match(touch, /if \(g\.relay\) queue\(dy\)/, '接力手势把位移交给按帧合并的队列')
   assert.match(touch, /function flushQueue\(\)/, '每帧只发一条消息，快甩才不会积压')
@@ -61,6 +61,28 @@ test('自建的 preventDefault 不会被当成别人接管而中断手势', () =
   assert.match(touch, /let gesture = null, animation = 0, sequence = 0, claim = null, claimed = false/)
   assert.match(touch, /claimed = true/, 'claim 里要留下“是我们自己取消的”标记')
   assert.match(touch, /event\.defaultPrevented && !claimed/, '只对其他 handler 的取消让路')
+})
+
+test('连续快甩：起点被留下来，首个 touchmove 可以直接接管', () => {
+  const touch = body('installTavernFrameTouch')
+  // 选区只在手指压住选区时才算接管；陈旧选区不能永久封死这一帧的滑动。
+  assert.doesNotMatch(touch, /if \(event\.touches\.length !== 1 \|\| event\.defaultPrevented \|\| selected\(\)\) return/,
+    'touchstart 不应因任何旧选区直接放弃整个手势')
+  assert.match(touch, /function selectionBlocks\(x, y\)/, '选区按手指位置判定')
+  assert.match(touch, /selection\.removeAllRanges\(\)/, '不压住选区的陈旧选区要清掉')
+  // 手势不再有 350ms 的起手时限。
+  assert.doesNotMatch(touch, /now - g\.started > 350/, '真机上一次长任务就能把第二次快甩判成“太晚”')
+  // touchstart 判不掉时留 pending，move 里补接管。
+  assert.match(touch, /let pending = null/, '保留未接管手势的起点')
+  assert.match(touch, /if \(!gesture && pending\)/, '首个 touchmove 可补齐接管')
+  assert.match(touch, /adopt\(pending\.target, pending\.touch, pending\.at\)/, '用起点重建手势')
+})
+
+test('帧内“自己能滚”的判定有足够余量，且一次会话只算一次', () => {
+  const touch = body('installTavernFrameTouch')
+  assert.match(touch, /clientHeight \+ 8/, '1px 的余量会在真机上让判定来回翻转')
+  assert.match(touch, /let ownVerdict = null/, '判定结果缓存')
+  assert.match(touch, /if \(ownVerdict === null\) ownVerdict = scrollsItself\(start\)/, '尺寸没变就不重复读布局')
 })
 
 test('宿主的滚动链每次手势只解析一次，且不再限幅到 1000px', () => {
