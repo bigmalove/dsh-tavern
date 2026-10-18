@@ -148,6 +148,23 @@ is_disposable_upgrade_residue() {
   [ -z "$(find "${APP_DIR}" -mindepth 1 ! -type d ! -type l -print -quit 2>/dev/null)" ]
 }
 
+# 本地领先远端的提交是否都只是运行清单发布提交（可丢弃）。
+# 判据是「这个提交只改了 dsh-tavern-runtime.json」，不能按提交信息匹配：换源后
+# 发布提交的文案和上游不同，按文案判断会把它们当成用户本地提交，更新会永远停在
+# 分叉检查上（实测：手机上点更新报「已经分叉」）。
+divergence_is_disposable() {
+  local app="$1"
+  local commits commit files
+  commits="$(git -C "${app}" rev-list origin/main..HEAD)"
+  # 不用进程替换（`< <(...)`）：部分精简 Android 环境没有 /dev/fd，循环会一次都不跑，
+  # 判定就退化成「永远可丢弃」，那是危险的假阳性。
+  for commit in ${commits}; do
+    files="$(git -C "${app}" diff-tree --no-commit-id --name-only -r "${commit}")"
+    [ "${files}" = 'dsh-tavern-runtime.json' ] || return 1
+  done
+  return 0
+}
+
 update_source() {
   if [ -d "${APP_DIR}/.git" ]; then
     require_command git
@@ -161,20 +178,10 @@ update_source() {
     git -C "${APP_DIR}" sparse-checkout set --no-cone '/*' '!**/docs/'
     if git -C "${APP_DIR}" fetch origin main; then
       if ! git -C "${APP_DIR}" merge-base --is-ancestor HEAD origin/main; then
-        local generated_only=1
-        local commit subject files
-        while IFS= read -r commit; do
-          [ -n "${commit}" ] || continue
-          subject="$(git -C "${APP_DIR}" show -s --format=%s "${commit}")"
-          files="$(git -C "${APP_DIR}" diff-tree --no-commit-id --name-only -r "${commit}")"
-          if [ "${subject}" != 'chore: publish runtime manifest [skip ci]' ] || [ "${files}" != 'dsh-tavern-runtime.json' ]; then
-            generated_only=0
-            break
-          fi
-        done < <(git -C "${APP_DIR}" rev-list origin/main..HEAD)
-        if [ "${generated_only}" -eq 1 ]; then
-          printf '仅检测到自动生成的运行清单分叉，正在安全重新下载源码……\n'
-          install_source
+        if divergence_is_disposable "${APP_DIR}"; then
+          # 工作区在上面已经确认为干净，直接对齐远端即可；不重新下载源码。
+          printf '仅检测到运行清单分叉，正在对齐到最新提交……\n'
+          git -C "${APP_DIR}" reset --hard origin/main
           return
         fi
         fail "项目目录包含本地提交或已经分叉，无法自动安全更新。"
