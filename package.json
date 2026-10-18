@@ -23,6 +23,9 @@
     "test:e2e:compaction": "node bin/build-tavern-client.mjs --check && node tests/e2e/compaction-suite.mjs",
     "build:plugin-package": "node bin/build-plugin-package.mjs",
     "check:plugin-package": "node bin/build-plugin-package.mjs --check",
+    "build:desktop-pet": "node tavern-plugin/packages/dsh-tavern-desktop-pet/build.mjs",
+    "deploy:desktop-pet": "node tavern-plugin/packages/dsh-tavern-desktop-pet/build.mjs --deploy",
+    "test:desktop-pet": "node --test tavern-plugin/packages/dsh-tavern-desktop-pet/tests/*.test.mjs",
     "prepublishOnly": "npm run check:client && npm run check:plugin-package",
     "test:card-memory": "node --test tests/card-memory.test.mjs",
     "test:e2e:card-memory": "node bin/build-tavern-client.mjs --check && node tests/e2e/gameplay.mjs --card-memory"
