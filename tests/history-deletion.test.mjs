@@ -41,7 +41,7 @@ function fixture({ greeting = true } = {}) {
   const settled = []
   const dispatched = []
   const options = {
-    chats: { forSession: async () => structuredClone(chat), update: async (_id, fn) => { chat = fn(structuredClone(chat)); chat._storageRevision++; return structuredClone(chat) } },
+    chats: { forSession: async () => structuredClone(chat), completeForSession: async () => structuredClone(chat), update: async (_id, fn) => { chat = fn(structuredClone(chat)); chat._storageRevision++; return structuredClone(chat) } },
     sessions: { get: () => agent, flush: async () => {} },
     timeline: createStoryTimeline({ id: prefix => prefix + '-fixed', now: () => 5 }),
     activity: () => ({ busy: false }),
@@ -268,4 +268,36 @@ test('导入存档：同一回合连着两条玩家输入，删除靠前那条�
   await h.deletion.undo(h.session.id)
   assert.equal(h.chat.messages[3].text, '继续')
   assert.equal(h.chat.messages[4].text, '再来')
+})
+
+// 删掉前面一条后，后面每一条的 index 都会前移。页面上的按钮还拿着删除前的
+// index，服务端必须按节点身份（助手消息 id / 玩家消息 seq）重新定位。
+test('连续删除：按消息 id 定位，页面上的 index 过期也能删对', async () => {
+  const h = fixture()
+  await h.deletion.deleteMessage(h.session.id, { index: 2, turn: 2, role: 'assistant' })
+  assert.deepEqual(h.chat.messages.map(message => message.role), ['assistant', 'user', 'user', 'assistant'])
+  // 删掉 a2 后第三段正文从 index 4 前移到 3；页面若还传 4，按 index 会打空。
+  await h.deletion.deleteMessage(h.session.id, { index: 4, turn: 3, role: 'assistant', messageId: 'a3' })
+  assert.deepEqual(h.chat.messages.map(message => message.role), ['assistant', 'user', 'user'])
+  assert.deepEqual(texts(h.session), ['开场白', '推门', undefined, '继续', undefined])
+})
+
+test('连续删除：按玩家消息 seq 定位，页面上的 index 过期也能删对', async () => {
+  const h = fixture()
+  await h.deletion.deleteMessage(h.session.id, { index: 2, turn: 2, role: 'assistant' })
+  // 「继续」的原生节点是 seq 3；删除前页面记下的 index 是 3，删完 a2 后它挪到了 2。
+  await h.deletion.deleteMessage(h.session.id, { index: 3, turn: 3, role: 'user', seq: 3 })
+  assert.deepEqual(h.chat.messages.map(message => message.role), ['assistant', 'user', 'assistant'])
+  assert.equal(h.chat.messages[2].text, '第三段版本B')
+  assert.deepEqual(texts(h.session), ['开场白', '推门', undefined, undefined, '第三段版本B'])
+})
+
+test('已删除的消息再点删除：明确告知已经不在了，不再报「消息已变化」', async () => {
+  const h = fixture()
+  await h.deletion.deleteMessage(h.session.id, { index: 4, turn: 3, role: 'assistant' })
+  await assert.rejects(
+    h.deletion.deleteMessage(h.session.id, { index: 4, turn: 3, role: 'assistant', messageId: 'a3' }),
+    /已经不在了/
+  )
+  assert.equal(h.chat.messages.length, 4)
 })

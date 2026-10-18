@@ -92,8 +92,26 @@ export function locateInputFloor({ chat, session, index, turn }) {
  * and settlement receipts are not prose, and the message count is deliberately
  * absent: appending new floors elsewhere never invalidates an older floor's
  * pending operation.
+ *
+ * Keys are serialized in sorted order: the same row reaches this function from
+ * a bounded history page and from a complete journal read, and those two builds
+ * do not agree on property order. Hashing that order made the same message look
+ * changed between the two reads, so a delete right after another delete was
+ * refused with 「消息已变化」.
  */
 export function floorToken(chat, message) {
   const { displayRuntime: _runtime, tavernPluginData: _templateCache, mvu: _settlement, ...body } = message
-  return createHash('sha256').update(JSON.stringify([chat.id, chat.timeline && chat.timeline.branchId, body])).digest('hex')
+  return createHash('sha256').update(stableJson([chat.id, chat.timeline && chat.timeline.branchId, body])).digest('hex')
+}
+
+function stableJson(value) {
+  if (value === undefined) return undefined
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return '[' + value.map(item => stableJson(item) ?? 'null').join(',') + ']'
+  const parts = []
+  for (const key of Object.keys(value).sort()) {
+    const encoded = stableJson(value[key])
+    if (encoded !== undefined) parts.push(JSON.stringify(key) + ':' + encoded)
+  }
+  return '{' + parts.join(',') + '}'
 }

@@ -773,12 +773,14 @@
 			function TavernFloorEditButton(props) {
 				const key = String(props.messageId || props.seq || "");
 				const liveState = useScopedLiveTavernView(props.sessionId, key, [
-					["mode"], ["floorsByMessageId", String(props.messageId || "")], ["floorsBySeq", String(props.seq || "")], ["activity", "busy"]
+					["mode"], ["floorsByMessageId", String(props.messageId || "")], ["floorsBySeq", String(props.seq || "")], ["deletedSeqs"], ["activity", "busy"]
 				]);
 				const view = liveState.view;
 				const floor = floorOf(view, props.messageId, props.seq);
 				const [busy, setBusy] = React.useState(false);
-				if (!floor || !isBodyMode(view && view.mode)) return null;
+				// 已删除的楼层不再提供编辑：宿主仍会渲染这一格操作栏。
+				const deleted = Boolean(floor && view && view.deletedSeqs && view.deletedSeqs[String(floor.seq)]);
+				if (!floor || deleted || !isBodyMode(view && view.mode)) return null;
 				// 不可编辑（后台结算、上下文已压缩、救援导入）时保留按钮但禁用：
 				// 隐藏会让整排操作在结算期间凭空消失，玩家以为功能没了。
 				const blocked = floor.editable !== true;
@@ -805,12 +807,16 @@
 				const askConfirm = useTavernConfirm(props.sessionId);
 				const key = String(props.messageId || props.seq || "");
 				const liveState = useScopedLiveTavernView(props.sessionId, key, [
-					["mode"], ["floorsByMessageId", String(props.messageId || "")], ["floorsBySeq", String(props.seq || "")], ["activity", "busy"]
+					["mode"], ["floorsByMessageId", String(props.messageId || "")], ["floorsBySeq", String(props.seq || "")], ["deletedSeqs"], ["activity", "busy"]
 				]);
 				const view = liveState.view;
 				const floor = floorOf(view, props.messageId, props.seq);
 				const [busy, setBusy] = React.useState(false);
-				if (!floor || !isBodyMode(view && view.mode)) return null;
+				// 删掉的那一楼，宿主仍然渲染它的操作栏（正文已被 deletedSeqs 藏起来）：
+				// 这里按同一个标记把自己也藏掉，否则页面上会留一个删不掉的按钮，
+				// 点下去还带着删除前的 index，只能得到「消息已变化」。
+				const deleted = Boolean(floor && view && view.deletedSeqs && view.deletedSeqs[String(floor.seq)]);
+				if (!floor || deleted || !isBodyMode(view && view.mode)) return null;
 				const blocked = floor.editable !== true;
 				async function remove() {
 					if (busy) return;
@@ -818,7 +824,8 @@
 					if (!ok) return;
 					setBusy(true);
 					try {
-						const result = await rpc("deleteFloorMessage", { index: floor.index, turn: floor.turn, role: floor.role }, props.sessionId);
+						// 带上节点身份：删掉前面一条后 index 会前移，服务端按 id/seq 才能删对。
+						const result = await rpc("deleteFloorMessage", { index: floor.index, turn: floor.turn, role: floor.role, messageId: props.messageId || "", seq: floor.seq }, props.sessionId);
 						applyTavernResultView(props.sessionId, result.view);
 						notifyTavernDataChanged(["sessions"], "play-controls");
 						tavernCoordination.invalidate(props.sessionId);
@@ -834,12 +841,14 @@
 			function TavernSwipeControl(props) {
 			const askConfirm = useTavernConfirm(props.sessionId);
 			const liveState = useScopedLiveTavernView(props.sessionId, String(props.messageId || ""), [
-				["mode"], ["floorsByMessageId", String(props.messageId || "")], ["activity", "busy"], ["regenInProgress"]
+				["mode"], ["floorsByMessageId", String(props.messageId || "")], ["deletedSeqs"], ["activity", "busy"], ["regenInProgress"]
 			]);
 			const view = liveState.view;
 			const floor = view && view.floorsByMessageId ? view.floorsByMessageId[String(props.messageId || "")] : null;
 			const [busy, setBusy] = React.useState(false);
-			if (!floor || !isBodyMode(view && view.mode) || floor.role !== "assistant") return null;
+			// 已删除的楼层不再提供版本切换：宿主仍会渲染这一格操作栏。
+			const deleted = Boolean(floor && view && view.deletedSeqs && view.deletedSeqs[String(floor.seq)]);
+			if (!floor || deleted || !isBodyMode(view && view.mode) || floor.role !== "assistant") return null;
 			const count = Math.max(1, Number(floor.swipeCount) || 1);
 			const latest = floor.latest === true;
 			// 只有一个版本又不是最新楼层时无从可切；开场白的 › 不生成新开场白。

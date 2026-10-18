@@ -142,12 +142,37 @@ export function createHistoryDeletion({ chats, sessions, timeline, activity, pro
     try { await scripts.dispatchEvent({ sessionId, recent: true, name, args: [index] }) } catch { /* scripts never block a mutation */ }
   }
 
+  /**
+   * 用节点身份（助手消息 id / 玩家消息的 surface seq）重新定位要删的那一条。
+   *
+   * 页面上的按钮拿着删除前的 index：删掉前面一条后，后面每一条的 index 都会前移，
+   * 直接按 index 删除会打到邻层，或者被「消息已变化」挡下来（用户看到的正是这个）。
+   * 节点身份不随排序变化，所以优先按它定位；返回 null 表示调用方没给身份。
+   * 返回 undefined 表示给了身份但这条消息已经不在存档里（例如按钮还挂在已删除的楼层上）。
+   */
+  async function resolveNamed(sessionId, input) {
+    const named = str(input.messageId).trim()
+    const seq = Number(input.seq)
+    const bySeq = !named && Number.isSafeInteger(seq) && seq >= 0
+    if (named === '' && !bySeq) return null
+    const agent = sessions.get(sessionId)
+    if (!agent?.session) throw new Error('无法访问原生会话')
+    const complete = (typeof chats.completeForSession === 'function' ? await chats.completeForSession(sessionId) : null)
+      || await chats.forSession(sessionId)
+    if (!complete) return undefined
+    const floors = floorsIndex(complete, agent.session, { busy: false })
+    const floor = named !== '' ? floors.byMessageId[named] : floors.bySeq[String(seq)]
+    return floor ? { index: floor.index, role: floor.role, turn: floor.turn } : undefined
+  }
+
   /** Delete exactly one message: never the player input beside it. */
   async function deleteMessage(sessionId, input = {}) {
     if (pending.has(sessionId)) throw new Error('正在删除消息，请稍候')
-    const index = Number(input.index)
-    const turn = Number(input.turn)
-    const role = input.role === 'user' ? 'user' : 'assistant'
+    const resolved = await resolveNamed(sessionId, input)
+    if (resolved === undefined) throw new Error('这条消息已经不在了，请刷新后重试')
+    const index = resolved ? resolved.index : Number(input.index)
+    const turn = resolved ? Number(resolved.turn) : Number(input.turn)
+    const role = resolved ? resolved.role : (input.role === 'user' ? 'user' : 'assistant')
     if (!Number.isSafeInteger(index) || index < 0) throw new Error('要删除的消息不存在')
     pending.add(sessionId)
     try {
