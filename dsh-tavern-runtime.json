@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "revision": "023b3ec3dbe17f5b9bf001e387004fd0468102c0",
-  "releaseSequence": 669,
+  "revision": "1fb912d3ac8e3da1d43b9c83cbd3b69d10c081c5",
+  "releaseSequence": 670,
   "version": "2.7.0",
   "files": [
     {
@@ -1388,11 +1388,6 @@
       "path": "tavern-plugin/lib/domain/preset-reading.js",
       "sha256": "bd9b9c0f0378d24c906519036489d5b1bfd34eba98284b5eba0f94e8f3e233de",
       "size": 7886
-    },
-    {
-      "path": "tavern-plugin/lib/domain/probe-log.js",
-      "sha256": "445a237fbf3d9bdc5ef284ea5a4b98910c3a7a494f53c5200de649c7aef650e4",
-      "size": 346
     },
     {
       "path": "tavern-plugin/lib/domain/prompt-template-global-variables.js",
