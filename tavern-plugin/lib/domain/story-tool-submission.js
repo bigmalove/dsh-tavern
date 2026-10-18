@@ -18,9 +18,15 @@ export function storyToolCallEnabled(chat, enabled) {
 }
 
 function validContent(content) {
-  if (typeof content !== 'string' || content.trim() === '') throw new Error('正文不能为空，content 必须是非空字符串')
+  if (typeof content !== 'string' || content.trim() === '') throw new Error('正文不能为空，content 必须是非空字符串' + FALLBACK_HINT)
   return content
 }
+
+// A failing submission must not turn into a retry loop: the model reads the
+// error as a tool result and would otherwise call again, step after step, until
+// the request times out with no text on screen. Every rejection therefore ends by
+// telling it to answer directly, which is what the player sees anyway.
+const FALLBACK_HINT = '；不要再调用本工具，请直接把完整正文作为回复输出。'
 
 /** Only a model call with a matching successful durable result is a submission. */
 export function storySubmissionForTurn(session, turn) {
@@ -66,6 +72,10 @@ export function storySubmissionForTurn(session, turn) {
  * chat view show the step as an answer (it ignores surface replacements); the
  * replacement then leaves that one text where the call, receipt and copy were,
  * so the model sees the body once and rollback/regeneration see a normal round.
+ *
+ * @returns true when the round was folded. A false result is not fatal: the
+ *   caller replaces the call message with the body alone, which keeps the answer
+ *   visible even when the surface no longer matches what this turn produced.
  */
 export function foldStorySubmission(session, result, bodyText) {
   const data = result.event.data
@@ -84,7 +94,7 @@ export function foldStorySubmission(session, result, bodyText) {
   // A step may dispatch several tools, so other receipts can sit between the
   // call and this submission's receipt. The range must cite every node it
   // removes or the replacement is refused with "缺少有效的来源引用".
-  if (from < 0 || to < from) return
+  if (from < 0 || to < from) return false
   // The appended copy and the replacement are one message. The chat view keys a
   // round's actions by the message id it rendered and the fork map reads the id
   // of the newest projection event, so two ids here hide the fork action.
@@ -97,9 +107,10 @@ export function foldStorySubmission(session, result, bodyText) {
   const shown = surface.append('assistant/message', { turn, step, message: reply }, { surfaceOp: 'append', sourceEventSeqs: [] })
   const shownSeq = Number(typeof shown === 'number' ? shown : shown.seq)
   const end = session.surface.nodes.map(Number).indexOf(shownSeq)
-  if (end < to) return
+  if (end < to) return false
   surface.replace('assistant/message', { turn, step, message: reply },
     { start, end: shownSeq, sourceEventSeqs: session.surface.nodes.slice(from, end + 1).map(Number) })
+  return true
 }
 
 export function activeStoryTurn(session) {
@@ -123,15 +134,17 @@ export function createStorySubmissionTool({ chatForSession, enabled, isBackgroun
       exec?.signal?.throwIfAborted()
       const session = exec?.agent?.session
       const sessionId = session?.id || ''
-      if (!sessionId || isBackground(sessionId)) throw new Error('正文提交只用于前台游玩回合')
+      if (!sessionId || isBackground(sessionId)) throw new Error('正文提交只用于前台游玩回合' + FALLBACK_HINT)
       const chat = await chatForSession(sessionId)
-      if (!storyToolCallEnabled(chat, await enabled())) throw new Error('未开启正文走工具调用')
+      if (!storyToolCallEnabled(chat, await enabled())) throw new Error('未开启正文走工具调用' + FALLBACK_HINT)
       const turn = activeStoryTurn(session)
-      if (turn === null) throw new Error('当前没有正在生成的游玩回合')
+      if (turn === null) throw new Error('当前没有正在生成的游玩回合' + FALLBACK_HINT)
       const content = validContent(args?.content)
       const previous = storySubmissionForTurn(session, turn)
-      if (previous && previous.content !== content) throw new Error('本轮已提交正文，不允许重复覆盖')
-      if (typeof exec.concludeTurn !== 'function') throw new Error('当前 DSH 版本不支持工具提交后结束回合，请关闭正文走工具调用或更新 DSH')
+      // The same body twice is the model repeating itself after a lost receipt;
+      // returning it again is harmless and keeps the round from failing.
+      if (previous && previous.content !== content) throw new Error('本轮已提交正文，不允许重复覆盖' + FALLBACK_HINT)
+      if (typeof exec.concludeTurn !== 'function') throw new Error('当前 DSH 版本不支持工具提交后结束回合，请关闭正文走工具调用或更新 DSH' + FALLBACK_HINT)
       exec.signal?.throwIfAborted()
       exec.concludeTurn()
       return content
