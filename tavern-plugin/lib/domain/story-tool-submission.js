@@ -28,7 +28,16 @@ function validContent(content) {
 // telling it to answer directly, which is what the player sees anyway.
 const FALLBACK_HINT = '；不要再调用本工具，请直接把完整正文作为回复输出。'
 
-/** Only a model call with a matching successful durable result is a submission. */
+/**
+ * The body a submission carried, whether or not its receipt came back verbatim.
+ *
+ * Hosts differ in what they store for a tool result: some echo the returned
+ * string, some wrap or truncate it, some route it through a projector first.
+ * Requiring an exact echo made a successful submission invisible whenever the
+ * host reformatted the receipt, and the round then failed with "模型本轮没有返回
+ * 正文" while the body sat in the call arguments the whole time. A non-error
+ * receipt for this call is the proof of success; the text comes from the call.
+ */
 export function storySubmissionForTurn(session, turn) {
   const events = sessionEvents(session)
   const visible = Array.isArray(session?.surface?.nodes) ? new Set(session.surface.nodes.map(Number)) : null
@@ -38,6 +47,9 @@ export function storySubmissionForTurn(session, turn) {
   }
   const messages = new Map()
   const calls = new Map()
+  // Receipts are collected by call id first; an exact echo wins, a reformatted
+  // one still counts. Both are only credible once the call itself was found.
+  const receipts = new Map()
   for (let index = start + 1; index < events.length; index++) {
     const event = events[index]
     const data = event?.data
@@ -58,10 +70,21 @@ export function storySubmissionForTurn(session, turn) {
       if (result.isError) continue
       const model = calls.get(result.toolCallId)
       if (!model) continue
-      let content
-      try { content = validContent(JSON.parse(model.block.arguments).content) } catch { continue }
-      if (toolResultText(result) !== content) continue
-      return { index: model.index, receiptIndex: Number(event.seq ?? index), event: model.event, text: content.trim(), content, toolCallId: result.toolCallId, storyToolSubmission: true }
+      receipts.set(result.toolCallId, { text: toolResultText(result), receiptIndex: Number(event.seq ?? index), model })
+    }
+  }
+  for (const [callId, receipt] of receipts) {
+    let content
+    try { content = validContent(JSON.parse(receipt.model.block.arguments).content) } catch { continue }
+    return {
+      index: receipt.model.index,
+      receiptIndex: receipt.receiptIndex,
+      event: receipt.model.event,
+      text: content.trim(),
+      content,
+      toolCallId: callId,
+      echoed: receipt.text === content,
+      storyToolSubmission: true
     }
   }
   return null

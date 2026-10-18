@@ -68,6 +68,15 @@ test('0.2.1 的独立 tool 消息就是提交回执，正文取自工具参数',
   assert.equal(assistantResultForTurn(session, 2).storyToolSubmission, true)
 })
 
+test('回执被宿主改写（截断/加前缀）时仍以调用参数里的正文为准', () => {
+  const content = '她推开门。'
+  const session = fixture(content, { result: '已提交：她推开门。' })
+  const submission = storySubmissionForTurn(session, 2)
+  assert.ok(submission, '回执不逐字相等也必须是提交')
+  assert.equal(submission.text, content)
+  assert.equal(submission.echoed, false)
+})
+
 test('折叠失败返回 false 而不是抛错，调用方才能退化成普通正文', () => {
   const result = { event: { data: { turn: 1, step: 1, message: { id: 'm-1', role: 'assistant', source: { kind: 'model' }, content: [] } } }, receiptIndex: 9, index: 99, content: '正文' }
   // surface 上没有这个回合的节点：范围算不出来，必须返回 false 让调用方兜底，
