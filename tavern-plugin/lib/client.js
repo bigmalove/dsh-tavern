@@ -5454,7 +5454,8 @@ function tavernModelRefusalNotice(text) {
 		            rest -= node.scrollTop - before;
 		            if (Math.abs(rest) < 0.01) return 0;
 		        }
-		        if (/^(contain|none)$/.test(style.overscrollBehaviorY)) return 0;
+		        // At an edge the stroke keeps climbing the chain: a scroller that is already
+		        // at its top must not swallow the rest, or the page reads as stuck there.
 		    }
 		    return rest;
 		}
@@ -5472,6 +5473,7 @@ function tavernModelRefusalNotice(text) {
 		        gesture = null;
 		        claimed = false;
 		        releaseClaim();
+		        if (queuedFrame) { cancelAnimationFrame(queuedFrame); queuedFrame = 0; flushQueue(); }
 		        if (animation) cancelAnimationFrame(animation);
 		        animation = 0;
 		    }
@@ -5505,6 +5507,21 @@ function tavernModelRefusalNotice(text) {
 		    function relay(dy) {
 		        if (dy) send('dsh-tavern-frame-scroll', { dy });
 		    }
+		    // One message per animation frame. A fast flick delivers touchmove faster than
+		    // the host can scroll (and every host step is a layout), so posting per event
+		    // built a backlog the finger had already left — measured on a phone as "the text
+		    // lags behind and the flick dies almost at once".
+		    let queued = 0, queuedFrame = 0;
+		    function queue(dy) {
+		        queued += dy;
+		        if (!queuedFrame) queuedFrame = requestAnimationFrame(flushQueue);
+		    }
+		    function flushQueue() {
+		        queuedFrame = 0;
+		        const dy = queued;
+		        queued = 0;
+		        relay(dy);
+		    }
 		    addEventListener('touchstart', event => {
 		        stop();
 		        sequence++;
@@ -5516,7 +5533,7 @@ function tavernModelRefusalNotice(text) {
 		        const touch = event.touches[0], now = performance.now();
 		        const own = !blockedAxis(target) && scrollsItself(target);
 		        gesture = { target, id: touch.identifier, x: touch.screenX, y: touch.screenY,
-		            lastY: touch.screenY, started: now, lastTime: now, active: false,
+		            lastY: touch.screenY, started: now, lastTime: now, lastMove: now, peak: 0, active: false,
 		            relay: !own, samples: [[now, touch.screenY]] };
 		        // Only a relay gesture needs preventDefault, and it is installed for this
 		        // gesture alone: a standing non-passive touchmove would make every scroll in
@@ -5543,30 +5560,37 @@ function tavernModelRefusalNotice(text) {
 		            if (now - g.started > 350 || Math.abs(totalX) >= Math.abs(totalY)) { stop(); return; }
 		            g.active = true;
 		        }
-		        if (g.relay) relay(dy); else scrollChain(g.target, dy, view);
-		        g.lastY = touch.screenY; g.lastTime = now;
+		        // Peak speed, not just the tail: a flick decelerates before release, so the
+		        // release window alone reads far slower than the stroke the user made.
+		        const instant = dy / Math.max(1, now - g.lastMove);
+		        if (Math.abs(instant) > Math.abs(g.peak)) g.peak = instant;
+		        if (g.relay) queue(dy); else scrollChain(g.target, dy, view);
+		        g.lastY = touch.screenY; g.lastTime = now; g.lastMove = now;
 		        g.samples.push([now, touch.screenY]);
-		        while (g.samples.length > 2 && now - g.samples[0][0] > 80) g.samples.shift();
+		        while (g.samples.length > 2 && now - g.samples[0][0] > 100) g.samples.shift();
 		    }, { passive: true });
 		    addEventListener('touchend', () => {
 		        const g = gesture;
 		        stop();
 		        const now = performance.now();
-		        if (!g || !g.active || !g.relay || selected() || now - g.lastTime > 80) return;
+		        if (!g || !g.active || !g.relay || selected()) return;
+		        if (g.relay) flushQueue();
+		        // A relay has no browser inertia of its own. Carry the stroke at the speed the
+		        // user actually reached (peak, unless the tail is faster) and decay like a
+		        // native fling: ~0.6 s to half speed, ~2 s to a stop.
 		        const first = g.samples[0], last = g.samples[g.samples.length - 1];
-		        if (last[0] <= first[0]) return;
-		        // A relay has no browser inertia of its own, so carry the release speed the
-		        // way a native fling would: ~2-4px/ms for a fast flick, easing out over 1.4s.
-		        let speed = Math.max(-4, Math.min(4, (first[1] - last[1]) / (last[0] - first[0])));
-		        if (Math.abs(speed) < 0.05) return;
+		        let speed = last[0] > first[0] ? (first[1] - last[1]) / (last[0] - first[0]) : 0;
+		        if (Math.abs(g.peak) > Math.abs(speed)) speed = g.peak;
+		        speed = Math.max(-6, Math.min(6, speed));
+		        if (Math.abs(speed) < 0.06 || now - g.lastTime > 120) return;
 		        let previous = now;
 		        const step = time => {
 		            animation = 0;
-		            if (!g.target.isConnected || document.hidden || selected() || time - now > 1400) return;
-		            const dt = Math.min(32, time - previous); previous = time;
-		            relay(speed * dt);
-		            speed *= Math.pow(0.945, dt / 16);
-		            if (Math.abs(speed) > 0.02) animation = requestAnimationFrame(step);
+		            if (!g.target.isConnected || document.hidden || selected() || time - now > 2400) return;
+		            const dt = Math.min(40, time - previous); previous = time;
+		            queue(speed * dt);
+		            speed *= Math.pow(0.965, dt / 16);
+		            if (Math.abs(speed) > 0.015) animation = requestAnimationFrame(step);
 		        };
 		        animation = requestAnimationFrame(step);
 		    }, { passive: true });
@@ -5584,10 +5608,8 @@ function tavernModelRefusalNotice(text) {
 		    const chain = [];
 		    for (let node = start; node && node.nodeType === 1; node = node.parentElement) {
 		        const style = view.getComputedStyle(node);
-		        const contains = /^(contain|none)$/.test(style.overscrollBehaviorY);
 		        const root = node === view.document.scrollingElement;
-		        if (root || /^(auto|scroll|overlay)$/.test(style.overflowY)) chain.push({ node, contains });
-		        else if (contains) break;
+		        if (root || /^(auto|scroll|overlay)$/.test(style.overflowY)) chain.push({ node });
 		    }
 		    return chain;
 		}
@@ -5596,14 +5618,16 @@ function tavernModelRefusalNotice(text) {
 		    let rest = distance;
 		    for (const item of chain) {
 		        const node = item.node;
-		        const max = Math.max(0, node.scrollHeight - node.clientHeight);
-		        if (max > 0) {
+		        if (node.scrollHeight > node.clientHeight) {
 		            const before = node.scrollTop;
-		            node.scrollTo({ top: Math.max(0, Math.min(max, before + rest)), behavior: 'instant' });
+		            // Direct scrollTop assignment: no options object, so old WebViews cannot
+		            // fall back to a smooth animation, and no read-back is needed for a clamp.
+		            node.scrollTop = before + rest;
 		            rest -= node.scrollTop - before;
 		            if (Math.abs(rest) < 0.01) return 0;
 		        }
-		        if (item.contains) return 0;
+		        // At an edge the stroke keeps climbing the chain: a scroller that is already
+		        // at its top must not swallow the rest, or the page reads as stuck there.
 		    }
 		    return rest;
 		}

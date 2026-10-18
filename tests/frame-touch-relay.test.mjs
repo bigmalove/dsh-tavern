@@ -25,7 +25,8 @@ test('正文帧自己滚不动时把拖动接力给会话区', () => {
   assert.match(touch, /function scrollsItself\(/, '需要探测帧内是否真有可滚区域')
   assert.match(touch, /scrollsItself\(target\)/, '起手时判定帧内可滚性')
   assert.match(touch, /relay: !own/, '帧内滚不动就标记为接力手势')
-  assert.match(touch, /if \(g\.relay\) relay\(dy\)/, '接力手势逐帧把位移发给宿主')
+  assert.match(touch, /if \(g\.relay\) queue\(dy\)/, '接力手势把位移交给按帧合并的队列')
+  assert.match(touch, /function flushQueue\(\)/, '每帧只发一条消息，快甩才不会积压')
   // 帧内可自己滚（卡片自带滚动容器）时必须保留原生滚动与惯性。
   assert.match(touch, /else scrollChain\(g\.target, dy, view\)/, '帧内可滚时走原生滚动链')
 })
@@ -36,10 +37,23 @@ test('接力手势松手后有惯性，且不是靠常驻非 passive 监听换�
   assert.match(inertia, /g\.relay/, '只有接力手势才需要模拟惯性')
   assert.match(inertia, /requestAnimationFrame\(step\)/, '惯性逐帧延续')
   assert.match(inertia, /speed \*=/, '惯性需要逐帧衰减')
+  // 快甩在松手前已经在减速，只取末段窗口会把速度读低一大截。
+  assert.match(inertia, /g\.peak/, '惯性速度取整段手势的峰值')
+  assert.match(touch, /g\.peak = instant/, '每次 move 都要更新峰值速度')
   // 常驻的 document 级非 passive touchmove 会让帧内每次滚动都先等 JS。
   assert.equal((touch.match(/addEventListener\('touchmove', [^,]+, \{ passive: false \}\)/g) || []).length, 1,
     '只允许一处非 passive 注册，且必须是按手势动态挂上的 claim')
   assert.match(touch, /if \(claim\) addEventListener\('touchmove', claim/, 'claim 只在接力手势开始时挂上')
+})
+
+test('到边界时位移继续传给外层，不再原地卡住', () => {
+  const frameChain = body('scrollTavernTouchChain')
+  const hostChain = body('applyTavernScrollChain')
+  for (const [label, text] of [['帧内', frameChain], ['宿主', hostChain]]) {
+    assert.doesNotMatch(text, /overscrollBehaviorY\)\) return 0/, `${label}滚动链不应在 overscroll:contain 处吞掉剩余位移`)
+    assert.doesNotMatch(text, /if \(item\.contains\) return 0/, `${label}滚动链不应在 contain 容器处中断`)
+  }
+  assert.match(hostChain, /node\.scrollTop = before \+ rest/, '宿主用直接赋值，避免旧 WebView 把 instant 当成平滑滚动')
 })
 
 test('自建的 preventDefault 不会被当成别人接管而中断手势', () => {
