@@ -246,3 +246,27 @@ test('历史正文走工具调用：开关打开时请求里的旧正文变成�
   assert.deepEqual(on.messages[2].content.map(block => block.type), ['tool-result'])
   assert.equal(on.messages[3].content[0].text, '第二次', '本轮玩家输入保持原样')
 })
+
+test('历史回放要求提交工具本轮真的下发，否则整个开关等于没开', async () => {
+  const body = { id: 'body-1', role: 'assistant', source: { kind: 'model', provider: 'dsh-tavern', model: 'reply-projection' }, content: [{ type: 'text', text: '上一轮正文' }] }
+  async function requestWith({ historyToolCall, visible }) {
+    const run = strategies({ nativePlay: {
+      async modeFor() { return 'story' },
+      filterMessages(messages) { return messages },
+      async resolvePreset() { return null },
+      async prepareTurn() { return { frame: { userInput: { projectedText: '输入' } } } },
+      appendFrame(input) { return { messages: input.messages, receipt: {} } },
+      recordFrame() {}, async visibleTools() { return visible },
+      controlledToolNames: new Set(),
+      historyToolCall: async () => historyToolCall
+    } })
+    const messages = [userMessage('第一次'), body, userMessage('第二次')]
+    await run.value.prepareStep({ sessionId: 'native', payload: { turn: 2, step: 1, messages }, decision: { kind: 'enter', messages }, chat: run.chats.get('native') })
+    return run.value.projectRequest({ sessionId: 'native', system: 's', messages })
+  }
+  // 开关开着，但这轮没有 submit_story（例如「正文走工具调用」没开）：不能造出
+  // 一段调用未声明工具的假历史，严格后端会整单拒绝。
+  assert.equal(await requestWith({ historyToolCall: true, visible: ['tavern_read_variables'] }), null)
+  const on = await requestWith({ historyToolCall: true, visible: ['submit_story'] })
+  assert.deepEqual(on.messages[1].content.map(block => block.type), ['tool-call'])
+})
