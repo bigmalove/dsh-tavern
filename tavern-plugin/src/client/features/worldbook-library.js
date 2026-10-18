@@ -84,12 +84,15 @@
 				});
 			}
 			// The library reloads a clean draft when the book changes elsewhere (e.g. the
-			// card Agent edited it); unsaved edits are never overwritten. Our own saves echo
-			// back through props.record.view, so compare identity instead of always resetting.
+			// card Agent edited it). Our own writes echo back as a fresh record, so compare
+			// snapshots instead of always resetting — otherwise an entry toggle would throw
+			// away the unsaved text the user is still editing.
 			React.useEffect(function () {
-				if (props.record.view === savedView.current) return;
-				savedView.current = props.record.view;
-				setDraft(JSON.parse(JSON.stringify(initial)));
+				const next = props.record.view;
+				if (next === savedView.current) return;
+				if (draftSnapshot(next) === draftSnapshot(savedView.current)) { savedView.current = next; return; }
+				savedView.current = next;
+				setDraft(JSON.parse(JSON.stringify(next)));
 				setDirty(false); if (props.onDirty) props.onDirty(false);
 			}, [props.record.view]);
 			React.useEffect(function () {
