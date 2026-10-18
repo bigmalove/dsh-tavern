@@ -4179,7 +4179,8 @@ export async function apply(ctx) {
 
   // 删除某一楼的版本或一条消息；只保留一个撤销点。
   const historyDeletion = createHistoryDeletion({
-    chats: { forSession: floorChatForSession, update: updateChat, patch: patchChat },
+    // completeForSession：玩家输入按楼层表配对，数的必须是完整历史里的下标。
+    chats: { forSession: floorChatForSession, completeForSession: chatForSession, update: updateChat, patch: patchChat },
     sessions: { get: id => ctx.get('agents')?.get(id), flush: session => sessionStore.flush(session) },
     timeline: storyTimeline,
     activity: chat => backgroundTasks.activity(chat),

@@ -32,6 +32,11 @@ export function locateFloor({ chat, session, index, turn, role = 'assistant' }) 
  * story turn; the native event is the last visible turn input of that turn.
  * Native user messages often carry no turn of their own — the enclosing
  * turn/start names their round, exactly as in the floor map.
+ *
+ * An imported save appends every input *before* opening its round, so the
+ * input sits in the gap after the previous turn/end. Its turn is therefore the
+ * next turn/start, not the last one seen; an edited input is a replacement
+ * whose origin append carries the turn.
  */
 export function locateInputFloor({ chat, session, index, turn }) {
   const messages = Array.isArray(chat && chat.messages) ? chat.messages : []
@@ -41,19 +46,43 @@ export function locateInputFloor({ chat, session, index, turn }) {
   if (!Number.isSafeInteger(expected) || expected < 1) return null
   const nodes = session && session.surface && Array.isArray(session.surface.nodes) ? session.surface.nodes : null
   if (nodes === null) return null
+  const events = sessionEvents(session)
   const visible = new Set(nodes.map(Number))
+  // Follow replacements back to the append they shadowed: an edited input keeps
+  // the turn of the original message, not the round it happens to land in.
+  const originOf = new Map()
+  for (const event of events) {
+    const op = event.surfaceOp
+    if (!op || typeof op !== 'object' || op.op !== 'replace' || !Number.isSafeInteger(Number(op.startSeq))) continue
+    originOf.set(Number(event.seq), originOf.get(Number(op.startSeq)) ?? Number(op.startSeq))
+  }
+  const nextTurn = new Array(events.length).fill(0)
+  for (let cursor = events.length - 1, next = 0; cursor >= 0; cursor -= 1) {
+    if (events[cursor].type === 'turn/start') next = Math.max(0, Number(events[cursor].data?.turn) || 0)
+    nextTurn[cursor] = next
+  }
+  const turnOf = new Map()
   let currentTurn = 0
-  let found = null
-  for (const event of sessionEvents(session)) {
-    if (event.type === 'turn/start') {
-      currentTurn = Math.max(0, Number(event.data?.turn) || 0)
-      continue
-    }
+  let open = false
+  for (let cursor = 0; cursor < events.length; cursor += 1) {
+    const event = events[cursor]
+    if (event.type === 'turn/start') { currentTurn = Math.max(0, Number(event.data?.turn) || 0); open = true; continue }
+    if (event.type === 'turn/end') { open = false; continue }
     if (event.type !== 'user/message' || !event.data?.id || !isTurnInput(event.data)) continue
     const stamped = Number(event.data?.turn)
-    const eventTurn = Number.isSafeInteger(stamped) && stamped > 0 ? stamped : currentTurn
-    if (eventTurn !== expected || !visible.has(Number(event.seq))) continue
-    found = { seq: Number(event.seq), turn: expected }
+    if (Number.isSafeInteger(stamped) && stamped > 0) turnOf.set(Number(event.seq), stamped)
+    else if (open && currentTurn > 0) turnOf.set(Number(event.seq), currentTurn)
+    else if (nextTurn[cursor] > 0) turnOf.set(Number(event.seq), nextTurn[cursor])
+  }
+  let found = null
+  for (const event of events) {
+    if (event.type !== 'user/message' || !event.data?.id || !isTurnInput(event.data)) continue
+    const seq = Number(event.seq)
+    if (!visible.has(seq)) continue
+    const origin = originOf.get(seq) ?? seq
+    const eventTurn = turnOf.get(origin) ?? turnOf.get(seq) ?? 0
+    if (eventTurn !== expected) continue
+    found = { seq, turn: expected }
   }
   return found
 }

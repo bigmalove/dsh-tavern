@@ -8,6 +8,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { saveFloorPatch, synchronizeBodyEdits } from './body-editor.js'
+import { floorsIndex } from './conversation-fork-targets.js'
 import { floorToken, locateFloor, locateInputFloor } from './floor-location.js'
 import { createHistoryMutationGuards } from './history-mutation-guards.js'
 import { insertSwipe, removeSwipe, swipeCount, swipeSource, swipeStates } from './swipe-versions.js'
@@ -24,6 +25,32 @@ function clone(value) {
 export function createHistoryDeletion({ chats, sessions, timeline, activity, project, present, sessionPatch, queueSettlement, scripts }) {
   const guards = createHistoryMutationGuards({ sessionPatch, activity })
   const pending = new Set()
+
+  // 玩家输入的原生节点以楼层表为准：导入的聊天记录把输入 append 在 turn/start
+  // 之前，替换节点也不带 turn，只按 turn 反查会落到相邻楼层甚至找不到。
+  // 楼层表数的是完整历史的下标，稀疏的 bounded Chat 对不出来，所以单独取完整 Chat；
+  // 删除是低频操作，这一次完整读换的是两边定位一致。turn 反查保留为兜底。
+  async function locateInput(sessionId, session, chat, floor) {
+    const complete = typeof chats.completeForSession === 'function' ? await chats.completeForSession(sessionId) : null
+    if (complete) {
+      const mapped = Object.values(floorsIndex(complete, session, { busy: false }).bySeq)
+        .find(entry => entry.index === floor.index && entry.role === 'user')
+      if (mapped) return { seq: mapped.seq, turn: mapped.turn }
+    }
+    return locateInputFloor({ chat, session, index: floor.index, turn: floor.turn })
+  }
+
+  // 连续两条玩家输入时，下一条消息还是输入、没有 turn：沿用楼层表的规则，
+  // 越过整段输入找后面那条回复的回合。
+  function replyTurnAfter(messages, index) {
+    for (let cursor = index + 1; cursor < messages.length; cursor += 1) {
+      const candidate = messages[cursor]
+      if (!candidate || typeof candidate !== 'object') continue
+      if (candidate.role !== 'assistant') continue
+      return Number(candidate.turn) || (candidate.greeting === true ? 1 : 0)
+    }
+    return 0
+  }
 
   async function context(sessionId, index) {
     guards.refuseClosedPatch()
@@ -128,12 +155,12 @@ export function createHistoryDeletion({ chats, sessions, timeline, activity, pro
       const message = (chat.messages || [])[index]
       if (!message || message.role !== role) throw new Error('要删除的消息不存在或已变化')
       const expected = role === 'user'
-        ? Number(chat.messages[index + 1]?.turn) || 0
+        ? replyTurnAfter(chat.messages || [], index)
         : Number(message.turn) || (message.greeting === true ? 1 : 0)
       if (!Number.isSafeInteger(expected) || expected < 1 || expected !== turn) throw new Error('要删除的消息不存在或已变化')
       guards.assertRescueHistoryEditable(chat, message)
       const target = role === 'user'
-        ? locateInputFloor({ chat, session: agent.session, index, turn })
+        ? await locateInput(sessionId, agent.session, chat, { index, turn })
         : locateFloor({ chat, session: agent.session, index, turn, role: 'assistant' })
       if (!target) throw new Error('这条消息已不在当前模型上下文中，无法删除')
       const nodes = agent.session.surface?.nodes || []

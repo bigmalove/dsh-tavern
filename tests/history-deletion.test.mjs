@@ -184,3 +184,88 @@ test('新回合开始后删除撤销点失效', async () => {
   const next = timeline.apply({ chat: h.chat, intent: { kind: 'body.begin', turn: 4, userText: '再走一步' } }).chat
   assert.equal(next.deletionUndo, undefined)
 })
+
+// 导入/救援的存档：原生节点是「先 append 一条不带 turn 的 player 输入，再开回合」，
+// 与真实会话一致。删除玩家输入必须按楼层表定位，不能拿上一个 turn/start 当回合。
+function importedRound(session, turn, text, body) {
+  appendSessionEvent(session, 'user/message', { id: 'u' + turn, role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } }, { surfaceOp: 'append' })
+  appendSessionEvent(session, 'turn/start', { turn })
+  appendSessionEvent(session, 'assistant/message', { turn, step: 1, message: { id: 'a' + turn, role: 'assistant', content: [{ type: 'text', text: body }], source: { kind: 'model', provider: 'fixture', model: 'fixture' } } }, { surfaceOp: 'append', sourceEventSeqs: [] })
+  appendSessionEvent(session, 'turn/end', { turn, reason: { kind: 'completed' } })
+}
+
+// 两段玩家输入连着写、后面才开一个回合：导入记录的另一种常见形状。
+function importedRunRound(session, turn, inputs, body) {
+  for (const [offset, text] of inputs.entries()) {
+    appendSessionEvent(session, 'user/message', { id: 'u' + turn + '-' + offset, role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } }, { surfaceOp: 'append' })
+  }
+  appendSessionEvent(session, 'turn/start', { turn })
+  appendSessionEvent(session, 'assistant/message', { turn, step: 1, message: { id: 'a' + turn, role: 'assistant', content: [{ type: 'text', text: body }], source: { kind: 'model', provider: 'fixture', model: 'fixture' } } }, { surfaceOp: 'append', sourceEventSeqs: [] })
+  appendSessionEvent(session, 'turn/end', { turn, reason: { kind: 'completed' } })
+}
+
+function importedFixture({ inputs }) {
+  const session = Session.create('delete-import')
+  appendSessionEvent(session, 'assistant/message', { turn: 1, step: 1, message: { id: 'opening', role: 'assistant', content: [{ type: 'text', text: '开场白' }], source: { kind: 'model', provider: 'fixture', model: 'fixture' } } }, { surfaceOp: 'append', sourceEventSeqs: [] })
+  importedRound(session, 2, '推门', '第一段正文')
+  if (inputs.length > 1) importedRunRound(session, 3, inputs, '第二段正文')
+  else importedRound(session, 3, inputs[0], '第二段正文')
+  let chat = {
+    id: 'chat-import', sessionId: session.id, mode: 'story', _storageRevision: 3,
+    timeline: { schemaVersion: 1, branchId: 'b1', revision: 6, checkpoints: [], participants: { background: { role: 'background', lifetime: 'chat', sessionId: 'bg', status: 'ready', boundary: 4 } }, operations: {}, updatedAt: 0 },
+    posture: '', ledger: null, lastSettle: null, settleStatus: 'idle', variables: { hp: 31 },
+    openingText: '开场白',
+    messages: [
+      { role: 'assistant', greeting: true, text: '开场白', sourceText: '开场白', swipes: ['开场白'], swipeId: 0 },
+      { role: 'user', text: '推门' },
+      { role: 'assistant', turn: 2, text: '第一段正文', sourceText: '第一段正文', swipes: ['第一段正文'], swipeId: 0 },
+      ...inputs.map(text => ({ role: 'user', text })),
+      { role: 'assistant', turn: 3, text: '第二段正文', sourceText: '第二段正文', swipes: ['第二段正文'], swipeId: 0 }
+    ]
+  }
+  const agent = { get session() { return session }, phase: { kind: 'idle', lastTurn: 3 } }
+  const options = {
+    // 生产装配里删除也会拿到完整 Chat（completeForSession），楼层表按它的下标配对。
+    chats: { forSession: async () => structuredClone(chat), completeForSession: async () => structuredClone(chat), update: async (_id, fn) => { chat = fn(structuredClone(chat)); chat._storageRevision++; return structuredClone(chat) } },
+    sessions: { get: () => agent, flush: async () => {} },
+    timeline: createStoryTimeline({ id: prefix => prefix + '-fixed', now: () => 5 }),
+    activity: () => ({ busy: false }),
+    project: async text => projectReplyLayers(text),
+    present: async value => structuredClone(value),
+    queueSettlement: async () => {},
+    scripts: { dispatchEvent: async () => {} }
+  }
+  return {
+    deletion: createHistoryDeletion(options),
+    get chat() { return chat },
+    get session() { return session }
+  }
+}
+
+test('导入存档：输入写在 turn/start 之前，删除玩家输入照样定位到这一条', async () => {
+  const h = importedFixture({ inputs: ['继续'] })
+  assert.deepEqual(texts(h.session), ['开场白', '推门', '第一段正文', '继续', '第二段正文'])
+  await h.deletion.deleteMessage(h.session.id, { index: 3, turn: 3, role: 'user' })
+  assert.deepEqual(h.chat.messages.map(message => message.role), ['assistant', 'user', 'assistant', 'assistant'])
+  // 删掉的是「继续」，相邻的推门与两段正文都还在。
+  assert.deepEqual(texts(h.session), ['开场白', '推门', '第一段正文', undefined, '第二段正文'])
+  assert.equal(h.chat.messages[3].text, '第二段正文')
+
+  await h.deletion.undo(h.session.id)
+  assert.deepEqual(h.chat.messages.map(message => message.role), ['assistant', 'user', 'assistant', 'user', 'assistant'])
+  assert.equal(h.chat.messages[3].text, '继续')
+  assert.deepEqual(texts(h.session), ['开场白', '推门', '第一段正文', '继续', '第二段正文'])
+})
+
+test('导入存档：同一回合连着两条玩家输入，删除靠前那条不会打到后面一条', async () => {
+  const h = importedFixture({ inputs: ['继续', '再来'] })
+  assert.deepEqual(texts(h.session), ['开场白', '推门', '第一段正文', '继续', '再来', '第二段正文'])
+  await h.deletion.deleteMessage(h.session.id, { index: 3, turn: 3, role: 'user' })
+  assert.deepEqual(h.chat.messages.map(message => message.role), ['assistant', 'user', 'assistant', 'user', 'assistant'])
+  assert.equal(h.chat.messages[3].text, '再来')
+  assert.deepEqual(texts(h.session), ['开场白', '推门', '第一段正文', undefined, '再来', '第二段正文'])
+
+  await h.deletion.undo(h.session.id)
+  assert.equal(h.chat.messages[3].text, '继续')
+  assert.equal(h.chat.messages[4].text, '再来')
+})
