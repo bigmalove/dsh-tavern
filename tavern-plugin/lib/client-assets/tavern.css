@@ -854,6 +854,10 @@ body.dsh-tavern-shell-active span:has(.dsh-tavern-hero-lockup) + span { display:
 .dsh-tavern-worldbook-entry .dsh-tavern-card-field { margin-bottom: 6px; }
 .dsh-tavern-worldbook-entry .dsh-tavern-card-field:last-child { margin-bottom: 0; }
 .dsh-tavern-worldbook-editor { padding: 10px 12px 24px; overflow-y: auto; }
+.dsh-tavern-worldbook-savebar { position: sticky; top: -10px; z-index: 3; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -10px -12px 10px; padding: 8px 12px; background: var(--dsw-specific-sidebar-fill); border-bottom: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-tertiary); font-size: 11px; }
+.dsh-tavern-worldbook-savebar.dirty { color: var(--dsw-alias-label-primary); }
+.dsh-tavern-worldbook-savebar.dirty > span::before { content: "●"; margin-right: 5px; color: #d99a3f; font-size: 9px; vertical-align: 1px; }
+.dsh-tavern-worldbook-saving { color: var(--dsw-alias-label-tertiary); font-size: 10px; }
 .dsh-tavern-worldbook-summary { margin: 0 0 10px; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 1.6; }
 .dsh-tavern-worldbook-editor-actions { position: sticky; bottom: 0; display: flex; justify-content: flex-end; gap: 6px; padding: 10px 0; background: var(--dsw-specific-sidebar-fill); }
 .dsh-tavern-worldbook-entry details { margin-top: 7px; }

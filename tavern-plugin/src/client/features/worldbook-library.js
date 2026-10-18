@@ -68,6 +68,10 @@
 			const [busy, setBusy] = React.useState(false);
 			const [error, setError] = usePersistentError("世界书编辑");
 			const [query, setQuery] = React.useState("");
+			// Entry toggles (启用/常驻) are written immediately; the rest still needs the save button.
+			const [dirty, setDirty] = React.useState(false);
+			const [savingEntry, setSavingEntry] = React.useState("");
+			const savedView = React.useRef(initial);
 			// Large books (600+ entries) mount ~75 controls per entry; only open entries mount their form.
 			const [openRefs, setOpenRefs] = React.useState(function () { return new Set(); });
 			const deferredQuery = React.useDeferredValue(query);
@@ -80,9 +84,19 @@
 				});
 			}
 			// The library reloads a clean draft when the book changes elsewhere (e.g. the
-			// card Agent edited it); unsaved edits are never overwritten.
-			React.useEffect(function () { setDraft(JSON.parse(JSON.stringify(initial))); if (props.onDirty) props.onDirty(false); }, [props.record.view]);
-			function editDraft(next) { setDraft(next); if (props.onDirty) props.onDirty(true); }
+			// card Agent edited it); unsaved edits are never overwritten. Our own saves echo
+			// back through props.record.view, so compare identity instead of always resetting.
+			React.useEffect(function () {
+				if (props.record.view === savedView.current) return;
+				savedView.current = props.record.view;
+				setDraft(JSON.parse(JSON.stringify(initial)));
+				setDirty(false); if (props.onDirty) props.onDirty(false);
+			}, [props.record.view]);
+			React.useEffect(function () {
+				const next = dirtyAgainstSaved(draft);
+				setDirty(next); if (props.onDirty) props.onDirty(next);
+			}, [draft, props.record.view]);
+			function editDraft(next) { setDraft(next); }
 			const h = React.createElement;
 			function updateEntry(index, patch) {
 				const entries = (draft.entries || []).slice();
@@ -118,6 +132,26 @@
 					groupOverride: entry.groupOverride, groupWeight: entry.groupWeight, useGroupScoring: entry.useGroupScoring, delayUntilRecursion: entry.delayUntilRecursion,
 				};
 			}
+			function draftSnapshot(view) {
+				return JSON.stringify({
+					name: String(view.displayName || ""), description: String(view.description || ""),
+					tokenBudget: view.tokenBudget, scanDepth: view.scanDepth, recursiveScanning: view.recursiveScanning,
+					entries: (view.entries || []).map(function (entry) { return entryPatch(entry); }),
+				});
+			}
+			function dirtyAgainstSaved(next) { return draftSnapshot(next) !== draftSnapshot(savedView.current || initial); }
+			// 启用 / 常驻是高频开关：立即落盘，否则“改了但没点保存”会在离开页面后悄悄回滚。
+			async function saveEntryPatch(entry, patch) {
+				if (!entry || String(entry.ref).startsWith("new:")) return true;
+				setSavingEntry(entry.ref); setError("");
+				try {
+					const result = await rpc("updateWorldBook", { source: props.record.source, update: { operations: [{ op: "update", ref: entry.ref, patch: patch }] } }, props.sessionId);
+					if (result && result.view) savedView.current = result.view;
+					setSavingEntry("");
+					props.onSaved(result);
+					return true;
+				} catch (err) { setError(String(err && err.message || err)); setSavingEntry(""); return false; }
+			}
 			async function save() {
 				setBusy(true); setError("");
 				try {
@@ -137,6 +171,9 @@
 					if (draft.scanDepth !== initial.scanDepth) update.scanDepth = draft.scanDepth;
 					if (draft.recursiveScanning !== initial.recursiveScanning) update.recursiveScanning = draft.recursiveScanning;
 					const result = await rpc("updateWorldBook", { source: props.record.source, update: update }, props.sessionId);
+					// New entries come back with server refs; adopt them so a second save cannot re-add.
+					if (result && result.view) { savedView.current = result.view; setDraft(JSON.parse(JSON.stringify(result.view))); }
+					setDirty(false); if (props.onDirty) props.onDirty(false);
 					props.onSaved(result); notifyTavernDataChanged(["worldbooks", "cards"], "worldbooks");
 				} catch (err) { setError(String(err && err.message || err)); }
 				finally { setBusy(false); }
@@ -150,9 +187,18 @@
 					h("summary", { className: "dsh-tavern-worldbook-entry-head" }, entry.comment || entry.title || "未命名条目"),
 					open ? h("div", { className: "dsh-tavern-worldbook-entry-body" },
 						h("div", { className: "dsh-tavern-worldbook-entry-actions" },
-							h("label", null, h("input", { type: "checkbox", checked: entry.enabled !== false, onChange: function (event) { updateEntry(index, { enabled: event.target.checked }); } }), "启用"),
+							h("label", null, h("input", { type: "checkbox", disabled: savingEntry === entry.ref, checked: entry.enabled !== false, onChange: function (event) {
+								const value = event.target.checked;
+								updateEntry(index, { enabled: value });
+								saveEntryPatch(entry, { enabled: value }).then(function (saved) { if (!saved) updateEntry(index, { enabled: entry.enabled }); });
+							} }), "启用"),
 
-							h("button", { className: "dsh-tavern-worldbook-kind", onClick: function () { updateEntry(index, { constant: !entry.constant }); } }, entry.constant ? "常驻" : "非常驻")
+							h("button", { className: "dsh-tavern-worldbook-kind", disabled: savingEntry === entry.ref, onClick: function () {
+								const value = !entry.constant;
+								updateEntry(index, { constant: value });
+								saveEntryPatch(entry, { constant: value }).then(function (saved) { if (!saved) updateEntry(index, { constant: entry.constant }); });
+							} }, entry.constant ? "常驻" : "非常驻"),
+							savingEntry === entry.ref ? h("span", { className: "dsh-tavern-worldbook-saving" }, "保存中…") : null
 						),
 						h("div", { className: "dsh-tavern-card-field dsh-tavern-worldbook-content" }, h("label", null, "内容"), h("textarea", { className: "large", rows: 14, "aria-label": "条目内容", value: entry.content || "", onChange: function (event) { updateEntry(index, { content: event.target.value }); } })),
 						h("details", { className: "dsh-tavern-worldbook-entry-settings" }, h("summary", null, "条目设置"),
@@ -209,11 +255,18 @@
 				);
 			}
 			const entryGroups = groupWorldBookEditorEntries(draft.entries, deferredQuery);
+			async function leave() {
+				if (dirty && !await askConfirm("还有未保存的修改，返回世界书库会丢弃它们。确定离开吗？")) return;
+				props.onBack();
+			}
 			return h("div", { className: "dsh-tavern-library" },
-				h("div", { className: "dsh-tavern-status-head" }, h("button", { className: "dsh-tavern-btn", onClick: props.onBack }, "← 返回世界书库"), h("div", { className: "dsh-tavern-status-title" }, draft.displayName || "未命名世界书"), h("div", { className: "dsh-tavern-question-sub" }, props.record.source.kind === "card" ? "人物卡内置 · " + props.record.source.cardName : "独立世界书"), props.actions),
+				h("div", { className: "dsh-tavern-status-head" }, h("button", { className: "dsh-tavern-btn", onClick: leave }, "← 返回世界书库"), h("div", { className: "dsh-tavern-status-title" }, draft.displayName || "未命名世界书"), h("div", { className: "dsh-tavern-question-sub" }, props.record.source.kind === "card" ? "人物卡内置 · " + props.record.source.cardName : "独立世界书"), props.actions),
 				props.stale ? h("div", { className: "dsh-tavern-dock-error", role: "status" }, "这本世界书已在别处被修改（例如卡片 Agent），当前显示的不是最新内容。",
 					h("button", { className: "dsh-tavern-btn", disabled: busy, onClick: props.onReload }, "重新加载（放弃未保存的修改）")) : null,
 				h("div", { className: "dsh-tavern-worldbook-editor" },
+					h("div", { className: "dsh-tavern-worldbook-savebar" + (dirty ? " dirty" : "") },
+						h("span", null, dirty ? "有未保存的修改" : "没有未保存的修改"),
+						h("button", { className: "dsh-card-primary", disabled: busy, onClick: save }, busy ? "保存中…" : "保存世界书")),
 					props.bindingPanel,
 					h("div", { className: "dsh-tavern-card-field" }, h("label", null, "世界书名称"), h("input", { value: draft.displayName || "", onChange: function (event) { editDraft(Object.assign({}, draft, { displayName: event.target.value })); } })),
 					h("div", { className: "dsh-tavern-card-field" }, h("label", null, "说明"), h("textarea", { value: draft.description || "", onChange: function (event) { editDraft(Object.assign({}, draft, { description: event.target.value })); } })),
@@ -223,8 +276,7 @@
 					h("div", { className: "dsh-tavern-card-field" }, h("label", null, "搜索条目"), h("input", { type: "search", value: query, placeholder: "搜索标题、正文或触发词", onChange: function (event) { setQuery(event.target.value); } }), h("span", null, "匹配 " + (entryGroups.constant.length + entryGroups.dynamic.length) + " / " + draft.entries.length + " 条")),
 					entryGroup("常驻条目", "始终进入上下文", entryGroups.constant),
 					entryGroup("非常驻条目", "按触发词匹配", entryGroups.dynamic),
-					error ? h("div", { className: "dsh-card-error" }, error) : null,
-					h("div", { className: "dsh-tavern-worldbook-editor-actions" }, h("button", { className: "dsh-card-primary", disabled: busy, onClick: save }, busy ? "保存中…" : "保存世界书"))
+					error ? h("div", { className: "dsh-card-error" }, error) : null
 				)
 			);
 		}
