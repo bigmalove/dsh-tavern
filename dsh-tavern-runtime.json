@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "revision": "13a2eccb54d833417e21b37818e327ee52a12aa3",
-  "releaseSequence": 676,
+  "revision": "90d3deaa5df47f90853169a4029a181c7122dd1c",
+  "releaseSequence": 677,
   "version": "2.7.0",
   "files": [
     {
@@ -1231,8 +1231,8 @@
     },
     {
       "path": "tavern-plugin/lib/domain/native-conversation-storage.js",
-      "sha256": "a0ff2cb3b4943a8a8db0e187613a7b02115a2fa3f7ee35f783de29916e9dd985",
-      "size": 41788
+      "sha256": "109179bc84944fec7ab07472c6154436cf5866d2679837e8b6f79f41c878818f",
+      "size": 42001
     },
     {
       "path": "tavern-plugin/lib/domain/native-opening.js",
