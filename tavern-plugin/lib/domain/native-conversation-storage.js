@@ -427,7 +427,10 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   const chat=await selectedHeader(id,view,['id','sessionId','_storageRevision','mode','cardPath','cardContextRevision',
    'backgroundConfigVersion','conversationFeaturesVersion','disabledWritingSkills','contextCompaction','updatedAt','timeline','candidateAgent',
    'cardName','requestMode','statusBarPlacement','statusSections','webSearchEnabled','candidates','taskMailbox','regenInProgress','settleError','scriptState',
-   'hiddenDshErrorTurns','suppressedDshTurns','regeneratedDshTurns','tavernHelperLifecycleRevision','importHistory','rollbackUndo','pendingMvuSettlement'])
+   'hiddenDshErrorTurns','suppressedDshTurns','regeneratedDshTurns','tavernHelperLifecycleRevision','importHistory','rollbackUndo','pendingMvuSettlement',
+   // 撤销删除的凭据只存在 header 里；这份清单是视图投影的唯一输入，漏了它
+   // canUndoDeletion 就恒为 false，界面上的「撤销删除」永远不出现。
+   'deletionUndo'])
   if(Object.values(chat.timeline?.operations??{}).some(op=>op?.kind==='body'&&op.status==='foreground-completed'))return projectChatSessionState((await read(id)).chat)
   // Cached rows never leave this module: full projections detach them below,
   // scoped projections clone each row on access. Snapshot identity pins validity.
