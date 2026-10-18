@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "revision": "8ab9b0d5afa2eec22135d8e3e5891c0f46b81c82",
-  "releaseSequence": 685,
+  "revision": "abfd4e6f665829bd62df83b8e0d683d5bb6a525f",
+  "releaseSequence": 686,
   "version": "2.7.0",
   "files": [
     {
@@ -1841,8 +1841,8 @@
     },
     {
       "path": "tavern-plugin/lib/domain/story-tool-submission.js",
-      "sha256": "ea32bd62e871d11fab47244ae26cde5153ace49941c69b3ee1aea1958f05208b",
-      "size": 8561
+      "sha256": "f40d1a5ca72e4c2bf13db7758c27e4c73b15f865c70678689e760f5b8ada95ea",
+      "size": 9443
     },
     {
       "path": "tavern-plugin/lib/domain/surface-recovery.js",
