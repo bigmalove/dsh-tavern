@@ -5411,6 +5411,34 @@ function tavernModelRefusalNotice(text) {
 		        animation = 0;
 		    }
 		    function selected() { return Boolean(String(window.getSelection() || '')); }
+		    // Measured on a phone (Android WebView 155, message frame sized to its content):
+		    // one stroke fired touchmove 59 times, nothing was preventDefault'ed, and neither the
+		    // frame nor the conversation moved. The only blocking style in the chain was
+		    // `body { touch-action: none }`, from a card stylesheet.
+		    //
+		    // touch-action intersects up to the root, so that single declaration makes the browser
+		    // treat the stroke as "not a scroll": the frame has no scroll range of its own (it is
+		    // sized to its content) and the stroke is never chained to the conversation either.
+		    // Nothing pans, and no JS relays it because the gesture looks native.
+		    //
+		    // A message document never needs to block panning at its root — a card that wants a
+		    // custom gesture declares it on its own container, which nativeVertical() already
+		    // handles — so normalise the two root elements back to `auto`. Any value that already
+		    // allows vertical panning is left untouched.
+		    const allowsVerticalPan = /^(auto|manipulation|pan-y|pan-up|pan-down)$/;
+		    function unblockRootPanning() {
+		        for (const node of [document.documentElement, document.body]) {
+		            if (!node) continue;
+		            const action = String(getComputedStyle(node).touchAction || 'auto');
+		            if (allowsVerticalPan.test(action)) continue;
+		            // Keep the original value: it is the only remaining trace of who blocked
+		            // panning, and it is what a bug report needs.
+		            const seen = window.__dshTavernRootTouchAction || (window.__dshTavernRootTouchAction = {});
+		            const key = node === document.body ? 'body' : 'html';
+		            if (!seen[key]) seen[key] = action;
+		            node.style.setProperty('touch-action', 'auto', 'important');
+		        }
+		    }
 		    function nativeVertical(start) {
 		        // touch-action is intersected up to the first scroll container.
 		        for (let node = start; node && node.nodeType === 1; node = node.parentElement) {
@@ -5426,6 +5454,9 @@ function tavernModelRefusalNotice(text) {
 		        if (rest) send('dsh-tavern-frame-scroll', { dy: rest });
 		    }
 		    addEventListener('touchstart', event => {
+		        // Card stylesheets can be appended after this script, and a card script can set
+		        // the value at any time, so re-check per gesture (two computed-style reads).
+		        unblockRootPanning();
 		        stop();
 		        sequence++;
 		        send('dsh-tavern-frame-touch-start');
@@ -5481,6 +5512,9 @@ function tavernModelRefusalNotice(text) {
 		    addEventListener('message', event => {
 		        if (event.source === parent && event.data && event.data.token === token && event.data.type === 'dsh-tavern-frame-touch-stop' && event.data.sequence === sequence) stop();
 		    });
+		    // Stylesheets are normally parsed by now; the per-gesture check catches late ones.
+		    unblockRootPanning();
+		    addEventListener('load', unblockRootPanning);
 		}
 
 		// At most one manually scrolling frame per host; no persistent global listeners.
