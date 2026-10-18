@@ -91,7 +91,8 @@ export function volcengineResource(voice, override) {
 
 /** The emotion code this voice understands, or '' to leave its default delivery alone. */
 export function volcengineEmotion(emotion, resourceId, voice) {
-  const code = VOLCENGINE_EMOTIONS[String(emotion || '')]
+  const key = String(emotion || '')
+  const code = Object.hasOwn(VOLCENGINE_EMOTIONS, key) ? VOLCENGINE_EMOTIONS[key] : ''
   if (!code) return ''
   if (resourceId === 'seed-tts-2.0') return code
   if (resourceId === 'seed-tts-1.0' && /_emo(_v2)?_/i.test(String(voice || ''))) return code

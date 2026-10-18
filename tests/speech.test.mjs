@@ -143,6 +143,7 @@ test('配音合成：火山引擎按音色选资源与情绪，把逐行 JSON �
   assert.equal(volcengineEmotion('joy', 'seed-tts-1.0', 'zh_female_cancan_mars_bigtts'), '')
   assert.equal(volcengineEmotion('joy', 'seed-tts-1.0', 'zh_female_shuangkuaisisi_emo_v2_mars_bigtts'), 'happy')
   assert.equal(volcengineEmotion('confusion', 'seed-tts-2.0', 'zh_female_vv_uranus_bigtts'), '')
+  assert.equal(volcengineEmotion('__proto__', 'seed-tts-2.0', 'zh_female_vv_uranus_bigtts'), '', '原型键不算情绪')
 
   await assert.rejects(speech.synthesize({ provider: 'volcengine', text: '没人理我。', voice: 'zh_male_m191_uranus_bigtts' }), /火山引擎没有返回音频：invalid speaker/)
   await assert.rejects(speech.synthesize({ provider: 'volcengine', text: '再试一次。', voice: 'zh_male_taocheng_uranus_bigtts' }),
