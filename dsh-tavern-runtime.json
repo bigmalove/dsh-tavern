@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "revision": "30c59978a6f17f726bbe8a6616b4c8be6b6cb6e5",
-  "releaseSequence": 663,
+  "revision": "2d18f6dd7bcc8e88495c2f0484eef531376c03c9",
+  "releaseSequence": 664,
   "version": "2.7.0",
   "files": [
     {
@@ -281,7 +281,7 @@
     },
     {
       "path": "pnpm-lock.yaml",
-      "sha256": "a5666e17a6b3b3170d55ed66daafd7c504484efa53a9003611d927a9f4c99836",
+      "sha256": "41aa27dc1d3c0e9d7210d09827551cf9eb92b0a76dbe431352995ac0e62a95f2",
       "size": 85828
     },
     {
