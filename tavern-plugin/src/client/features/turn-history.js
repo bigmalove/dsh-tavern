@@ -256,12 +256,24 @@
 				if (hiddenStoryTurns.has(tailTurnOf(tail))) hideTurnTail(tail);
 			}
 		}
-			function apply(sessionId, turns, regeneratedDshTurns) {
+		// 单条删除只藏那一楼正文，尾行（复制/分支/用时/时间）是宿主另画的节点，会留在
+		// 页面上。这里只藏尾行本身：玩家输入与同回合其它楼层都还在，不能顺手带走。
+		function applyDeletedReplyTurns(turns) {
+			const set = new Set((Array.isArray(turns) ? turns : []).map(String));
+			if (set.size === 0) return;
+			const tails = root().querySelectorAll('[data-chat-flow-kind="turn-tail"], [data-turn-tail]');
+			for (let i = 0; i < tails.length; i++) {
+				const tail = tails[i];
+				if (set.has(tailTurnOf(tail))) hideRow(tail);
+			}
+		}
+			function apply(sessionId, turns, regeneratedDshTurns, deletedReplyTurns) {
                 // Reconcile both directions: an older observer may have hidden a
                 // restored turn after the action's immediate DOM update.
                 restoreHiddenRows();
 				applySuppressedDshTurns(turns, regeneratedDshTurns);
 				applyRegeneratedDshTurns(regeneratedDshTurns);
+				applyDeletedReplyTurns(deletedReplyTurns);
                 // Native rows can mount without their turn tail. Explicit ownership
                 // must remain authoritative during streaming and partial hydration.
                 const suppressed = new Set((Array.isArray(turns) ? turns : []).map(String));
@@ -286,7 +298,7 @@
 				const adopted = view && view.adopted;
 				if (adopted && Number(adopted.hiddenTurn) > 0) forgetHiddenTurn(HIDDEN_TURNS_KEY, sessionId, Number(adopted.hiddenTurn));
 				if (adopted && Number(adopted.syntheticTurn) > 0) forgetHiddenTurn(HIDDEN_REGEN_USER_TURNS_KEY, sessionId, Number(adopted.syntheticTurn));
-				apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns);
+				apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns, view && view.deletedReplyTurns);
 			}
             function restored(sessionId, view) {
                 const turn = Number(view && view.undoneRollback && view.undoneRollback.turn);
@@ -301,10 +313,10 @@
                     tail.style.display = "";
                     turnRowsBefore(tail, tail.getAttribute("data-chat-turn")).forEach(function (row) { row.style.display = ""; });
                 }
-                apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns);
+                apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns, view && view.deletedReplyTurns);
             }
 			function rolledBack(sessionId, view) {
-				apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns);
+				apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns, view && view.deletedReplyTurns);
 			}
 			return Object.freeze({ apply: apply, regenerated: regenerated, rolledBack: rolledBack, restored: restored });
 		}

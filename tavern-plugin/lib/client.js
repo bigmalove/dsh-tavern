@@ -13739,9 +13739,10 @@ function bindTavernFontZoom(node, win) {
 					if (busy) return;
 					setBusy(true);
 					try {
-						const result = await rpc("getBodyEdit", { index: floor.index, turn: floor.turn, role: floor.role }, props.sessionId);
+						// 带上节点身份：删掉别的楼层后 index 会前移，服务端按 id/seq 才能改对。
+						const result = await rpc("getBodyEdit", { index: floor.index, turn: floor.turn, role: floor.role, messageId: props.messageId || "", seq: floor.seq }, props.sessionId);
 						const edit = result.edit;
-						setTavernBodyEditPanel({ sessionId: props.sessionId, edit: edit, texts: edit.parts.filter(function (part) { return part.kind === "text"; }).map(function (part) { return part.text; }), busy: false, error: "" });
+						setTavernBodyEditPanel({ sessionId: props.sessionId, edit: edit, messageId: props.messageId || "", seq: floor.seq, texts: edit.parts.filter(function (part) { return part.kind === "text"; }).map(function (part) { return part.text; }), busy: false, error: "" });
 					} catch (error) { tavernErrorHub.report("编辑正文", error); }
 					finally { setBusy(false); }
 				}
@@ -13812,7 +13813,7 @@ function bindTavernFontZoom(node, win) {
 				if (busy || disabled) return;
 				setBusy(true);
 				try {
-					await rpc("selectSwipe", { sessionId: props.sessionId, index: floor.index, turn: floor.turn, swipeId: swipeId, token: floor.token }, props.sessionId);
+					await rpc("selectSwipe", { sessionId: props.sessionId, index: floor.index, turn: floor.turn, swipeId: swipeId, token: floor.token, messageId: props.messageId || "" }, props.sessionId);
 					liveTavernView.invalidate(props.sessionId);
 				} catch (error) { tavernErrorHub.report("切换正文版本", error); }
 				finally { setBusy(false); liveTavernView.invalidate(props.sessionId); }
@@ -13839,7 +13840,7 @@ function bindTavernFontZoom(node, win) {
 				if (!ok) return;
 				setBusy(true);
 				try {
-					const result = await rpc("deleteFloorVersion", { index: floor.index, turn: floor.turn, swipeId: current, token: floor.token }, props.sessionId);
+					const result = await rpc("deleteFloorVersion", { index: floor.index, turn: floor.turn, swipeId: current, token: floor.token, messageId: props.messageId || "" }, props.sessionId);
 					applyTavernResultView(props.sessionId, result.view);
 					notifyTavernDataChanged(["sessions"], "play-controls");
 					tavernCoordination.invalidate(props.sessionId);
@@ -18955,12 +18956,24 @@ function bindTavernFontZoom(node, win) {
 				if (hiddenStoryTurns.has(tailTurnOf(tail))) hideTurnTail(tail);
 			}
 		}
-			function apply(sessionId, turns, regeneratedDshTurns) {
+		// 单条删除只藏那一楼正文，尾行（复制/分支/用时/时间）是宿主另画的节点，会留在
+		// 页面上。这里只藏尾行本身：玩家输入与同回合其它楼层都还在，不能顺手带走。
+		function applyDeletedReplyTurns(turns) {
+			const set = new Set((Array.isArray(turns) ? turns : []).map(String));
+			if (set.size === 0) return;
+			const tails = root().querySelectorAll('[data-chat-flow-kind="turn-tail"], [data-turn-tail]');
+			for (let i = 0; i < tails.length; i++) {
+				const tail = tails[i];
+				if (set.has(tailTurnOf(tail))) hideRow(tail);
+			}
+		}
+			function apply(sessionId, turns, regeneratedDshTurns, deletedReplyTurns) {
                 // Reconcile both directions: an older observer may have hidden a
                 // restored turn after the action's immediate DOM update.
                 restoreHiddenRows();
 				applySuppressedDshTurns(turns, regeneratedDshTurns);
 				applyRegeneratedDshTurns(regeneratedDshTurns);
+				applyDeletedReplyTurns(deletedReplyTurns);
                 // Native rows can mount without their turn tail. Explicit ownership
                 // must remain authoritative during streaming and partial hydration.
                 const suppressed = new Set((Array.isArray(turns) ? turns : []).map(String));
@@ -18985,7 +18998,7 @@ function bindTavernFontZoom(node, win) {
 				const adopted = view && view.adopted;
 				if (adopted && Number(adopted.hiddenTurn) > 0) forgetHiddenTurn(HIDDEN_TURNS_KEY, sessionId, Number(adopted.hiddenTurn));
 				if (adopted && Number(adopted.syntheticTurn) > 0) forgetHiddenTurn(HIDDEN_REGEN_USER_TURNS_KEY, sessionId, Number(adopted.syntheticTurn));
-				apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns);
+				apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns, view && view.deletedReplyTurns);
 			}
             function restored(sessionId, view) {
                 const turn = Number(view && view.undoneRollback && view.undoneRollback.turn);
@@ -19000,10 +19013,10 @@ function bindTavernFontZoom(node, win) {
                     tail.style.display = "";
                     turnRowsBefore(tail, tail.getAttribute("data-chat-turn")).forEach(function (row) { row.style.display = ""; });
                 }
-                apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns);
+                apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns, view && view.deletedReplyTurns);
             }
 			function rolledBack(sessionId, view) {
-				apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns);
+				apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns, view && view.deletedReplyTurns);
 			}
 			return Object.freeze({ apply: apply, regenerated: regenerated, rolledBack: rolledBack, restored: restored });
 		}
@@ -20049,6 +20062,13 @@ function bindTavernFontZoom(node, win) {
                 } catch (error) { tavernErrorHub.report("撤销删除", error); }
                 finally { setBusy(false); liveTavernView.invalidate(props.sessionId); tavernCoordination.invalidate(props.sessionId); }
             }
+            // 菜单项之外还要能在输入区直接看到：删完那一楼的尾行会整条藏掉，
+            // 藏进「更多 ▾」里的入口跟着一起没了，玩家就找不到撤销。
+            if (props.inDock) {
+                return React.createElement("button", { type: "button", className: "dsh-tavern-choice-trigger dsh-tavern-undo-deletion",
+                    disabled: busy || running, title: "把刚刚删除的" + kind + "放回去；新的操作会使此恢复点失效", onClick: undo },
+                    busy ? "恢复中…" : "撤销删除（" + kind + "）");
+            }
             return React.createElement("button", { role: "menuitem", disabled: busy || running, onClick: undo,
                 title: "把刚刚删除的" + kind + "放回去；新的操作会使此恢复点失效" }, busy ? "恢复中…" : "撤销删除（" + kind + "）");
         }
@@ -20083,7 +20103,8 @@ function bindTavernFontZoom(node, win) {
 			async function save() {
 				setBodyEditPanel(Object.assign({}, panel, { busy: true, error: "" }));
 				try {
-					const result = await rpc("saveBodyEdit", { token: panel.edit.token, index: panel.edit.index, turn: panel.edit.turn, role: panel.edit.role, latest: panel.edit.latest === true, texts: panel.texts }, props.sessionId);
+					// 保存也带节点身份：面板打开后可能又删了别的楼层，index 已经前移。
+					const result = await rpc("saveBodyEdit", { token: panel.edit.token, index: panel.edit.index, turn: panel.edit.turn, role: panel.edit.role, latest: panel.edit.latest === true, messageId: panel.messageId || "", seq: panel.seq, texts: panel.texts }, props.sessionId);
 					applyTavernResultView(props.sessionId, result.view);
 					notifyTavernDataChanged(["sessions"], "play-controls");
 					tavernCoordination.invalidate(props.sessionId);
@@ -20515,6 +20536,8 @@ function bindTavernFontZoom(node, win) {
 			return h("div", { className: "dsh-tavern-dock-actions" },
 				isBodyMode(sessionMode) && latestMessageId ? React.createElement(CandidateAction, Object.assign({}, props, { messageId: latestMessageId })) : null,
 				isBodyMode(sessionMode) && live.view && !live.view.canClearIncompleteReply ? React.createElement(TavernPluginComposerActions, { sessionId: props.sessionId, turn: imageTurn, running: running }) : null,
+				// 撤销删除放在这里：消息那行的尾行会被整条藏掉，不能只留在「更多」里。
+				isBodyMode(sessionMode) ? React.createElement(TavernUndoDeletionAction, Object.assign({}, props, { inDock: true })) : null,
 				isBodyMode(sessionMode) ? React.createElement(TavernMoreActions, props) : React.createElement(TavernCompactionAction, props),
                 live.view && live.view.contextCompaction && live.view.contextCompaction.operation && live.view.contextCompaction.operation.status === "running" ? h("span", { role: "status", className: "dsh-tavern-settings-desc" }, "正在压缩前后台上下文…")
                     : live.view && live.view.contextCompaction && live.view.contextCompaction.warning ? h("span", { role: "status", className: "dsh-tavern-settings-desc" }, live.view.contextCompaction.warning,
@@ -20687,11 +20710,14 @@ function bindTavernFontZoom(node, win) {
 			const suppressedDshTurnsRevision = suppressedDshTurns.join(",");
 			const regeneratedDshTurns = suppressionState.view && suppressionState.view.regeneratedDshTurns || {};
 			const regeneratedDshTurnsRevision = JSON.stringify(regeneratedDshTurns);
+			// 单条删除后要藏掉宿主那条尾行（复制/分支/用时/时间）。
+			const deletedReplyTurns = suppressionState.view && Array.isArray(suppressionState.view.deletedReplyTurns) ? suppressionState.view.deletedReplyTurns : [];
+			const deletedReplyTurnsRevision = deletedReplyTurns.join(",");
 			React.useEffect(function () {
 				let frame = null;
 				function applyProjectionState() {
 					frame = null;
-					historyProjection.apply(props.sessionId, suppressedDshTurns, regeneratedDshTurns);
+					historyProjection.apply(props.sessionId, suppressedDshTurns, regeneratedDshTurns, deletedReplyTurns);
 				}
 				function scheduleProjection() {
 					if (frame === null) frame = window.requestAnimationFrame(applyProjectionState);
@@ -20710,7 +20736,7 @@ function bindTavernFontZoom(node, win) {
 				});
 				observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-chat-flow-kind", "data-chat-turn", "data-turn-tail"] });
 				return function () { observer.disconnect(); if (frame !== null) window.cancelAnimationFrame(frame); };
-			}, [props.sessionId, latestMessageId, running, suppressedDshTurnsRevision, regeneratedDshTurnsRevision]);
+			}, [props.sessionId, latestMessageId, running, suppressedDshTurnsRevision, regeneratedDshTurnsRevision, deletedReplyTurnsRevision]);
 			return null;
 		}
 		function CandidateQuestion(props) {

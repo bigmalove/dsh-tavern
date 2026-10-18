@@ -41,15 +41,16 @@ export function createHistoryDeletion({ chats, sessions, timeline, activity, pro
   }
 
   // 连续两条玩家输入时，下一条消息还是输入、没有 turn：沿用楼层表的规则，
-  // 越过整段输入找后面那条回复的回合。
-  function replyTurnAfter(messages, index) {
+  // 越过整段输入找后面那条回复的回合；后面那条回复已经被删掉时，用调用方带来的
+  // 回合（客户端从楼层表取的），否则这条输入就永远删不掉。
+  function replyTurnAfter(messages, index, givenTurn = 0) {
     for (let cursor = index + 1; cursor < messages.length; cursor += 1) {
       const candidate = messages[cursor]
       if (!candidate || typeof candidate !== 'object') continue
       if (candidate.role !== 'assistant') continue
       return Number(candidate.turn) || (candidate.greeting === true ? 1 : 0)
     }
-    return 0
+    return Number(givenTurn) || 0
   }
 
   async function context(sessionId, index) {
@@ -92,8 +93,11 @@ export function createHistoryDeletion({ chats, sessions, timeline, activity, pro
 
   async function deleteVersion(sessionId, input = {}) {
     if (pending.has(sessionId)) throw new Error('正在删除正文版本，请稍候')
-    const index = Number(input.index)
-    const turn = Number(input.turn)
+    // 同 deleteMessage：按钮拿着删除前的 index，带消息 id 时按楼层表重新定位。
+    const resolved = await resolveNamed(sessionId, input)
+    if (resolved === undefined) throw new Error('这条消息已经不在了，请刷新后重试')
+    const index = resolved && resolved.role === 'assistant' ? resolved.index : Number(input.index)
+    const turn = resolved && resolved.role === 'assistant' ? Number(resolved.turn) : Number(input.turn)
     const swipeId = Number(input.swipeId)
     if (!Number.isSafeInteger(index) || index < 0) throw new Error('正文楼层不存在')
     if (!Number.isSafeInteger(swipeId) || swipeId < 0) throw new Error('正文版本不存在')
@@ -179,10 +183,13 @@ export function createHistoryDeletion({ chats, sessions, timeline, activity, pro
       const { chat, agent } = await context(sessionId, index)
       const message = (chat.messages || [])[index]
       if (!message || message.role !== role) throw new Error('要删除的消息不存在或已变化')
-      const expected = role === 'user'
-        ? replyTurnAfter(chat.messages || [], index)
-        : Number(message.turn) || (message.greeting === true ? 1 : 0)
-      if (!Number.isSafeInteger(expected) || expected < 1 || expected !== turn) throw new Error('要删除的消息不存在或已变化')
+      // 玩家输入的回合由后面的回复决定；那条回复被删掉之后，只剩调用方（楼层表）
+      // 带来的回合可用，此时不能再和邻居对账。
+      const neighbourTurn = role === 'user' ? replyTurnAfter(chat.messages || [], index) : 0
+      const messageTurn = role === 'user' ? turn : Number(message.turn) || (message.greeting === true ? 1 : 0)
+      if (!Number.isSafeInteger(messageTurn) || messageTurn < 1) throw new Error('要删除的消息不存在或已变化')
+      if (neighbourTurn > 0 && neighbourTurn !== turn) throw new Error('要删除的消息不存在或已变化')
+      if (role !== 'user' && messageTurn !== turn) throw new Error('要删除的消息不存在或已变化')
       guards.assertRescueHistoryEditable(chat, message)
       const target = role === 'user'
         ? await locateInput(sessionId, agent.session, chat, { index, turn })

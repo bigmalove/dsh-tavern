@@ -37,12 +37,18 @@ function resolveFloor(chat, input) {
   if (role !== message.role || !['assistant', 'user'].includes(role)) throw new Error('正文楼层不存在或已变化')
   const greeting = message.greeting === true
   // A player input belongs to the round of the reply that follows it; both the
-  // greeting and later replies carry their own turn.
+  // greeting and later replies carry their own turn. That reply may have been
+  // deleted on its own, leaving the input without a neighbour to read the round
+  // from: the caller's turn (already resolved through the floor table) is then
+  // the only truth, otherwise every edit of that input looks "changed".
+  const neighbourTurn = role === 'user' ? Number(messages[index + 1]?.turn) || 0 : 0
+  const givenTurn = input && input.turn !== undefined && input.turn !== null ? Number(input.turn) : 0
   const turn = role === 'user'
-    ? Number(messages[index + 1]?.turn) || 0
+    ? (neighbourTurn > 0 ? neighbourTurn : givenTurn)
     : Number(message.turn) || (greeting ? 1 : 0)
   if (!Number.isSafeInteger(turn) || turn < 1) throw new Error('正文楼层不存在或已变化')
-  if (input && input.turn !== undefined && input.turn !== null && Number(input.turn) !== turn) throw new Error('正文楼层不存在或已变化')
+  // 从下一条回复读到的回合才有对比意义；输入自己带的就是它的回合。
+  if (input && givenTurn > 0 && neighbourTurn > 0 && givenTurn !== neighbourTurn) throw new Error('正文楼层不存在或已变化')
   const latest = role === 'assistant' && !greeting
     && index === messages.length - 1 && index === messages.findLastIndex(item => item?.role === 'assistant')
   if (!explicit && !latest) throw new Error('只能编辑最后一轮正文')
@@ -162,6 +168,21 @@ export function createBodyEditor({ chats, sessions, timeline, activity, project,
   }
   async function context(sessionId, input) {
     guards.refuseClosedPatch()
+    // 页面上的按钮带着删除前的 index：删掉一条后后面每一条都会前移。带节点身份
+    // （助手消息 id / 玩家输入的原生 seq）时先用完整存档的楼层表换回当前 index。
+    const named = str(input && input.messageId).trim()
+    const seq = Number(input && input.seq)
+    let resolved = null
+    if (named !== '' || (Number.isSafeInteger(seq) && seq >= 0)) {
+      const owner = sessions.get(sessionId)
+      const complete = owner?.session && typeof chats.completeForSession === 'function' ? await chats.completeForSession(sessionId) : null
+      if (complete) {
+        const floors = floorsIndex(complete, owner.session, { busy: false })
+        resolved = named !== '' ? floors.byMessageId[named] : floors.bySeq[String(seq)]
+        if (!resolved) throw new Error('这条消息已经不在了，请刷新后重试')
+        input = { ...input, index: resolved.index, turn: resolved.turn, role: resolved.role }
+      }
+    }
     const index = input && Number.isSafeInteger(Number(input.index)) ? Number(input.index) : undefined
     let chat = await chats.forSession(sessionId, index === undefined ? undefined : { index })
     if (!chat) throw new Error('会话不存在')

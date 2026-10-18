@@ -80,7 +80,17 @@ export function floorsIndex(chat, session, { busy = false } = {}) {
   // isAppendSurfaceEvent）。正文编辑写出的是替换副本，所以页面上那一楼的节点永远是
   // 最早 append 的那条。这里沿替换链记下每个节点的 append 来源，好让页面节点查得到楼层。
   const originOf = new Map()
-  for (const event of sessionEvents(session)) {
+  const events = sessionEvents(session)
+  // 输入自己的回合：导入的存档把输入 append 在 turn/start 之前，取「下一个 turn/start」；
+  // 回合开着的时候取当前回合；显式带 turn 的以它为准。
+  const nextTurnAt = new Array(events.length).fill(0)
+  for (let cursor = events.length - 1, next = 0; cursor >= 0; cursor -= 1) {
+    if (events[cursor].type === 'turn/start') next = Math.max(0, Number(events[cursor].data?.turn) || 0)
+    nextTurnAt[cursor] = next
+  }
+  let openTurn = false
+  for (let index = 0; index < events.length; index += 1) {
+    const event = events[index]
     const op = event.surfaceOp
     if (op && typeof op === 'object' && op.op === 'replace' && Number.isSafeInteger(Number(op.startSeq))) {
       const start = Number(op.startSeq)
@@ -88,15 +98,21 @@ export function floorsIndex(chat, session, { busy = false } = {}) {
     }
     if (event.type === 'turn/start') {
       currentTurn = Math.max(0, Number(event.data?.turn) || 0)
+      openTurn = true
       continue
     }
+    if (event.type === 'turn/end') { openTurn = false; continue }
     const onSurface = nodes.has(event.seq)
     const isInput = event.type === 'user/message' && event.data?.id && isTurnInput(event.data)
+    const stampedInputTurn = Number(event.data?.turn)
+    const inputTurn = Number.isSafeInteger(stampedInputTurn) && stampedInputTurn > 0
+      ? stampedInputTurn
+      : (openTurn && currentTurn > 0 ? currentTurn : nextTurnAt[index])
     // 顺序收集先做：首条玩家输入可能排在它所属回合的 turn/start 之前，
     // 按 turn 反查会漏掉它，但它在时间线上的次序仍然有效。
-    if (isInput && onSurface) inputNodes.push({ id: String(event.data.id), seq: event.seq })
+    if (isInput && onSurface) inputNodes.push({ id: String(event.data.id), seq: event.seq, turn: inputTurn })
     const stamped = Number(event.data?.turn)
-    const turn = Number.isSafeInteger(stamped) && stamped > 0 ? stamped : currentTurn
+    const turn = Number.isSafeInteger(stamped) && stamped > 0 ? stamped : (event.type === 'user/message' ? inputTurn : currentTurn)
     if (!Number.isSafeInteger(turn) || turn < 1) continue
     if (event.type === 'assistant/message' && event.data?.message?.source?.kind === 'model' && event.data.message.id) {
       const id = String(event.data.message.id)
@@ -107,7 +123,7 @@ export function floorsIndex(chat, session, { busy = false } = {}) {
       if (onSurface) visibleTurns.add(turn)
     } else if (isInput) {
       const id = String(event.data.id)
-      lastInput.set(turn, { id, seq: event.seq, onSurface })
+      lastInput.set(turn, { id, seq: event.seq, onSurface, turn })
       if (!inputIdsByTurn.has(turn)) inputIdsByTurn.set(turn, [])
       const nodesForTurn = inputIdsByTurn.get(turn)
       if (!nodesForTurn.some(node => node.id === id)) nodesForTurn.push({ id, seq: event.seq })
@@ -141,13 +157,17 @@ export function floorsIndex(chat, session, { busy = false } = {}) {
         if (candidate.role === 'assistant') { nextReply = candidate; break }
       }
     }
+    // The reply may have been deleted on its own: the input is still story, and its
+    // round lives on in the native event. Falling back to 0 would leave the floor
+    // with no turn, and every edit of it would be refused as "已变化".
+    const replyTurn = Math.max(0, Number(nextReply?.turn) || (nextReply?.greeting === true ? 1 : 0))
+    const ordered = message.role === 'user' && orderedInputs ? inputNodes[inputCursor++] : undefined
     const storyTurn = message.role === 'user'
-      ? Math.max(0, Number(nextReply?.turn) || (nextReply?.greeting === true ? 1 : 0))
+      ? (replyTurn > 0 ? replyTurn : Math.max(0, Number(ordered?.turn) || 0))
       : Math.max(0, Number(message.turn) || (greeting ? 1 : 0))
     const nativeTurn = nativeByStory.get(storyTurn) ?? storyTurn
     // Regeneration projects the new body back onto the original story turn;
     // older saves can still expose the synthetic turn instead.
-    const ordered = message.role === 'user' && orderedInputs ? inputNodes[inputCursor++] : undefined
     const located = message.role === 'user'
       ? (ordered ?? lastInput.get(storyTurn) ?? lastInput.get(nativeTurn))
       : (lastReply.get(storyTurn) ?? lastReply.get(nativeTurn))

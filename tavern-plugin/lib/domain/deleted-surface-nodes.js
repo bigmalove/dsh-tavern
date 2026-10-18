@@ -8,25 +8,57 @@ function isDeletionMarker(event) {
 }
 
 /**
- * 页面上应该藏起来的节点 seq。
+ * 页面上应该藏起来的节点，以及要一并藏掉的回合尾行。
  *
  * 宿主聊天页只渲染 append 来源的消息，替换副本只给模型看。删除写出的是替换副本，
  * 所以模型那边已经没有这条消息，页面上却还挂着它最初那一版。这里沿替换链找回
  * 每个删除标记的 append 来源；只算仍在 surface 上的标记——撤销删除会把标记再顶替掉，
  * 那条消息就该重新显示。
+ *
+ * 尾行（`[data-chat-flow-kind="turn-tail"]`）是宿主给「这一回合最后一条回复」画的
+ * 操作栏：复制、分支、用时、时间。正文节点返回 null 只藏了正文，尾行是另一个节点，
+ * 于是删完只剩一排图标。所以还要报出「最后一条回复已被删除」的回合，让客户端把
+ * 那条尾行一起藏掉。删的是同一回合里较早的步骤时，尾行仍归最后一条，不能动。
  */
-export function deletedSurfaceSeqs(session) {
+export function deletedSurfaceNodes(session) {
   const events = sessionEvents(session)
   const nodes = new Set((session?.surface?.nodes || []).map(Number))
+  const bySeq = new Map()
   const originOf = new Map()
-  const deleted = []
+  const lastAssistantOfTurn = new Map()
   for (const event of events) {
+    const seq = Number(event?.seq)
+    if (!Number.isSafeInteger(seq)) continue
+    bySeq.set(seq, event)
     const op = event.surfaceOp
-    if (!op || typeof op !== 'object' || op.op !== 'replace' || !Number.isSafeInteger(Number(op.startSeq))) continue
-    const start = Number(op.startSeq)
-    const origin = originOf.get(start) ?? start
-    originOf.set(event.seq, origin)
-    if (isDeletionMarker(event) && nodes.has(Number(event.seq))) deleted.push(origin)
+    if (op && typeof op === 'object' && op.op === 'replace' && Number.isSafeInteger(Number(op.startSeq))) {
+      const start = Number(op.startSeq)
+      originOf.set(seq, originOf.get(start) ?? start)
+    }
+    if (event.type === 'assistant/message') {
+      const turn = Number(event.data?.turn)
+      if (Number.isSafeInteger(turn) && turn > 0) lastAssistantOfTurn.set(turn, seq)
+    }
   }
-  return [...new Set(deleted)].sort((a, b) => a - b)
+  const seqs = []
+  const replyTurns = new Set()
+  for (const event of events) {
+    if (!isDeletionMarker(event) || !nodes.has(Number(event.seq))) continue
+    const origin = originOf.get(Number(event.seq)) ?? Number(event.seq)
+    if (!seqs.includes(origin)) seqs.push(origin)
+    const original = bySeq.get(origin)
+    const turn = Number(original?.data?.turn)
+    if (original?.type === 'assistant/message' && Number.isSafeInteger(turn) && turn > 0
+      && lastAssistantOfTurn.get(turn) === origin) replyTurns.add(turn)
+  }
+  return { seqs: seqs.sort((a, b) => a - b), replyTurns: [...replyTurns].sort((a, b) => a - b) }
+}
+
+export function deletedSurfaceSeqs(session) {
+  return deletedSurfaceNodes(session).seqs
+}
+
+/** 尾行该消失的回合：这一回合最后一条回复已经被删除。 */
+export function deletedReplyTurns(session) {
+  return deletedSurfaceNodes(session).replyTurns
 }

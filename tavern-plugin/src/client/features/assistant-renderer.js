@@ -788,9 +788,10 @@
 					if (busy) return;
 					setBusy(true);
 					try {
-						const result = await rpc("getBodyEdit", { index: floor.index, turn: floor.turn, role: floor.role }, props.sessionId);
+						// 带上节点身份：删掉别的楼层后 index 会前移，服务端按 id/seq 才能改对。
+						const result = await rpc("getBodyEdit", { index: floor.index, turn: floor.turn, role: floor.role, messageId: props.messageId || "", seq: floor.seq }, props.sessionId);
 						const edit = result.edit;
-						setTavernBodyEditPanel({ sessionId: props.sessionId, edit: edit, texts: edit.parts.filter(function (part) { return part.kind === "text"; }).map(function (part) { return part.text; }), busy: false, error: "" });
+						setTavernBodyEditPanel({ sessionId: props.sessionId, edit: edit, messageId: props.messageId || "", seq: floor.seq, texts: edit.parts.filter(function (part) { return part.kind === "text"; }).map(function (part) { return part.text; }), busy: false, error: "" });
 					} catch (error) { tavernErrorHub.report("编辑正文", error); }
 					finally { setBusy(false); }
 				}
@@ -861,7 +862,7 @@
 				if (busy || disabled) return;
 				setBusy(true);
 				try {
-					await rpc("selectSwipe", { sessionId: props.sessionId, index: floor.index, turn: floor.turn, swipeId: swipeId, token: floor.token }, props.sessionId);
+					await rpc("selectSwipe", { sessionId: props.sessionId, index: floor.index, turn: floor.turn, swipeId: swipeId, token: floor.token, messageId: props.messageId || "" }, props.sessionId);
 					liveTavernView.invalidate(props.sessionId);
 				} catch (error) { tavernErrorHub.report("切换正文版本", error); }
 				finally { setBusy(false); liveTavernView.invalidate(props.sessionId); }
@@ -888,7 +889,7 @@
 				if (!ok) return;
 				setBusy(true);
 				try {
-					const result = await rpc("deleteFloorVersion", { index: floor.index, turn: floor.turn, swipeId: current, token: floor.token }, props.sessionId);
+					const result = await rpc("deleteFloorVersion", { index: floor.index, turn: floor.turn, swipeId: current, token: floor.token, messageId: props.messageId || "" }, props.sessionId);
 					applyTavernResultView(props.sessionId, result.view);
 					notifyTavernDataChanged(["sessions"], "play-controls");
 					tavernCoordination.invalidate(props.sessionId);

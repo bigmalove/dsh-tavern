@@ -768,6 +768,13 @@
                 } catch (error) { tavernErrorHub.report("撤销删除", error); }
                 finally { setBusy(false); liveTavernView.invalidate(props.sessionId); tavernCoordination.invalidate(props.sessionId); }
             }
+            // 菜单项之外还要能在输入区直接看到：删完那一楼的尾行会整条藏掉，
+            // 藏进「更多 ▾」里的入口跟着一起没了，玩家就找不到撤销。
+            if (props.inDock) {
+                return React.createElement("button", { type: "button", className: "dsh-tavern-choice-trigger dsh-tavern-undo-deletion",
+                    disabled: busy || running, title: "把刚刚删除的" + kind + "放回去；新的操作会使此恢复点失效", onClick: undo },
+                    busy ? "恢复中…" : "撤销删除（" + kind + "）");
+            }
             return React.createElement("button", { role: "menuitem", disabled: busy || running, onClick: undo,
                 title: "把刚刚删除的" + kind + "放回去；新的操作会使此恢复点失效" }, busy ? "恢复中…" : "撤销删除（" + kind + "）");
         }
@@ -802,7 +809,8 @@
 			async function save() {
 				setBodyEditPanel(Object.assign({}, panel, { busy: true, error: "" }));
 				try {
-					const result = await rpc("saveBodyEdit", { token: panel.edit.token, index: panel.edit.index, turn: panel.edit.turn, role: panel.edit.role, latest: panel.edit.latest === true, texts: panel.texts }, props.sessionId);
+					// 保存也带节点身份：面板打开后可能又删了别的楼层，index 已经前移。
+					const result = await rpc("saveBodyEdit", { token: panel.edit.token, index: panel.edit.index, turn: panel.edit.turn, role: panel.edit.role, latest: panel.edit.latest === true, messageId: panel.messageId || "", seq: panel.seq, texts: panel.texts }, props.sessionId);
 					applyTavernResultView(props.sessionId, result.view);
 					notifyTavernDataChanged(["sessions"], "play-controls");
 					tavernCoordination.invalidate(props.sessionId);
@@ -1192,6 +1200,8 @@
 			return h("div", { className: "dsh-tavern-dock-actions" },
 				isBodyMode(sessionMode) && latestMessageId ? React.createElement(CandidateAction, Object.assign({}, props, { messageId: latestMessageId })) : null,
 				isBodyMode(sessionMode) && live.view && !live.view.canClearIncompleteReply ? React.createElement(TavernPluginComposerActions, { sessionId: props.sessionId, turn: imageTurn, running: running }) : null,
+				// 撤销删除放在这里：消息那行的尾行会被整条藏掉，不能只留在「更多」里。
+				isBodyMode(sessionMode) ? React.createElement(TavernUndoDeletionAction, Object.assign({}, props, { inDock: true })) : null,
 				isBodyMode(sessionMode) ? React.createElement(TavernMoreActions, props) : React.createElement(TavernCompactionAction, props),
                 live.view && live.view.contextCompaction && live.view.contextCompaction.operation && live.view.contextCompaction.operation.status === "running" ? h("span", { role: "status", className: "dsh-tavern-settings-desc" }, "正在压缩前后台上下文…")
                     : live.view && live.view.contextCompaction && live.view.contextCompaction.warning ? h("span", { role: "status", className: "dsh-tavern-settings-desc" }, live.view.contextCompaction.warning,
@@ -1344,11 +1354,14 @@
 			const suppressedDshTurnsRevision = suppressedDshTurns.join(",");
 			const regeneratedDshTurns = suppressionState.view && suppressionState.view.regeneratedDshTurns || {};
 			const regeneratedDshTurnsRevision = JSON.stringify(regeneratedDshTurns);
+			// 单条删除后要藏掉宿主那条尾行（复制/分支/用时/时间）。
+			const deletedReplyTurns = suppressionState.view && Array.isArray(suppressionState.view.deletedReplyTurns) ? suppressionState.view.deletedReplyTurns : [];
+			const deletedReplyTurnsRevision = deletedReplyTurns.join(",");
 			React.useEffect(function () {
 				let frame = null;
 				function applyProjectionState() {
 					frame = null;
-					historyProjection.apply(props.sessionId, suppressedDshTurns, regeneratedDshTurns);
+					historyProjection.apply(props.sessionId, suppressedDshTurns, regeneratedDshTurns, deletedReplyTurns);
 				}
 				function scheduleProjection() {
 					if (frame === null) frame = window.requestAnimationFrame(applyProjectionState);
@@ -1367,7 +1380,7 @@
 				});
 				observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-chat-flow-kind", "data-chat-turn", "data-turn-tail"] });
 				return function () { observer.disconnect(); if (frame !== null) window.cancelAnimationFrame(frame); };
-			}, [props.sessionId, latestMessageId, running, suppressedDshTurnsRevision, regeneratedDshTurnsRevision]);
+			}, [props.sessionId, latestMessageId, running, suppressedDshTurnsRevision, regeneratedDshTurnsRevision, deletedReplyTurnsRevision]);
 			return null;
 		}
 		function CandidateQuestion(props) {

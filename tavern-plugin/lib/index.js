@@ -193,7 +193,7 @@ import { assistantResultForTurn } from './domain/session-turn-result.js'
 import { createStorySubmissionTool, foldStorySubmission, STORY_SUBMIT_TOOL_NAME } from './domain/story-tool-submission.js'
 import { forkTurnsByMessageId as forkTargetsFromSession, floorsIndex as floorsIndexFromChat } from './domain/conversation-fork-targets.js'
 import { carriedFloors } from './domain/carried-floors.js'
-import { deletedSurfaceSeqs } from './domain/deleted-surface-nodes.js'
+import { deletedReplyTurns, deletedSurfaceSeqs } from './domain/deleted-surface-nodes.js'
 import { createTavernRetryLimiter } from './domain/tavern-retry-limiter.js'
 import { lastTavernHelperVariables, projectTavernHelperContext, hydrateTavernHelperMessages, replaceTavernHelperVariables, HELPER_MESSAGE_COLD_WINDOW } from './domain/tavern-helper-context.js'
 import { projectTavernHelperWorldbook } from './domain/tavern-helper-worldbook.js'
@@ -2096,6 +2096,7 @@ export async function apply(ctx) {
       // 玩家消息节点只带 seq（没有 id），所以另发一份按 seq 索引的。
       ...floorsViewFields(chat, activity),
       deletedSeqs: deletedSeqsForChat(chat),
+      deletedReplyTurns: deletedReplyTurnsForChat(chat),
       latestAssistantTurn: latestStoryTurn,
       inputSources,
       inputTemplateDisplays,
@@ -2269,13 +2270,19 @@ export async function apply(ctx) {
     if (!session) return {}
     return Object.fromEntries(deletedSurfaceSeqs(session).map(seq => [String(seq), true]))
   }
+  // 尾行（复制/分支/用时/时间）是宿主单独画的节点，正文藏掉了它还在。报出「最后一条
+  // 回复已被删除」的回合，客户端按回合藏掉那条尾行；撤销后这个列表自然变空。
+  function deletedReplyTurnsForChat(chat) {
+    const session = sessionStore.get(str(chat?.sessionId)) || agentRegistry.get(str(chat?.sessionId))?.session
+    return session ? deletedReplyTurns(session) : []
+  }
   // carry 只给缓存命中那条路用：它的 Chat 是 projectChatSessionState 的裁剪投影，
   // 消息行没有正文也没有 swipes，算出来的版本数是 1、token 也对不上（见 carried-floors.js）。
   // 增量投影拿到的是完整消息行，必须重算——冻住楼层表会让 index/turn/token 停在旧值，
   // 编辑就会打到别的楼层，或者报「这一楼已不在当前上下文中」。
   function volatileSessionViewFields(chat, activity, changes, { carry } = {}) {
     const floors = carry ? carriedFloors(carry, { busy: Boolean(activity && activity.busy) }) : floorsViewFields(chat, activity)
-    return { ...sessionStateView.volatile(chat, activity, changes), forkTurnsByMessageId: forkTurnsForChat(chat), deletedSeqs: deletedSeqsForChat(chat), ...floors }
+    return { ...sessionStateView.volatile(chat, activity, changes), forkTurnsByMessageId: forkTurnsForChat(chat), deletedSeqs: deletedSeqsForChat(chat), deletedReplyTurns: deletedReplyTurnsForChat(chat), ...floors }
   }
 
   async function projectCachedSessionView(chat, previous, activity) {

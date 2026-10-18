@@ -5,6 +5,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { saveFloorPatch, synchronizeBodyEdits } from './body-editor.js'
+import { floorsIndex } from './conversation-fork-targets.js'
 import { floorToken, locateFloor } from './floor-location.js'
 import { createHistoryMutationGuards } from './history-mutation-guards.js'
 import { selectedSwipe, swipeCount, swipeSource, swipeStates } from './swipe-versions.js'
@@ -44,7 +45,16 @@ export function createSwipeSelection({ chats, sessions, timeline, activity, proj
 
   async function select(sessionId, input = {}) {
     if (pending.has(sessionId)) throw new Error('正在切换正文版本，请稍候')
-    const index = Number(input.index)
+    // 页面上的按钮带着删除前的 index：删掉一条后后面每一条都会前移。带消息 id 时
+    // 先按楼层表换回当前 index，免得点 A 楼切到 B 楼。
+    const named = str(input.messageId).trim()
+    let index = Number(input.index)
+    if (named !== '') {
+      const agent = sessions.get(sessionId)
+      const complete = agent?.session && typeof chats.completeForSession === 'function' ? await chats.completeForSession(sessionId) : null
+      const mapped = complete ? floorsIndex(complete, agent.session, { busy: false }).byMessageId[named] : null
+      if (mapped && mapped.role === 'assistant') index = mapped.index
+    }
     const turn = Number(input.turn)
     const swipeId = Number(input.swipeId)
     if (!Number.isSafeInteger(index) || index < 0 || !Number.isSafeInteger(turn) || turn < 1) throw new Error('正文楼层不存在')
