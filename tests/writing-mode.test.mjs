@@ -241,7 +241,10 @@ test('写作会话的候选规划不读人物卡，也不崩', async () => {
 })
 
 const native = { skip: !process.env.DSH_BOOT_MODULE, timeout: 30000 }
-const openingEvents = session => sessionEvents(session).filter(event => event.type === 'assistant/message' && event.data.turn === 1)
+// The seed exchange shares the reserved opening turn, so the greeting is the
+// turn-one assistant message that is not part of the seed trajectory.
+const openingEvents = session => sessionEvents(session).filter(event => event.type === 'assistant/message' && event.data.turn === 1
+  && !String(event.data.message?.id || '').startsWith('tavern-seed-trajectory:'))
 
 test('原生写作会话：无开场白、写 v2 作者契约、恢复幂等', native, async t => {
   const h = await createInitializationNative(process.env.DSH_BOOT_MODULE)
