@@ -14571,7 +14571,7 @@ async function runTavernTouchDiagnostics(host, onStatus) {
 				const className = props.variant === "user" ? "dsh-tavern-user-copy dsh-tavern-message-edit" : "dsh-tavern-message-edit";
 				return React.createElement(DshUi.Tooltip, { label: blocked && floor.reason ? floor.reason : label, side: "bottom" },
 					React.createElement("button", { type: "button", className: className, "aria-label": label, disabled: busy || blocked, onClick: remove },
-						React.createElement(DshUi.IconTrashOutline16, null)));
+						React.createElement(DshUi.IconTrashOutlineRegular, null)));
 			}
 			function TavernSwipeControl(props) {
 			const askConfirm = useTavernConfirm(props.sessionId);
