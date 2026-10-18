@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "revision": "7765a71937054047c26da448be866398ebdb7372",
-  "releaseSequence": 680,
+  "revision": "4f4e4357e336d3dbcf0817c1061e203435311525",
+  "releaseSequence": 681,
   "version": "2.7.0",
   "files": [
     {
@@ -461,8 +461,8 @@
     },
     {
       "path": "tavern-plugin/lib/client.js",
-      "sha256": "34f831c50e10abd1fd74b3bddc3fc832d0dd7fc0a467815eed6ff1f213070e31",
-      "size": 1849777
+      "sha256": "468376e9cbad388a129edb05117136549f2f5e6d08815f80a019b87e040ccbda",
+      "size": 1852631
     },
     {
       "path": "tavern-plugin/lib/cordis-inspect.js",
@@ -4761,8 +4761,8 @@
     },
     {
       "path": "tavern-plugin/src/client/features/settings.js",
-      "sha256": "7cab018483f27edf9c3907deead27338a3088a42808a0674a02f5ad76d5d2d35",
-      "size": 22874
+      "sha256": "aa7219d5f01335650fb89f9aefb4cf5b9ee68debe548ea638a7b861789bd2ef0",
+      "size": 23066
     },
     {
       "path": "tavern-plugin/src/client/features/sidebar.js",
@@ -4981,8 +4981,8 @@
     },
     {
       "path": "tavern-plugin/src/client/modules/touch-diagnostics.js",
-      "sha256": "c63a3c2b78b8651bc7ec5cd54f5b071b66b4dff2c1fd275eb86486219512640c",
-      "size": 8960
+      "sha256": "6e9892ace85418d0a76641b78901888dc296651372a33b62b3de0b74a6ab820c",
+      "size": 11622
     },
     {
       "path": "tavern-plugin/src/client/opening-performance.js",
