@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "revision": "d84252767b977b20745c494475caf89d17f36fbd",
-  "releaseSequence": 675,
+  "revision": "13a2eccb54d833417e21b37818e327ee52a12aa3",
+  "releaseSequence": 676,
   "version": "2.7.0",
   "files": [
     {
@@ -711,8 +711,8 @@
     },
     {
       "path": "tavern-plugin/lib/domain/chat-history-import-service.js",
-      "sha256": "46b5f7d52797b90fa397737783c7def64bb6734b62fd4a1f32e1d83e5e310f89",
-      "size": 12476
+      "sha256": "4ae66ba8b73a967c502f56822222ae84d417629f9b122802906dea566ab83248",
+      "size": 13140
     },
     {
       "path": "tavern-plugin/lib/domain/chat-history-import.js",
@@ -746,8 +746,8 @@
     },
     {
       "path": "tavern-plugin/lib/domain/chat-session-state.js",
-      "sha256": "7c3ff4446e6385654e3b05bc6a26cc60296ad4856882a8ed837d22529f2d88f9",
-      "size": 15928
+      "sha256": "ef1e912546533d858c507672db4c8ffbeaaba769d7fbc5b08ba01f52c761edd0",
+      "size": 16264
     },
     {
       "path": "tavern-plugin/lib/domain/chat-snapshot-worker.js",
@@ -2201,8 +2201,8 @@
     },
     {
       "path": "tavern-plugin/lib/index.js",
-      "sha256": "7e79e9d75e241ceb381b7a4e48ec45615c635d89a4401811958e44ec14b12025",
-      "size": 353513
+      "sha256": "6123e0e26a5c6516edb93073ba08443d53156f5ec57d8d935dbae49434185276",
+      "size": 354086
     },
     {
       "path": "tavern-plugin/lib/plugin-api.js",
