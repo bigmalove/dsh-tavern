@@ -1,8 +1,7 @@
 diff --git a/lib/client.js b/lib/client.js
-index 2b06152..ea13ea6 100644
 --- a/lib/client.js
 +++ b/lib/client.js
-@@ -1847,7 +1847,7 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
+@@ -1847,7 +1847,7 @@
      [class*="_scroll"]:not([class*="_scrollBody"]):not(:has([data-composer-input])):has(p) {
      padding-left: 20px;
      padding-right: 20px;
@@ -11,7 +10,7 @@ index 2b06152..ea13ea6 100644
    }
    /* The official markdown styles set an explicit 16px on paragraphs and
       list items, so the container's inherited 15px is not enough. User
-@@ -1861,7 +1861,7 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
+@@ -1861,7 +1861,7 @@
      [class*="_scroll"]:not([class*="_scrollBody"]):not(:has([data-composer-input])):has(p) [
        class*="_text_"
      ] {
@@ -20,7 +19,85 @@ index 2b06152..ea13ea6 100644
    }
  
    /* Markdown tables: the official table uses width:max-content, so on a phone
-@@ -5888,7 +5888,9 @@ function apply(ctx) {
+@@ -4612,6 +4612,10 @@
+     startX = event.clientX;
+     startY = event.clientY;
+     samples = [{ t: event.timeStamp, x: event.clientX }];
++    // DSH Tavern: only an edge stroke (or one over the open drawer) may claim
++    // the touch stream before its axis is known.
++    if (open || insideEdgeClaim(event.clientX, viewportWidthPx, rtl))
++        attachScrollClaim();
+     return true;
+ }
+ /**
+@@ -4798,8 +4802,39 @@
+     trackingPointer = 0;
+     tracking = false;
+     samples = [];
++    detachScrollClaim();
+     (0, gesture_guard_ts_1.clearStrokeLocked)();
+ }
++/**
++ * DSH Tavern: the non-passive document `touchmove` guard is only installed
++ * while a stroke that genuinely needs it is live — an edge swipe, or any
++ * stroke over the open drawer. A document-level non-passive touchmove
++ * listener puts the WHOLE page into the touch-handler region, so Android
++ * WebView runs every scroll (and its start) through JS, and the first
++ * preventDefault inside it cancels the gesture for the rest of the touch
++ * sequence. Measured symptom on a phone: the conversation "slides slowly and
++ * cannot be flicked". Reading drags start outside the edge strip, where
++ * `touch-action: pan-y` already forbids the horizontal claim, so nothing is
++ * lost by leaving them entirely to the browser.
++ */
++let scrollClaimHandler = null;
++let scrollClaimAttached = false;
++function attachScrollClaim() {
++    if (scrollClaimAttached || scrollClaimHandler === null) return;
++    scrollClaimAttached = true;
++    document.addEventListener('touchmove', scrollClaimHandler, { capture: true, passive: false });
++}
++function detachScrollClaim() {
++    if (!scrollClaimAttached) return;
++    scrollClaimAttached = false;
++    document.removeEventListener('touchmove', scrollClaimHandler, { capture: true });
++}
++/** Distance from the physical edge that still arms the scroll guard. */
++const EDGE_CLAIM_PX = 32;
++function insideEdgeClaim(x, viewportWidthPx, rtl) {
++    const edge = rtl ? viewportWidthPx - x : x;
++    return edge >= 0 && edge <= EDGE_CLAIM_PX;
++}
+ /** The logical reading direction of the frame (RTL support). */
+ function frameRtl() {
+     const frame = (0, phone_chrome_ts_1.getFrame)();
+@@ -4942,12 +4977,16 @@
+             }
+             event.preventDefault();
+         };
++        // DSH Tavern: kept as a handler only — it is attached for the duration
++        // of an edge stroke (see attachScrollClaim) instead of for the whole
++        // session, because a standing document-level non-passive listener makes
++        // every scroll on the page wait for JS.
++        scrollClaimHandler = onTouchMove;
+         document.addEventListener('pointerdown', onPointerDown, true);
+         document.addEventListener('pointermove', onPointerMove, true);
+         document.addEventListener('pointerup', onPointerUp, true);
+         document.addEventListener('pointercancel', onPointerCancel, true);
+         document.addEventListener('click', onClick, true);
+-        document.addEventListener('touchmove', onTouchMove, { capture: true, passive: false });
+         const onBlur = () => abortStroke(ctx);
+         document.addEventListener('visibilitychange', onVisibility);
+         window.addEventListener('blur', onBlur);
+@@ -4957,7 +4996,7 @@
+             document.removeEventListener('pointerup', onPointerUp, true);
+             document.removeEventListener('pointercancel', onPointerCancel, true);
+             document.removeEventListener('click', onClick, true);
+-            document.removeEventListener('touchmove', onTouchMove, { capture: true });
++            detachScrollClaim();
+             document.removeEventListener('visibilitychange', onVisibility);
+             window.removeEventListener('blur', onBlur);
+             abortStroke(ctx, true);
+@@ -5888,7 +5927,9 @@
      (0, phone_chrome_ts_1.installOverlayInteractions)(ctx);
      // Session deletion, injected into each session row's ⋯ menu (beside
      // rename / fork / archive) with a confirm dialog. Mobile-only.
