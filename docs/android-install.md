@@ -116,7 +116,17 @@ MuMu 用户也在**模拟器里面**完成这些步骤。这里的 `127.0.0.1` �
 - 更新后没有看到窗口顶部的按钮：在 DSHA 底部 **启动** 页点 **重启**，再从侧栏打开酒馆；只刷新酒馆页面不会重新加载入口插件。
 
 - 一键命令下载失败：确认 DSHA 已完成基础安装并且手机能访问 GitHub，然后重试同一句话。
-- 更新提示“存在未提交修改”或“已经分叉”：脚本为避免覆盖文件会主动停止，请先备份或移走 `/root/.dsh/apps/dsh-tavern` 中的手工修改。
+- 更新提示“存在未提交修改”：脚本为避免覆盖你的文件会主动停止。先备份或移走 `/root/.dsh/apps/dsh-tavern` 中的手工修改（`git -C /root/.dsh/apps/dsh-tavern status`），再重试。
+- 更新提示“项目目录包含本地提交或已经分叉”：先确认没有手工改动，然后是**运行清单发布提交造成的分叉**（远端重新发布过清单，本地那条只改 `dsh-tavern-runtime.json` 的提交已经不在新历史里）。新版脚本会自动对齐；旧版会停在这里，手动执行一次即可（`data/`、`profile-data` 等未跟踪文件不受影响）：
+
+  ```sh
+  cd /root/.dsh/apps/dsh-tavern
+  git status --porcelain      # 应为空；有内容先备份
+  git fetch origin main
+  git reset --hard origin/main
+  bash android/setup.sh
+  ```
+
 - 酒馆仍未启动：点击一次 **更新/修复**；仍失败时查看 `/root/.dsh/logs/tavern.log`。
 - 导入窗口显示无法读取下载目录：在系统设置中打开 DSHA 的 **访问所有文件** 权限，返回酒馆后点“刷新”。
 - 如果 DSHA 使用的 Web Profile 既不是 `web` 也不是 `user`，安装前设置 `DSH_ANDROID_WEB_PROFILE`。
