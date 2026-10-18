@@ -23,6 +23,8 @@
 
 ## 人物卡格式：沿用 CCv3，不另起新格式
 
+> 2026-10-17 更新：新的人物卡可能带程序代码（DSH 插件），因此改为专属格式 `.dshcard`，内部兼容 CHARX，见 [DSH 人物卡格式](dsh-card-format.md)。下面关于 CCv3 素材和 `extensions.dsh_tavern.cast` 的部分仍然有效。
+
 新形态的游戏需要卡里带上演出素材，但不需要一个孤立的新格式。SillyTavern 系的 Character Card V3（`chara_card_v3`）已经留了位置：
 
 - `data.assets`：素材列表，类型有 `icon`（头像）、`background`（背景）、`emotion`（表情立绘）、`user_icon`、`other`，`uri` 可以指向网址或卡包内的文件。
@@ -41,10 +43,14 @@
 - **向上完整**：在 Tavern 里，同一张卡能直接点亮第 2–4 层，不用另外配素材包。
 - **不孤立**：卡作者用熟悉的格式做卡，玩家用熟悉的方式分享卡；Galgame 化只是在同一种卡里多放一些素材。
 
-待办（未实现）：
+已实现（2026-10-17）：
 
-1. 导入时读 CCv3 的 `assets`（PNG 内嵌的 `ccv3` 和 CHARX 包），把头像、立绘、背景放进这张卡的角色素材。
-2. 导出时把角色素材写回 CHARX：CCv3 已有的类型写进 `assets`，其余写进 `extensions.dsh_tavern.cast`。
-3. `extensions.dsh_tavern.cast` 的结构写进文档，保持精简，只放 CCv3 放不下的东西。
+1. **导入**（`lib/domain/card-assets.js`）：读 CCv3 `data.assets` 的三种来源：CHARX 包内的 `embeded://`、RisuAI PNG 的 `chara-ext-asset_:N`（`__asset:N`）、JSON 里的 `data:`，以及 RisuAI 的 `extensions.risuai.emotions` 和 Tavern 自己的 `extensions.dsh_tavern.cast`。
+   - 表情名按对照表对到 ST 的 28 种情绪（英文、中文、带编号的都认），进主角立绘。
+   - 背景进角色素材，舞台用主背景（名叫 `main` 的，否则第一张）。
+   - 对不上的表情、其他类型的素材原样保存，不使用，导出时写回。规范要求不能静默丢弃。
+   - CHARX 本身存成 PNG（卡面是 PNG 时，把卡数据写进卡面）或 JSON；卡面不是 PNG 时没有封面，卡面图作为主角头像。
+2. **导出**：人物卡库「导出 CHARX」。按 CCv3 写 `card.json` 和素材，主角立绘放在 `emotion`，背景放在 `background`（主背景名 `main`），保留的素材放回原类型；其他人物的头像、立绘和每个人物的配音声音写进 `extensions.dsh_tavern.cast`。v2 卡导出时补上 v3 的写法，内容不变。
+3. **`extensions.dsh_tavern.cast` 结构**：`{ version: 1, characters: [{ name, aliases, avatar, sprites: { 情绪名: uri }, voices: { 配音渠道: 声音 } }] }`，uri 是包内的 `embeded://`。只放 CCv3 放不下的东西。
 
-以上 CCv3 与 CHARX 的字段是按已知规范写的，动手前要对照规范原文和 RisuAI 的实际导出再核对一遍。
+还没做：CHARX 超过 50 MB 时拒绝导入（Live2D 等大素材）；RisuAI 的附加素材（`x-risu-asset`，正文里 `{{img::名字}}` 引用的图）只保存不显示。

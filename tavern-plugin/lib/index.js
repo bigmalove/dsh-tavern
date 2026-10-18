@@ -144,7 +144,7 @@ import { createCoordinationEventPublisher } from './domain/coordination-event-pu
 import { createSessionSignalTransport } from './domain/session-signal-transport.js'
 import { createCandidateTasks } from './domain/candidate-tasks.js'
 import { extractEpubText } from './domain/epub-text.js'
-import { createFileResourceStore, normalizeResourcePath, resourceKind } from './domain/file-resources.js'
+import { createFileResourceStore, normalizeResourcePath, resourceKind, stripPngTextChunks } from './domain/file-resources.js'
 import { createMobileCardImport } from './domain/mobile-card-import.js'
 import { createForegroundHandoff } from './domain/foreground-handoff.js'
 import { createForegroundFrameBuilder } from './domain/agent-input-frame.js'
@@ -170,6 +170,13 @@ import { createManualLedger } from './domain/manual-ledger.js'
 import { POSTURE_SUBMIT_TOOL, POSTURE_SUBMIT_TOOL_NAME, lastSubmittedPosture, normalizePostureSubmission } from './domain/posture-submission.js'
 import { createCastPresentation } from './domain/cast-presentation.js'
 import { createCastAssets } from './domain/cast-assets.js'
+import { createSpeech } from './domain/speech.js'
+import { buildCharx, cardImport, cardImportFromCard } from './domain/card-assets.js'
+import { createAssetPacks } from './domain/asset-packs.js'
+import { readCardArchive } from './domain/card-archive.js'
+import { openZipFile } from './domain/zip-file.js'
+import { createUploads } from './domain/uploads.js'
+import { createCardPlugins } from './domain/card-plugins.js'
 import { createPostureItem, createSettlementItems, plainSettlementPlan, runPipelineStages } from './domain/background-pipeline.js'
 import { TAVERN_COMPATIBILITY_CAPABILITIES, createTavernCompatibilityDiagnosticStore } from './domain/tavern-compatibility-diagnostics.js'
 import { createMvuDiagnosticStore, createMvuDiagnosticExport, sanitizeRuntimeDiagnostics, sanitizeModuleFailure, sanitizeMvuLoadDiagnostic, redactMvuLoadError } from './domain/mvu-diagnostics.js'
@@ -186,6 +193,7 @@ import { assistantResultForTurn } from './domain/session-turn-result.js'
 import { createStorySubmissionTool, foldStorySubmission, STORY_SUBMIT_TOOL_NAME } from './domain/story-tool-submission.js'
 import { forkTurnsByMessageId as forkTargetsFromSession, floorsIndex as floorsIndexFromChat } from './domain/conversation-fork-targets.js'
 import { carriedFloors } from './domain/carried-floors.js'
+import { deletedSurfaceSeqs } from './domain/deleted-surface-nodes.js'
 import { createTavernRetryLimiter } from './domain/tavern-retry-limiter.js'
 import { lastTavernHelperVariables, projectTavernHelperContext, hydrateTavernHelperMessages, replaceTavernHelperVariables, HELPER_MESSAGE_COLD_WINDOW } from './domain/tavern-helper-context.js'
 import { projectTavernHelperWorldbook } from './domain/tavern-helper-worldbook.js'
@@ -211,7 +219,7 @@ import { readZipEntries, writeZipEntries } from './domain/zip-entries.js'
 import { createGameFootprint } from './domain/game-footprint.js'
 import { buildGameSave, collectSaveRevisions, readGameSave } from './domain/game-save.js'
 import { readFileSync } from 'node:fs'
-import { readdir, rm } from 'node:fs/promises'
+import { readdir, readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
 
 const TAVERN_PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
@@ -1024,6 +1032,13 @@ export async function apply(ctx) {
     return result
   }
   const castAssets = createCastAssets({ store: profileData })
+  // DSH cards (docs/design/dsh-card-format.md): asset packs stored once by content; big files uploaded to disk.
+  const assetPacks = createAssetPacks({ root: dataRoot, store: profileData })
+  const uploads = createUploads({ root: dataRoot })
+  const cardPlugins = createCardPlugins({ dataRoot, pluginsDir: userPluginPaths(dataRoot).plugins })
+  void uploads.sweep().catch(() => {})
+  // Voiced dialogue: channels are Tavern's and the plugins' (pluginApi is created later; read lazily).
+  const speech = createSpeech({ store: profileData, credentials: () => ctx.get('credentials'), plugins: () => pluginApi.speechProviders() })
   resourceGraph = createResourceGraph({
     castAssets,
     cardOrganization,
@@ -1051,11 +1066,62 @@ export async function apply(ctx) {
     if (card === undefined) throw new Error('人物卡不存在: ' + chat.cardPath)
     return card
   }
-  async function importCard(payload) {
+  async function importCard(input) {
+    // A CHARX is stored as PNG or JSON; the material any card file carries goes to its character material.
+    return await storeImportedCard(cardImport(input))
+  }
+  // A CHARX, DSH card or card bundle read from disk: its packs first, so a failure leaves no card behind.
+  async function importCardArchiveFile(file, name) {
+    const label = /\.dshcard$/i.test(name) ? 'DSH 人物卡' : 'CHARX'
+    const zip = await openZipFile(file, { label })
+    try {
+      const archive = await readCardArchive(zip)
+      const packs = []
+      for (const pack of archive.packs) {
+        const { pack: stored, reused } = await assetPacks.importFromZip(zip, pack)
+        packs.push({ id: stored.id, contentHash: stored.contentHash, format: stored.format, title: stored.title, name: pack.prefix.split('/')[1], files: Object.keys(stored.files).length, reused })
+      }
+      const imported = await storeImportedCard(cardImportFromCard({ card: archive.card, resolve: archive.resolve, name }), { unique: true })
+      if (packs.length) await castAssets.bindPacks(imported.path, packs)
+      // The card's plugins come on with it, confined to this card; the card library can turn them off.
+      const plugins = archive.plugins.length ? await cardPlugins.stage(zip, { cardKey: castAssets.keyOf(imported.path), plugins: archive.plugins }) : []
+      let pluginError = ''
+      if (plugins.length) {
+        try { await cardPlugins.enable({ cardKey: castAssets.keyOf(imported.path), cardPath: imported.path, plugins }) }
+        catch (error) { pluginError = str(error?.message || error) }
+        await castAssets.setPlugins(imported.path, plugins.map(plugin => ({ ...plugin, enabled: !pluginError })))
+      }
+      return { ...imported, format: archive.kind, ...(archive.info ? { info: archive.info } : {}),
+        ...(packs.length ? { packs: packs.map(({ id, contentHash, title, format, files, reused }) => ({ id, contentHash, title, format, files, reused })) } : {}),
+        ...(plugins.length ? { plugins: plugins.map(({ name, purpose, files, bytes }) => ({ name, purpose, files, bytes, enabled: !pluginError })) } : {}),
+        ...(pluginError ? { pluginError } : {}) }
+    } finally { await zip.close() }
+  }
+  async function storeImportedCard({ payload, collected }, options = {}) {
     const workspace = cardPreparation.create({ kind: 'import', payload: payload })
-    const cardPath = await fileResources.importCard(payload, workspace)
+    const cardPath = await fileResources.importCard(payload, workspace, options)
     const card = cardPreparation.project(workspace)
-    return { path: cardPath, name: card.name, description: card.description, tags: card.tags }
+    let assets = null
+    if (collected && (collected.emotions.length || collected.backgrounds.length || collected.cover || collected.extras.length || collected.cast.length || collected.skipped)) {
+      try { assets = { ...await castAssets.importCardAssets({ cardPath, name: card.name || '主角', collected }), skipped: collected.skipped } }
+      catch (error) { assets = { error: str(error?.message || error) } }
+    }
+    return { path: cardPath, name: card.name, description: card.description, tags: card.tags, ...(assets ? { assets } : {}) }
+  }
+  // The card as CHARX: Character Card V3 with its character material (docs/design/tavern-to-galgame.md).
+  async function exportCardCharx(input) {
+    const cardPath = normalizeResourcePath(input, 'card')
+    const workspace = await readCardWorkspace(cardPath)
+    if (workspace === undefined) throw Object.assign(new Error('人物卡不存在: ' + cardPath), { code: 'TAVERN_NOT_FOUND' })
+    const document = cardPreparation.present({ card: workspace, as: 'sillytavern-v3', characterBook: await worldBooks.characterBookForCard(cardPath) })
+    const image = await fileResources.readCardImage(cardPath).catch(() => undefined)
+    const manifest = await castAssets.read(cardPath)
+    const files = new Map()
+    for (const file of new Set([...manifest.characters.flatMap(character => [character.avatar, ...Object.values(character.sprites || {})]), ...(manifest.backgrounds || []).map(item => item.file), ...(manifest.extras || []).map(item => item.file)].filter(Boolean))) {
+      files.set(file, await castAssets.readFile(cardPath, file))
+    }
+    const name = str(document?.data?.name || cardPreparation.project(workspace).name || '人物卡')
+    return { name, bytes: buildCharx({ document, cover: image ? stripPngTextChunks(image) : null, manifest, characterName: name, readFile: file => files.get(file) }) }
   }
   const cardSummaries = createCardSummaryCache({
     absolute: cardPath => fileResources.absolute(cardPath),
@@ -1270,8 +1336,21 @@ export async function apply(ctx) {
       backupPath: restored.backupPath
     }
   }
+  // Turn a card's own plugins on or off (docs/design/dsh-card-format.md): they then load like user plugins, confined to this card.
+  async function setCardPlugins(input, enabled) {
+    const cardPath = normalizeResourcePath(input, 'card')
+    const plugins = (await castAssets.read(cardPath)).plugins || []
+    if (!plugins.length) throw new Error('这张人物卡没有卡内插件')
+    const cardKey = castAssets.keyOf(cardPath)
+    if (enabled) await cardPlugins.enable({ cardKey, cardPath, plugins })
+    else await cardPlugins.disable({ cardKey, plugins })
+    const next = await castAssets.setPlugins(cardPath, plugins.map(plugin => ({ ...plugin, enabled: enabled === true })))
+    return next.plugins
+  }
   async function deleteCard(cardPath) {
+    const plugins = (await castAssets.read(normalizeResourcePath(cardPath, 'card')).catch(() => null))?.plugins || []
     const result = await cardDeletion.remove(cardPath)
+    if (result.deleted && plugins.length) await cardPlugins.remove({ cardKey: castAssets.keyOf(normalizeResourcePath(cardPath, 'card')), plugins }).catch(error => console.warn('dsh-tavern: 删除卡内插件失败', error?.message || error))
     if (result.deleted) await cardOrganization.movePath(normalizeResourcePath(cardPath, 'card'), null)
     return result
   }
@@ -2016,6 +2095,7 @@ export async function apply(ctx) {
       // 才渲染换版本/编辑/删除按钮，缺了就是整排按钮消失。
       // 玩家消息节点只带 seq（没有 id），所以另发一份按 seq 索引的。
       ...floorsViewFields(chat, activity),
+      deletedSeqs: deletedSeqsForChat(chat),
       latestAssistantTurn: latestStoryTurn,
       inputSources,
       inputTemplateDisplays,
@@ -2181,13 +2261,21 @@ export async function apply(ctx) {
     const floors = floorsForChat(chat, activity)
     return { floorsByMessageId: floors.byMessageId, floorsBySeq: floors.bySeq }
   }
+  // 被删除的消息在页面上要藏起来：宿主只渲染 append 来源的节点，删除写的是替换副本，
+  // 不藏的话删掉的消息会一直挂在页面上。和楼层表一样取自原生事件，每次投影都重算。
+  // 用 { seq: true } 而不是数组：客户端按单个 seq 订阅，值不变就不会唤醒组件。
+  function deletedSeqsForChat(chat) {
+    const session = sessionStore.get(str(chat?.sessionId)) || agentRegistry.get(str(chat?.sessionId))?.session
+    if (!session) return {}
+    return Object.fromEntries(deletedSurfaceSeqs(session).map(seq => [String(seq), true]))
+  }
   // carry 只给缓存命中那条路用：它的 Chat 是 projectChatSessionState 的裁剪投影，
   // 消息行没有正文也没有 swipes，算出来的版本数是 1、token 也对不上（见 carried-floors.js）。
   // 增量投影拿到的是完整消息行，必须重算——冻住楼层表会让 index/turn/token 停在旧值，
   // 编辑就会打到别的楼层，或者报「这一楼已不在当前上下文中」。
   function volatileSessionViewFields(chat, activity, changes, { carry } = {}) {
     const floors = carry ? carriedFloors(carry, { busy: Boolean(activity && activity.busy) }) : floorsViewFields(chat, activity)
-    return { ...sessionStateView.volatile(chat, activity, changes), forkTurnsByMessageId: forkTurnsForChat(chat), ...floors }
+    return { ...sessionStateView.volatile(chat, activity, changes), forkTurnsByMessageId: forkTurnsForChat(chat), deletedSeqs: deletedSeqsForChat(chat), ...floors }
   }
 
   async function projectCachedSessionView(chat, previous, activity) {
@@ -2661,7 +2749,10 @@ export async function apply(ctx) {
     enabled: async () => (await readTavernSettings()).castPresentation === true,
     turns: pluginTurns,
     data: pluginData,
-    publish: sessionId => sessionSignals.publish(sessionId, { kind: 'cast', version: String(Date.now()) + ':' + Math.random().toString(36).slice(2) })
+    publish: (sessionId, annotation) => {
+      sessionSignals.publish(sessionId, { kind: 'cast', version: String(Date.now()) + ':' + Math.random().toString(36).slice(2) })
+      pluginApi.castAnnotated(sessionId, annotation)
+    }
   })
   // Work riding on the main settlement call: Tavern's own items first, then plugins.
   const settlementItems = createSettlementItems({ items: () => [castPresentation.settlement], plugins: () => pluginApi.settlement })
@@ -2669,7 +2760,7 @@ export async function apply(ctx) {
   function castAssetView(cardPath, manifest) {
     const key = castAssets.keyOf(cardPath)
     const url = file => file ? '/api/dsh-tavern/cast-asset?' + new URLSearchParams({ card: key, file }).toString() : ''
-    return manifest.characters.map(character => ({ name: character.name, aliases: character.aliases || [], avatarUrl: url(character.avatar),
+    return manifest.characters.map(character => ({ name: character.name, aliases: character.aliases || [], avatarUrl: url(character.avatar), voices: character.voices || {},
       sprites: Object.fromEntries(Object.entries(character.sprites || {}).map(([emotion, file]) => [emotion, url(file)])) }))
   }
   async function castCardOf(sessionId) {
@@ -2689,8 +2780,31 @@ export async function apply(ctx) {
       const material = await pluginTurns.readTurn(str(sessionId), turn).catch(() => null) || (turn === wanted.at(-1) ? await pluginTurns.readPendingTurn(str(sessionId)).catch(() => null) : null)
       if (material && material.turn === turn) turns.push({ turn, text: material.text, lines: annotated.turns[turn] || [] })
     }
+    const manifest = await castAssets.read(card.path)
+    const background = (manifest.backgrounds || [])[0]
     return { enabled: annotated.enabled, player: card.player, card: { name: card.name, imageUrl: '/api/dsh-tavern/card-image?path=' + encodeURIComponent(card.path) },
-      cast: castAssetView(card.path, await castAssets.read(card.path)), turns }
+      background: background ? '/api/dsh-tavern/cast-asset?' + new URLSearchParams({ card: castAssets.keyOf(card.path), file: background.file }).toString() : '',
+      cast: castAssetView(card.path, manifest), turns }
+  }
+  // One line in its speaker's voice on the chosen channel; { skip } when voicing is off or narration is silent.
+  async function speakLine(sessionId, { speaker, text, emotion, narration } = {}) {
+    const current = await speech.active()
+    if (!current) return { skip: true, reason: 'off' }
+    const card = await castCardOf(str(sessionId)).catch(() => null)
+    const name = str(speaker).trim()
+    const character = card && name ? (await castAssets.read(card.path)).characters.find(item => item.name === name || (item.aliases || []).includes(name)) : null
+    const voice = speech.voiceFor({ character, provider: current.provider, config: current.config, narration: narration === true })
+    if (voice === null) return { skip: true, reason: 'narration' }
+    return speechReply(await speech.synthesize({ provider: current.provider.id, text, voice, emotion }))
+  }
+  function speechReply(result) {
+    return result.browser ? result : { url: '/api/dsh-tavern/speech-audio?id=' + result.id, mediaType: result.mediaType }
+  }
+  // The asset packs this game's card carries, with the base address of their files.
+  async function cardPacksOf(sessionId) {
+    const card = await castCardOf(str(sessionId))
+    return ((await castAssets.read(card.path)).packs || []).map(pack => ({ ...pack,
+      baseUrl: '/api/dsh-tavern/pack-file?' + new URLSearchParams({ pack: pack.id, v: pack.contentHash }).toString() + '&path=' }))
   }
   async function castEdit(sessionId, edit) {
     const card = await castCardOf(sessionId)
@@ -2787,6 +2901,22 @@ export async function apply(ctx) {
       return { url: '/api/dsh-tavern/card-image?path=' + encodeURIComponent(cardPath), mediaType: 'image/png' }
     },
     readHistory: readPluginHistory,
+    readCast: (sessionId, turn) => castPresentation.annotation(sessionId, turn),
+    listCardPacks: sessionId => cardPacksOf(sessionId),
+    cardScope: () => cardPlugins.scope(),
+    cardPathOf: async sessionId => str((await chatHeaderForSession(str(sessionId), ['cardPath']))?.cardPath) || null,
+    readCardPackFile: async (sessionId, packId, file) => {
+      const pack = (await cardPacksOf(sessionId)).find(item => item.id === packId)
+      const found = pack ? await assetPacks.file(pack.id, pack.contentHash, file) : undefined
+      if (!found) throw Object.assign(new Error('素材包里没有这个文件：' + file), { code: 'TAVERN_PLUGIN_NOT_FOUND' })
+      return { data: await readFile(found.path), mediaType: found.mediaType, size: found.size }
+    },
+    synthesizeSpeech: (sessionId, line) => speakLine(sessionId, line),
+    readCastAssets: async sessionId => {
+      const card = await castCardOf(sessionId)
+      return { player: card.player, card: { name: card.name, imageUrl: '/api/dsh-tavern/card-image?path=' + encodeURIComponent(card.path) },
+        characters: castAssetView(card.path, await castAssets.read(card.path)) }
+    },
     readActivity: async sessionId => {
       const chat = await taskStateReader.forSession(sessionId)
       const activity = chat ? backgroundTasks.activity(chat) : null
@@ -4378,6 +4508,11 @@ export async function apply(ctx) {
       case 'castSetImage': return await castEdit(args && args.sessionId, cardPath => castAssets.setImage({ cardPath, name: args.name, slot: args.slot, bytes: Buffer.from(str(args.data), 'base64') }))
       case 'castRemoveImage': return await castEdit(args && args.sessionId, cardPath => castAssets.removeImage({ cardPath, name: args.name, slot: args.slot }))
       case 'castSetCharacter': return await castEdit(args && args.sessionId, cardPath => castAssets.setCharacter({ cardPath, name: args.name, rename: args.rename, aliases: args.aliases }))
+      case 'castSetVoice': return await castEdit(args && args.sessionId, cardPath => castAssets.setVoice({ cardPath, name: args.name, provider: args.provider, voice: args.voice }))
+      case 'getSpeechSettings': return await speech.present()
+      case 'updateSpeechSettings': return await speech.save({ enabled: args && args.enabled, provider: args && args.provider, config: args && args.config || {}, apiKey: args && args.apiKey })
+      case 'speechTest': return speechReply(await speech.synthesize({ provider: args && args.provider, text: str(args && args.text) || '你好，这是配音试听。', voice: args && args.voice, emotion: args && args.emotion }))
+      case 'speechForLine': return await speakLine(args && args.sessionId, args || {})
       case 'castRemoveCharacter': return await castEdit(args && args.sessionId, cardPath => castAssets.removeCharacter({ cardPath, name: args.name }))
       case 'castImportSpritePack': return await castEdit(args && args.sessionId, (cardPath, card) => castAssets.importSpritePack({ cardPath, name: str(args.name).trim() || card.name || undefined, bytes: Buffer.from(str(args.data), 'base64') }))
       case 'pluginMediaTurns': return await pluginMediaTurns(args && args.sessionId)
@@ -4441,8 +4576,20 @@ export async function apply(ctx) {
       }
       case 'markConversationOpened': return await conversationRegistry.touch(args && args.sessionId, Date.now())
       case 'listMobileCardImports': return await mobileCardImport.list()
-      case 'importMobileCard': return { card: await importCard(await mobileCardImport.read(args && args.id)) }
+      case 'importMobileCard': {
+        const archive = await mobileCardImport.archive(args && args.id)
+        return { card: archive ? await importCardArchiveFile(archive.file, archive.name) : await importCard(await mobileCardImport.read(args && args.id)) }
+      }
       case 'importCard': return { card: await importCard(args && args.payload) }
+      case 'importCardUpload': {
+        const upload = await uploads.take(args && args.uploadId)
+        try { return { card: await importCardArchiveFile(upload.file, str(args && args.name) || '人物卡.dshcard') } }
+        finally { await upload.remove() }
+      }
+      case 'cardPacks': return { packs: await cardPacksOf(args && args.sessionId) }
+      case 'cardPlugins': return { plugins: (await castAssets.read(normalizeResourcePath(args && args.path, 'card'))).plugins || [] }
+      case 'setCardPlugins': return { plugins: await setCardPlugins(args && args.path, args && args.enabled === true) }
+      case 'cardPluginScopes': return { scopes: Object.fromEntries([...await cardPlugins.scope()].map(([name, scope]) => [name, scope.cardPath])) }
       case 'deleteCard': return await deleteCard(args && args.path)
       case 'prepareDeleteChats': return await deleteChats(args && args.chatIds, true)
       case 'deleteChats': return await deleteChats(args && args.chatIds)
@@ -4852,6 +4999,10 @@ export async function apply(ctx) {
   registerTavernHttpRoutes({
     ctx,
     castAssets,
+    speech,
+    exportCardCharx,
+    assetPacks,
+    uploads,
     exposeHandler: handle => { tavernHttpHandle = handle },
     pluginAssets: createPluginAssets({ pluginsDir: userPluginPaths(dataRoot).plugins }),
     dispatch,

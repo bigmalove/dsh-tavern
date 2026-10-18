@@ -292,6 +292,9 @@
 				// 由楼层表带回当前文字，否则改完页面上永远是原文。
 				const floorState = useScopedLiveTavernView(props.sessionId, "user-floor:" + String(data.seq), [["floorsBySeq", String(data.seq)]]);
 				const editedFloor = floorState.view && floorState.view.floorsBySeq ? floorState.view.floorsBySeq[String(data.seq)] : null;
+				// 删除写的也是替换副本，宿主照样渲染原节点：删掉的消息由服务端列出，这里藏起来。
+				const deletedState = useScopedLiveTavernView(props.sessionId, "user-deleted:" + String(data.seq), [["deletedSeqs", String(data.seq)]]);
+				const deleted = Boolean(deletedState.view && deletedState.view.deletedSeqs && deletedState.view.deletedSeqs[String(data.seq)]);
 				const parts = userContentParts(data.content);
 				const text = editedFloor && typeof editedFloor.text === "string" ? editedFloor.text : tavernUserTextForTurn(liveState.view, turn, data.content);
 				const [copied, setCopied] = React.useState(false);
@@ -310,6 +313,7 @@
 					return React.createElement("div", { key: index, className: "dsh-tavern-user-extra" }, React.createElement(DshUi.JsonBlock, { label: typeof props.t === "function" ? props.t("message.extraBlock") : "附加内容", payload: block, truncatedLabel: function (total) { return "内容过长（共 " + String(total) + " 项）"; } }));
 				});
 				const time = Number.isFinite(Number(data.time)) ? new Date(Number(data.time)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+				if (deleted) return null;
 				return React.createElement("div", { className: "dsh-tavern-user-row" },
 					React.createElement("div", { className: "dsh-tavern-user-stack" }, renderedImages, (text !== "" || extras.length > 0) ? React.createElement("div", { className: "dsh-tavern-user-bubble" }, liveState.view?.inputTemplateDisplays?.[turn] ? React.createElement(TavernMessageFrame, {content:liveState.view.inputTemplateDisplays[turn],sessionId:props.sessionId,turn:turn,partIndex:"user-template",frameOwner:props.frameOwner,eager:true}) : React.createElement("div", { style: { whiteSpace: "pre-wrap" } }, text), extras) : null),
 					React.createElement("div", { className: "dsh-tavern-user-actions" }, time ? React.createElement("span", null, time) : null, React.createElement(TavernFloorEditButton, { sessionId: props.sessionId, seq: data.seq, variant: "user" }), React.createElement(TavernDeleteMessageAction, { sessionId: props.sessionId, seq: data.seq, variant: "user" }), React.createElement(DshUi.Tooltip, { label: copied ? "已复制" : "复制", side: "bottom" }, React.createElement("button", { type: "button", className: "dsh-tavern-user-copy", "aria-label": copied ? "已复制" : "复制", onClick: copy }, React.createElement(copied ? DshUi.IconCheckOutline16 : DshUi.IconCopyOutline16, null))))
@@ -602,6 +606,10 @@
 				const settled = data.status !== "running";
 				const revision = String(data.status || "") + ":" + String(data.finalNode && data.finalNode.seq || "");
 				const mapping = useLiveTavernView(props.sessionId, revision, [["$storyHostTurn", String(turn)]]);
+				// 删除写的是替换副本，宿主仍渲染原节点：服务端列出被删的 seq，这一楼藏起来。
+				const finalSeq = data.finalNode && data.finalNode.seq;
+				const deletedState = useScopedLiveTavernView(props.sessionId, "assistant-deleted:" + String(finalSeq || ""), [["deletedSeqs", String(finalSeq || "")]]);
+				const deleted = Boolean(finalSeq && deletedState.view && deletedState.view.deletedSeqs && deletedState.view.deletedSeqs[String(finalSeq)]);
 				const storyTurn = tavernStoryTurnForDshTurn(mapping.view, turn);
 				const currentView = liveTavernView.getSnapshot(props.sessionId).view;
                 const liveState = useLiveTavernView(props.sessionId, revision, tavernAssistantViewPaths(storyTurn, storyTurn > 0 && storyTurn === tavernLatestProjectionTurn(currentView)));
@@ -635,7 +643,7 @@
 				const pluginMedia = useTavernPluginMedia(props.sessionId, storyTurn, playView && settled);
 				const castLines = useTavernCast(props.sessionId, storyTurn, playView && settled);
 				const castCard = liveState.view && liveState.view.card;
-				const cast = castLines ? { lines: castLines, characterName: castCard && castCard.name || "",
+				const cast = castLines ? { sessionId: props.sessionId, lines: castLines, characterName: castCard && castCard.name || "",
 					characterImageUrl: castCard && castCard.path ? "/api/dsh-tavern/card-image?path=" + encodeURIComponent(castCard.path) : "" } : null;
 				const sceneImagesEnabled = Boolean(liveState.view && liveState.view.releaseCapabilities && liveState.view.releaseCapabilities.sceneImages);
 				const sceneShown = sceneImagesEnabled && settled && playView;
@@ -664,7 +672,6 @@
 				const regenerating = liveState.view && liveState.view.regenInProgress === true
 					&& Array.isArray(liveState.view.suppressedDshTurns)
 					&& liveState.view.suppressedDshTurns.some(function (value) { return Number(value) === Number(turn) || Number(value) === Number(storyTurn); });
-				if (regenerating) return null;
                 const rendered = sessionTransitioning ? [React.createElement("div", { key: "switching", className: "dsh-tavern-session-switching", role: "status" }, "正在完成游戏初始化…")] : waitingForHistory ? [React.createElement("div", {key:"history",role:"status"}, "正在读取历史内容…")] : renderTavernAssistantBlocks({
 					blocks: data.blocks,
 					streaming: data.status === "running",
@@ -692,6 +699,8 @@
 					t: props.t
 				});
 				const distantHeight = useTavernDistantFloor(historyNode, settled && !sessionTransitioning && storyTurn > 0 && latestProjectionTurn - storyTurn >= TAVERN_LIVE_FLOORS);
+				// 提前 return 必须在所有 hook 之后：放在 hook 前面，生成开始/结束时 hook 数量会变，React 直接报错。
+				if (regenerating || deleted) return null;
 				if (!(data.status === "running" || data.status === "interrupted" || rendered.length > 0)) return null;
 				if (distantHeight > 0) return React.createElement("div", { ref:historyNode, className: "dsh-tavern-assistant", "data-distant-floor": true, style: { height: distantHeight + "px" } });
 				const mvuReceiptNode = settled && ownsTurn ? React.createElement(TavernTurnMvuReceipt, { sessionId: props.sessionId, turn: storyTurn }) : null;

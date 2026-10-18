@@ -53,15 +53,53 @@ window.__ModuleLoader__.load({
 
 		// @include text-resource-file.js
 
+		/** Import one card file: archives (CHARX, DSH cards) go up as raw files, others as parsed JSON. */
+		async function importTavernCardFile(file, call) {
+			if (/\.(charx|dshcard)$/i.test(String(file.name || ""))) {
+				const response = await fetch("/api/dsh-tavern/card-upload", { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file });
+				let reply = null;
+				try { reply = await response.json(); } catch (_error) {}
+				if (!reply || !reply.ok) throw new Error(reply && reply.error || "上传失败（HTTP " + response.status + "）");
+				return call("importCardUpload", { uploadId: reply.uploadId, name: file.name });
+			}
+			return call("importCard", { payload: await parseCardFile(file) });
+		}
+
+		/** What a card file brought into its character material, for the import notice. */
+		function tavernCardAssetNotice(assets, card) {
+			const extra = [];
+			if (card && card.plugins && card.plugins.length) extra.push(card.pluginError ? "卡内插件没有启用：" + card.pluginError : "卡内插件 " + card.plugins.map(function (plugin) { return plugin.name; }).join("、") + " 已启用，刷新页面后完整生效");
+			if (card && card.packs && card.packs.length) extra.push("素材包 " + card.packs.map(function (pack) { return pack.title || pack.id; }).join("、") + (card.packs.some(function (pack) { return pack.reused; }) ? "（已有的包直接复用）" : ""));
+			const base = tavernCardAssetText(assets);
+			return [base].concat(extra).filter(Boolean).join("；");
+		}
+		function tavernCardAssetText(assets) {
+			if (!assets) return "";
+			if (assets.error) return "角色素材导入失败：" + assets.error;
+			const parts = [];
+			if (assets.sprites) parts.push(assets.sprites + " 张立绘");
+			if (assets.backgrounds) parts.push(assets.backgrounds + " 张背景");
+			if (assets.avatars) parts.push(assets.avatars + " 个头像");
+			const notes = parts.length ? ["带入" + parts.join("、")] : [];
+			const unmatched = assets.unmatched || [];
+			if (unmatched.length) notes.push(unmatched.length + " 个表情名未识别（" + unmatched.slice(0, 5).join("、") + (unmatched.length > 5 ? "…" : "") + "），已保留，导出 CHARX 时写回");
+			else if (assets.kept) notes.push("另有 " + assets.kept + " 个素材原样保留，导出 CHARX 时写回");
+			if (assets.skipped) notes.push(assets.skipped + " 个素材读不到，已跳过");
+			return notes.join("；");
+		}
+
 		function parseCardFile(file) {
 			const name = String(file.name || "");
+			if (name.toLowerCase().endsWith(".charx")) {
+				return file.arrayBuffer().then(function (buf) { return { kind: "charx", name: name, fileB64: bytesToBase64(new Uint8Array(buf)) }; });
+			}
 			if (name.toLowerCase().endsWith(".json")) {
 				return file.text().then(function (text) { return { kind: "text", name: name, text: text }; });
 			}
 			return file.arrayBuffer().then(function (buf) {
 				const bytes = new Uint8Array(buf);
 				if (bytes.length <= 8 || ascii(bytes, 0, 8) !== "\x89PNG\r\n\x1a\n") {
-					throw new Error("无法识别的角色卡文件（需要 PNG 或 JSON）");
+					throw new Error("无法识别的角色卡文件（需要 PNG、JSON 或 CHARX）");
 				}
 				let off = 8;
 				while (off + 8 <= bytes.length) {
@@ -731,6 +769,8 @@ window.__ModuleLoader__.load({
 
 // @include features/plugin-extensions.js
 
+// @include features/speech.js
+
 // @include features/cast-presentation.js
 
 // @include features/cast-stage.js
@@ -791,6 +831,8 @@ window.__ModuleLoader__.load({
 
 
 // @include features/worldbook-library.js
+
+// @include features/card-plugins.js
 
 // @include features/card-library.js
 
