@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { EventEmitter } from 'node:events'
 
 import test, { beforeEach, afterEach, mock } from 'node:test'
 
@@ -148,7 +149,8 @@ test('jsDelivr 发布序号阻止缓存倒退，并允许无 GitHub 更新', asy
     assert.equal((await createApplicationUpdater(common).check()).phase, 'up-to-date')
 
     metadata.releaseSequence = 43
-    const child = { pid: 4321, once(event, listener) { if (event === 'spawn') queueMicrotask(listener); return this }, unref() {} }
+    // A live PID: the launched updater is still running when status is read.
+    const child = { pid: process.pid, once(event, listener) { if (event === 'spawn') queueMicrotask(listener); return this }, unref() {} }
     let launchCwd
     const home = path.join(root, 'home')
     const changed = await createApplicationUpdater({ ...common, dshHome: home, platform: 'linux', spawnProcess(_command, _args, options) { launchCwd = options.cwd; return child } }).start()
@@ -250,5 +252,75 @@ test('jsDelivr 兜底：本地清单未核验时用提交比较，比较不可�
     assert.equal(viaFloor.phase, 'update-available')
     metadata.releaseSequence = 42
     assert.equal((await createApplicationUpdater({ ...common, compareCommits: offline }).check()).phase, 'check-failed')
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('状态查询按与安装相同的规则回收残留锁，更新按钮不再永久卡在「等待安全停止」', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'update-stale-lock-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  await writeFile(path.join(root, 'package.json'), JSON.stringify({ version: '2.5.0' }))
+  await writeFile(path.join(root, 'update-status.json'), JSON.stringify({ phase: 'running', attemptId: 'old' }))
+  const dead = 2 ** 22 + 12345 // well above any live PID on test hosts
+  const lock = path.join(root, '.tavern-install.lock')
+  await mkdir(path.join(lock, 'processes', 'install'), { recursive: true })
+  const old = Date.now() - 5 * 60_000
+  await writeFile(path.join(lock, 'owner.json'), JSON.stringify({ attemptId: 'old', generation: 'g', pid: dead, state: 'blocked', unsafeToRetry: true, startedAt: old, updatedAt: old }))
+  await writeFile(path.join(lock, 'processes', 'install', `${dead + 1}.json`), JSON.stringify({ pid: dead + 1 }))
+  const { utimes } = await import('node:fs/promises')
+  for (const file of [path.join(lock, 'owner.json'), lock]) await utimes(file, new Date(old), new Date(old))
+  const status = await createApplicationUpdater({ dataRoot: root, sourceRoot: root, runtimeHost: 'cli' }).status()
+  assert.equal(status.phase, 'failed')
+  assert.equal(status.repairRequired, true)
+  await assert.rejects(readFile(path.join(lock, 'owner.json')), { code: 'ENOENT' })
+})
+
+test('没有安装锁的遗留「进行中」记录：超过 1 小时转为可修复，不再永久禁用更新', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'update-orphan-record-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  await writeFile(path.join(root, 'package.json'), JSON.stringify({ version: '2.5.0' }))
+  const updater = createApplicationUpdater({ dataRoot: root, sourceRoot: root, runtimeHost: 'cli' })
+  await writeFile(path.join(root, 'update-status.json'), JSON.stringify({ phase: 'running', attemptId: 'a', startedAt: Date.now() - 5 * 60_000 }))
+  assert.equal((await updater.status()).phase, 'blocked', 'a recent record stays fenced')
+  await writeFile(path.join(root, 'update-status.json'), JSON.stringify({ phase: 'blocked', attemptId: 'a', startedAt: Date.now() - 2 * 60 * 60_000 }))
+  const status = await updater.status()
+  assert.equal(status.phase, 'failed')
+  assert.equal(status.repairRequired, true)
+})
+
+test('Windows 更新器启动后，预留锁记下它的进程号，进程未接管就退出时不必等 1 小时', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'update-launcher-pid-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const updater = createApplicationUpdater({ ...verifiedUpdate, dataRoot: root, sourceRoot: root, dshHome: root, platform: 'win32',
+    spawnProcess() {
+      const child = new EventEmitter()
+      child.stdout = new EventEmitter()
+      child.stderr = new EventEmitter()
+      child.unref = () => {}
+      queueMicrotask(() => { child.emit('spawn'); child.stdout.emit('data', Buffer.from(launcherPid + '\r\n')); child.emit('close', 0) })
+      return child
+    },
+  })
+  let launcherPid = process.pid
+  assert.equal((await updater.start()).phase, 'running')
+  const owner = JSON.parse(await readFile(path.join(root, '.tavern-install.lock', 'owner.json'), 'utf8'))
+  assert.equal(owner.state, 'reserved')
+  assert.equal(owner.launcherPid, process.pid)
+  // A dead updater that never adopted the reservation: status releases it right away.
+  await writeFile(path.join(root, '.tavern-install.lock', 'owner.json'), JSON.stringify({ ...owner, launcherPid: 2 ** 22 + 12345 }))
+  const interrupted = await updater.status()
+  assert.equal(interrupted.phase, 'failed')
+  assert.equal(interrupted.repairRequired, true)
+  assert.match(interrupted.error, /没有开始安装就退出/)
+  const events = updater.diagnostics().records.map(entry => entry.event)
+  assert.ok(events.includes('updater.launched'))
+  assert.ok(events.includes('updater.notadopted'))
+})
+
+test('从 Git 仓库运行时不启动应用内更新，提示用 git pull；检查更新照常', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'dsh-tavern-checkout-'))
+  try {
+    await mkdir(path.join(root, '.git'), { recursive: true })
+    const updater = createApplicationUpdater({ dataRoot: path.join(root, 'data'), sourceRoot: root, runtimeHost: 'cli', ...verifiedUpdate })
+    await assert.rejects(updater.start(), /Git 仓库运行.*git pull/)
   } finally { await rm(root, { recursive: true, force: true }) }
 })

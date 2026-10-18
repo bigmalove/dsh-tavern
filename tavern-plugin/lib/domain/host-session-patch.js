@@ -1,14 +1,15 @@
-// In-memory host/client patch for DSH 0.1.5-rc.2. Official package files stay unchanged.
+// In-memory host/client patch for DSH 0.2.1-rc.2. Official package files stay unchanged.
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { pathToFileURL } from 'node:url'
 import { join, sep } from 'node:path'
+import { hostRequireCandidates } from './host-package-resolution.js'
 
 export async function prepareExpandedPatch(runtime, options = {}) {
-  const expectedVersion = options.version ?? '0.1.6-alpha.2'
+  const expectedVersion = options.version ?? '0.2.1-rc.2'
   const marker = 'dsh-tavern/required-session-patch-v1'
   const require = createRequire(join(runtime, 'package.json'))
   const originals = new Map()
@@ -97,8 +98,14 @@ export async function prepareExpandedPatch(runtime, options = {}) {
     await compile('@deepseek-ai/dsh-session-format-v2-to-v3', text => once(text,
       'if (event.type === "assistant/message" && sources !== void 0) throw',
       `if (event.type === "assistant/message" && sources !== void 0 && !${own}) throw`))
-    const { sessionFormatCatalog: catalog } = await compile('@deepseek-ai/dsh-session-format-catalog')
-    const { default: PatchedPersistence } = await compile('@deepseek-ai/dsh-session-persistence-jsonl')
+    const migration = await compile('@deepseek-ai/dsh-session-format-v3-to-v4')
+    migration.RELEASED_V3_EVENT_TYPES.add(marker)
+    const catalogs = await compile('@deepseek-ai/dsh-session-format-catalog')
+    const { sessionFormatCatalog: catalog } = catalogs
+    // 0.2.1 exposes the plugin apply() rather than the backend class.
+    // Export the pinned internal class only from our in-memory module.
+    const { JsonlSessionPersistence: PatchedPersistence } = await compile('@deepseek-ai/dsh-session-persistence-jsonl',
+      text => text + '\nexport { JsonlSessionPersistence };')
     // Guard #74: Windows create/rename path does `await import("koffi")`. If the
     // bare specifier survived into the data: module, new chats fail immediately.
     {
@@ -118,6 +125,7 @@ export async function prepareExpandedPatch(runtime, options = {}) {
     const undoPersistence = []
     return {
       catalog, patchedSurface, clientSource, marker,
+      migration: { ...catalogs, historicalChildCatalogSource: migration.historicalChildCatalogSource },
       patchQuery(instance) {
         assert.equal(instance._observations.cache.size, 0, 'Install before querying Session history')
         for (const [target, prototype] of [
@@ -182,49 +190,66 @@ export async function prepareExpandedPatch(runtime, options = {}) {
 }
 
 export const SESSION_PATCH_PROTOCOL = 1
-export const SESSION_PATCH_VERSION = '0.1.5-rc.2'
+// 0.2.1-rc.2 适配：宿主 runtime 从 0.1.5-rc.2 升到 0.2.1-rc.2；补丁锚点在 0.2.0 全部
+// 仍唯一命中（见 tmp/audit-host.md 的 E1），因此这里是重钉版本 + 重算字节，不是重写补丁。
+export const SESSION_PATCH_VERSION = '0.2.1-rc.2'
+// Audited against SESSION_PATCH_VERSION; also admitted on every allowed host release
+// (config/dsh-compatibility.json). PINNED_SHA256 still guards each file's bytes.
+const policy = JSON.parse(readFileSync(new URL('../../../config/dsh-compatibility.json', import.meta.url), 'utf8'))
+export const SESSION_PATCH_VERSIONS = Object.freeze([...new Set([SESSION_PATCH_VERSION, ...(policy.allowedDshVersions || [])])])
 const INSTALLED = Symbol.for('dsh-tavern.host-session-patch.v1')
-// Each entry lists every known-good bytes of that file for 0.1.5-rc.2.
-// Official npm is always first. DSHA v0.1.5-rc2 rewrites two packages at
-// packaging time (legacy rc.1 session shape + Android atomic publish); those
-// variants keep the same Tavern replacement anchors and must be accepted.
+// Each entry lists every known-good bytes of that file for 0.2.1-rc.2.
+// Official npm is always first. The 0.1.5-rc.2 list also carried DSHA v0.1.5-rc2
+// packaging variants; no 0.2.0 DSHA/Android build has been audited yet, so those
+// variants must be appended here (with their own sha256) before they are shipped.
+// Values recomputed from the desktop app.asar with tmp/compute-pins.mjs.
 const PINNED_SHA256 = Object.freeze({
-  '@deepseek-ai/dsh-session/surface': Object.freeze(['aad7aaabe6cd9b39ae4cc3b50a2873c9b5d73b69d929051f31b18ecc13647c72']),
-  '@deepseek-ai/dsh-session': Object.freeze(['05e94f57d96e7979670a5b51024c8591572eb0051ce793613dbdec35cf2c47bf']),
-  '@deepseek-ai/dsh-session-persistence': Object.freeze(['0dc2a1634e4b6ebb558aac214009da3dc00f54f315762a56a1841d12baf770d4']),
+  '@deepseek-ai/dsh-session-format-v3-to-v4': Object.freeze(['a6b974d110572bd0b16aa7ab09a30d9061944e8dc9f811e8c4a35e4891f83f12']),
+  '@deepseek-ai/dsh-session/surface': Object.freeze(['ebe8920a22fca8d987cbacab94c9db92f71df44863f58370a1be559155be734e']),
+  '@deepseek-ai/dsh-session': Object.freeze(['2f5dd07cb5c744a29abbb8003a8a4cefd9e582c6e2538074ca299a0ddd02a3bf']),
+  '@deepseek-ai/dsh-session-persistence': Object.freeze(['cc0b6d3a224133af611b428d5a49020e300f86c3b4ba28037aeb219029bde3eb']),
   '@deepseek-ai/dsh-session-format-v2-to-v3': Object.freeze([
-    '2d35e1e0ed497af569d5735fc590187de1568489cfe60d070b5f61330cd5a338',
-    '8e7cc1aab2eef1099cbca390dd04c4a8ff3e6b3f64bd9e34e2357630b5e65af5',
+    '0dc56fb447e9046fc25995bcd08dbac26e832eba6e9eb583ef49d26467c27cd7',
   ]),
-  '@deepseek-ai/dsh-session-format-catalog': Object.freeze(['bf4bde9e6563d7793f820c4a1b3141f6527283dd6c58f16bf43a67bc557cc48c']),
+  '@deepseek-ai/dsh-session-format-catalog': Object.freeze(['836bbb772ab505c299f1a4a246164c50c7c08b67ab0d17f1251d7ea2cd8c1818']),
   '@deepseek-ai/dsh-session-persistence-jsonl': Object.freeze([
-    '7d0640c9fc4be6c703b77605fdee6af519c542fae28a6cd4489353309812f062',
-    'd387931d4ae848152411ec5f152064108b899bd9b5bd813c540afa2274703998',
+    '973dd78679b2661d6f492343bc22b124ae958aa597d3b36c698a2c650f909984',
   ]),
-  '@deepseek-ai/dsh-session-query': Object.freeze(['c2a3954a0060942b179a92111cce556f27b8d659a4d815bb0e9defadbdb874da']),
-  '@deepseek-ai/dsh-api-session-controller/client': Object.freeze(['ff33d1f85a0b2f14568fcb555d5f52d2ba5f57f2e0ecfa5d7885ba83e7ff6069']),
+  '@deepseek-ai/dsh-session-query': Object.freeze(['76ce2944e561c12f48b5e240d68cafe54ce6d667b1d20722e6939ed834489939']),
+  '@deepseek-ai/dsh-api-session-controller/client': Object.freeze(['82f2301c18f0e51340c1eedf8ecdfb939e873b3770a80632e438b86e82887d0e']),
 })
+// 导出给测试：宿主文件"未被打补丁改动"的断言应当跟随这份引脚表，而不是另抄一份哈希。
+export { PINNED_SHA256 }
 
-function hostRequireFrom(anchor) {
-  return createRequire(createRequire(anchor).resolve('@deepseek-ai/dsh-tools'))
-}
+// 0.2.1-rc.2 适配：一个宿主安装根里必须能解析出补丁用到的全部包，否则「解析到的宿主包与
+// 正在运行的会话存储不是同一份」只是碰运气。表里的包全部来自同一个 @deepseek-ai 目录。
+const HOST_PATCH_PACKAGES = Object.freeze([
+  '@deepseek-ai/dsh-tools',
+  '@deepseek-ai/dsh-session',
+  '@deepseek-ai/dsh-session-persistence',
+  '@deepseek-ai/dsh-session-persistence-jsonl',
+  '@deepseek-ai/dsh-session-query',
+  '@deepseek-ai/dsh-session-format-catalog',
+  '@deepseek-ai/dsh-session-format-v2-to-v3',
+  '@deepseek-ai/dsh-api-session-controller/client',
+])
 
-// The plugin file lives in this repo. The running host packages live next to
-// the dsh launcher. Pick the copy that actually constructed the live store.
-export async function defaultHostRequire(persistence) {
-  const anchors = [fileURLToPath(new URL('../../package.json', import.meta.url))]
-  if (process.argv[1]) anchors.push(process.argv[1])
-  const found = []
-  const errors = []
-  for (const anchor of anchors) {
-    try { found.push(hostRequireFrom(anchor)) }
-    catch (error) { errors.push(error) }
-  }
-  if (!found.length) throw errors.at(-1) || new Error('无法解析宿主包')
-  if (!persistence) return found[0]
-  for (const candidate of found) {
-    const loaded = await import(pathToFileURL(candidate.resolve('@deepseek-ai/dsh-session-persistence')).href)
-    if (Object.values(loaded).some(exported => typeof exported === 'function' && persistence instanceof exported)) return candidate
+// 宿主安装根按固定优先级挑选（见 host-package-resolution.js）：
+//   1. 归档宿主根 <resources>\app.asar\dsh\package.json —— 与宿主进程自己的模块加载器同源
+//      （真机日志的 service.starting.entry 就在同一棵树下），实测解析结果逐字相同、模块命名
+//      空间全等，因此补丁作用在宿主正在使用的那一份单例上；
+//   2. 启动器入口（0.1.5 的 <resources>\app 真目录布局，或 DSH_DESKTOP_DSH_BOOTSTRAP）；
+//   3. 插件自己的 node_modules —— 只在没有桌面宿主时（CLI / 测试夹具）才会命中。
+// tavern-plugin 的 node_modules 里只有 5 个 @deepseek-ai 包的 npm 副本，且缺
+// dsh-session-persistence；0.2.0 桌面下那个候选必然不完整，所以它排在最后，绝不作为回退
+// 拼出第二份 dsh-session。
+export async function defaultHostRequire(persistence, options = {}) {
+  const { resolvable } = hostRequireCandidates({ names: HOST_PATCH_PACKAGES, env: options.env, argv: options.argv })
+  if (!resolvable.length) throw new Error('无法解析宿主 DSH 包')
+  if (!persistence) return resolvable[0].require
+  for (const candidate of resolvable) {
+    const loaded = await import(pathToFileURL(candidate.require.resolve('@deepseek-ai/dsh-session-persistence')).href)
+    if (Object.values(loaded).some(exported => typeof exported === 'function' && persistence instanceof exported)) return candidate.require
   }
   throw new Error('解析到的宿主包与正在运行的会话存储不是同一份')
 }
@@ -257,7 +282,11 @@ function createHandle(fields) {
       this.clientReason = ''
     },
     replacementAllowed() {
-      return this.status === 'skipped' || (this.serverReady && this.clientReady)
+      // 'skipped' 表示宿主版本不在 SESSION_PATCH_VERSIONS（允许清单）内、补丁**没有装**。
+      // 旧实现把 skipped 当作「可写」，会让正文编辑/回退/重新生成在补丁缺失时假就绪：
+      // 宿主 dsh-session 仍会拒绝 assistant/message + sourceEventSeqs 的 replace 写入。
+      // 只有服务端补丁装好且页面完成握手才算就绪。
+      return this.serverReady && this.clientReady
     },
     blockReason() {
       if (this.status === 'failed') return this.reason
@@ -297,7 +326,7 @@ export async function installHostSessionPatch({ hostRequire, persistence, query 
     return loaded.sessionFormatCatalog
   }
   const finish = fields => Object.assign(createHandle(fields), { loadSessionCatalog })
-  if (hostVersion !== SESSION_PATCH_VERSION) return finish({ status: 'skipped', hostVersion })
+  if (!SESSION_PATCH_VERSIONS.includes(hostVersion)) return finish({ status: 'skipped', hostVersion })
   if (persistence?.[INSTALLED]) {
     const installed = persistence[INSTALLED]
     if (!installed.loadSessionCatalog) installed.loadSessionCatalog = loadSessionCatalog
@@ -309,7 +338,7 @@ export async function installHostSessionPatch({ hostRequire, persistence, query 
     catch (error) {
       return finish({ status: 'failed', hostVersion, reason: '无法校验宿主文件 ' + name + '：' + (error.message || error) })
     }
-    if (!allowed.includes(actual)) return finish({ status: 'failed', hostVersion, reason: '宿主文件与 0.1.5-rc.2 补丁清单不一致：' + name })
+    if (!allowed.includes(actual)) return finish({ status: 'failed', hostVersion, reason: `宿主文件与 ${SESSION_PATCH_VERSION} 补丁清单不一致：` + name })
   }
   if (!persistence?.tracker?.openHandles || !persistence?.tracker?.writers) {
     return finish({ status: 'failed', hostVersion, reason: '宿主没有 JSONL 会话存储，不能安装补丁' })
@@ -325,7 +354,7 @@ export async function installHostSessionPatch({ hostRequire, persistence, query 
   }
   let patch
   try {
-    patch = await prepareExpandedPatch(runtimeRoot(require.resolve('@deepseek-ai/dsh-session')), { version: SESSION_PATCH_VERSION })
+    patch = await prepareExpandedPatch(runtimeRoot(require.resolve('@deepseek-ai/dsh-session')), { version: hostVersion })
     patch.patchPersistence(persistence)
     patch.patchQuery(query)
   } catch (error) {
@@ -333,6 +362,8 @@ export async function installHostSessionPatch({ hostRequire, persistence, query 
     return finish({ status: 'failed', hostVersion, reason: '会话补丁安装失败：' + (error.message || error) })
   }
   const handle = finish({ status: 'ready', hostVersion, clientSource: patch.clientSource })
+  handle.loadSessionCatalog = async () => patch.catalog
+  handle.loadSessionMigration = async () => patch.migration
   handle.dispose = () => patch.dispose()
   Object.defineProperty(persistence, INSTALLED, { value: handle })
   return handle

@@ -9,7 +9,7 @@ test('marking a frozen, already-marked request copies it instead of throwing (#1
   const { createStoryCompactionRequest } = await import('../tavern-plugin/lib/domain/story-compaction.js')
   // The real chain: the projection hook marks the request, then the story hook
   // returns a frozen copy carrying that mark and marks it again.
-  const projected = markRequestHandled({ purpose: 'compaction', messages: [{ role: 'user', content: [], source: { plugin: 'dsh-compaction-basic' } }] }, 'compaction-projection')
+  const projected = markRequestHandled({ purpose: 'compaction', messages: [{ role: 'user', content: [], source: { kind: 'plugin', plugin: 'dsh-compaction-basic' } }] }, 'compaction-projection')
   const request = createStoryCompactionRequest(projected, '剧情压缩')
   assert.ok(Object.isFrozen(request))
   const marked = markRequestHandled(request, 'story-compaction')

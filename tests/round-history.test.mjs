@@ -420,7 +420,11 @@ test('重新创建流程模块后连续重生成仍为原轮次追加版本；�
   assert.deepEqual(rolled.suppressedDshTurns, [2, 3, 4])
   assert.deepEqual(rolled.regeneratedDshTurns, {})
   assert.ok(h.calls.lastIndexOf('rollback') < h.calls.lastIndexOf('MESSAGE_DELETED'))
-  assert.equal(h.session.events.at(-1).surfaceOp.op, 'replace')
+  // The rollback's empty replacement is the last surface edit, and the turn it
+  // opened for itself is closed again so the log stays loadable.
+  const lastEdit = h.session.events.filter(event => event.surfaceOp?.op === 'replace').at(-1)
+  assert.deepEqual(lastEdit.data.message.content, [])
+  assert.deepEqual(h.session.events.slice(-2).map(event => event.type), ['step/end', 'turn/end'])
 })
 
 test('旧剧本回退保留迁移恢复路径；非游玩模式拒绝回退', async () => {
@@ -438,7 +442,11 @@ test('回退提交后立即保存模型消息面，早于后台回拨和脚本�
   h.options.sessions.flush = async session => h.calls.push(session === h.session ? 'foreground.flush' : 'other.flush')
   await h.create().rollback('session')
   const surface = h.calls.indexOf('surface:assistant/message'), flush = h.calls.indexOf('foreground.flush')
-  assert.ok(surface >= 0 && flush === surface + 1, h.calls.join(','))
+  // A rollback runs between turns, so the replacement opens a turn for itself:
+  // the flush still follows the edit immediately, only the closing events sit in
+  // between. Nothing else may be persisted before it.
+  assert.ok(surface >= 0 && surface < flush, h.calls.join(','))
+  assert.ok(h.calls.slice(surface + 1, flush).every(call => call === 'surface:step/end' || call === 'surface:turn/end'), h.calls.join(','))
   assert.ok(flush < h.calls.indexOf('MESSAGE_DELETED'))
 })
 
@@ -451,9 +459,15 @@ test('rollback immediately rewinds and flushes background surface, failure only 
     const source = { kind: 'model', provider: 'fixture', model: 'fixture' }
     const bg = { events: [{ seq: 0, type: 'turn/end' }, { seq: 1, type: 'assistant/message', data: { turn: 2, message: { source, content: [] } } }], surface: { nodes: [1] }, append(type, data, options) {
       if (fail) throw new Error('background unavailable')
+      const seq = this.events.length
+      this.events.push({ seq, type, data, ...(options || {}) })
+      // The rewind opens a turn for its replacement; only the replacement itself
+      // is the background history edit this test cares about.
+      if (options?.surfaceOp?.op !== 'replace') return seq
       h.calls.push('background.rewind')
       assert.equal(options.surfaceOp.start, 1)
       this.surface.nodes = []
+      return seq
     } }
     const worker = { session: bg, cancel() {}, async whenIdle() {} }
     h.options.sessions = { get: id => id === 'bg' ? (unloaded ? undefined : worker) : h.agent,

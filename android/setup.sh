@@ -5,7 +5,9 @@ DSH_ROOT="${DSH_HOME:-${HOME}/.dsh}"
 APP_DIR="${DSH_TAVERN_SOURCE_ROOT:-${DSH_TAVERN_ANDROID_APP_DIR:-${DSH_ROOT}/apps/dsh-tavern}}"
 DEFAULT_REPOSITORY="https://github.com/bigmalove/dsh-tavern.git"
 REPOSITORY="${DSH_TAVERN_REPOSITORY:-${DEFAULT_REPOSITORY}}"
-DEFAULT_TARBALL_URL="https://codeload.github.com/bigmalove/dsh-tavern/tar.gz/refs/heads/main"
+# Follows the main branch, same as install.sh.
+BRANCH="${DSH_TAVERN_BRANCH:-main}"
+DEFAULT_TARBALL_URL="https://codeload.github.com/bigmalove/dsh-tavern/tar.gz/refs/heads/${BRANCH}"
 TARBALL_URL="${DSH_TAVERN_TARBALL_URL:-${DEFAULT_TARBALL_URL}}"
 SOURCE_MARKER=".dsh-tavern-tarball-source"
 TEMP_ROOT=""
@@ -127,9 +129,9 @@ install_source() {
     local attempt
     for attempt in 1 2 3; do
       printf '正在通过 Git 下载 DSH Tavern（第 %s/3 次）……\n' "${attempt}"
-      if git clone --filter=blob:none --no-checkout --branch main --single-branch "${REPOSITORY}" "${candidate}" \
+      if git clone --filter=blob:none --no-checkout --branch "${BRANCH}" --single-branch "${REPOSITORY}" "${candidate}" \
         && git -C "${candidate}" sparse-checkout set --no-cone '/*' '!**/docs/' \
-        && git -C "${candidate}" checkout main; then
+        && git -C "${candidate}" checkout "${BRANCH}"; then
         replace_source "${candidate}"
         return
       fi
@@ -155,7 +157,7 @@ is_disposable_upgrade_residue() {
 divergence_is_disposable() {
   local app="$1"
   local commits commit files
-  commits="$(git -C "${app}" rev-list origin/main..HEAD)"
+  commits="$(git -C "${app}" rev-list "origin/${BRANCH}..HEAD")"
   # 不用进程替换（`< <(...)`）：部分精简 Android 环境没有 /dev/fd，循环会一次都不跑，
   # 判定就退化成「永远可丢弃」，那是危险的假阳性。
   for commit in ${commits}; do
@@ -176,17 +178,17 @@ update_source() {
     git -C "${APP_DIR}" config remote.origin.promisor true
     git -C "${APP_DIR}" config remote.origin.partialclonefilter blob:none
     git -C "${APP_DIR}" sparse-checkout set --no-cone '/*' '!**/docs/'
-    if git -C "${APP_DIR}" fetch origin main; then
-      if ! git -C "${APP_DIR}" merge-base --is-ancestor HEAD origin/main; then
+    if git -C "${APP_DIR}" fetch origin "${BRANCH}"; then
+      if ! git -C "${APP_DIR}" merge-base --is-ancestor HEAD "origin/${BRANCH}"; then
         if divergence_is_disposable "${APP_DIR}"; then
           # 工作区在上面已经确认为干净，直接对齐远端即可；不重新下载源码。
           printf '仅检测到运行清单分叉，正在对齐到最新提交……\n'
-          git -C "${APP_DIR}" reset --hard origin/main
+          git -C "${APP_DIR}" reset --hard "origin/${BRANCH}"
           return
         fi
         fail "项目目录包含本地提交或已经分叉，无法自动安全更新。确认没有手工改动后，可执行 git -C ${APP_DIR} reset --hard origin/main 再重试（data/ 等未跟踪文件不受影响）。"
       fi
-      git -C "${APP_DIR}" merge --ff-only origin/main
+      git -C "${APP_DIR}" merge --ff-only "origin/${BRANCH}"
       return
     fi
     install_from_tarball

@@ -13,7 +13,7 @@ function store(value) {
     set(next) { value = next; for (const fn of listeners) fn() } }
 }
 const view = revision => ({ tavernHelperScripts: [{ id: 'companion', content: 'void 0' }], tavernHelper: { stateRevision: revision } })
-function harness({ holdReleases = false, dropSignals = false, claimTimeoutMs, receiptBarrier, retentionMs = 0 } = {}) {
+function harness({ holdReleases = false, dropSignals = false, claimTimeoutMs, receiptBarrier, retentionMs = 0, snapshotShape } = {}) {
   const timers = new Map(), events = new Map(), runtimes = [], calls = []
   const heartbeats = new Map()
   let sequence = 0, descriptor, clock = 0
@@ -33,7 +33,9 @@ function harness({ holdReleases = false, dropSignals = false, claimTimeoutMs, re
     useSyncExternalStore: (subscribe, snapshot) => { uiStops.push(subscribe(() => {})); return snapshot() } }
   const uiStops = []
   const client = descriptor.factory(name => name === 'react' ? react : {})
-  const list = store({ current: 'A' }), transition = store(false), views = new Map(), subscriptions = []
+  const list = store(snapshotShape === 'flat'
+    ? { phase: 'ready', ids: ['A'], byId: { A: { id: 'A', retainedBy: { mainView: 1 } } }, projectionsBySession: {} }
+    : { current: 'A' }), transition = store(false), views = new Map(), subscriptions = []
   const parents = { child: 'A', nested: 'child', otherChild: 'B' }
   const sessions = { list, subagentAddress: id => parents[id] ? { parentSessionId: parents[id], childSessionId: id } : undefined }
   const liveView = {
@@ -93,4 +95,59 @@ test('丢失全部工作通知时，存活页面通过心跳领取同一任务�
   assert.equal(h.runtimes.length, 1)
   owner.dispose()
   assert.equal(h.heartbeats.size, 0)
+})
+
+test('执行期间的心跳合并领取请求，不重复执行变量事件', async t => {
+  const h = harness({ dropSignals: true })
+  const owner = h.client.createTavernScriptSessionOwner(h.options)
+  t.after(() => owner.dispose())
+  owner.start(); await h.poll()
+  let finish
+  h.runtimes[0].emit = async function (name, args) {
+    this.emissions.push(name)
+    await new Promise(resolve => { finish = resolve })
+    return args
+  }
+  const pending = h.gate.dispatch('A', 'MESSAGE_RECEIVED', [1])
+  h.heartbeat(); await h.poll()
+  const claims = h.calls.filter(call => call.method === 'claimTavernScriptWork').length
+  h.heartbeat(); h.heartbeat(); await h.poll()
+  assert.equal(h.calls.filter(call => call.method === 'claimTavernScriptWork').length, claims)
+  assert.deepEqual(h.runtimes[0].emissions, ['MESSAGE_RECEIVED'])
+  finish(); await h.poll()
+  assert.equal((await pending).handled, true)
+  assert.deepEqual(h.runtimes[0].emissions, ['MESSAGE_RECEIVED'])
+  assert.equal(h.calls.filter(call => call.method === 'completeTavernHelperEvent').length, 1)
+})
+
+test('idle games release after refreshing state; stale callbacks cannot cross an A-B-A switch', async () => {
+  const h = harness(), owner = h.client.createTavernScriptSessionOwner(h.options)
+  owner.start(); await h.poll()
+  const stale = h.subscriptions[0]
+  h.list.set({ current: 'otherChild' })
+  await h.poll()
+  assert.equal(h.gate.status('A').present, false)
+  await h.poll()
+  assert.equal(h.gate.status('B').ready, true)
+  h.list.set({ current: 'A' })
+  const current = h.runtimes.at(-1)
+  stale.fn({ phase: 'ready', view: view(999) })
+  assert.notEqual(current.syncs.at(-1).view.tavernHelper?.stateRevision, 999)
+  await h.poll()
+  h.list.set({ current: undefined })
+  await h.poll()
+  assert.equal(h.gate.status('A').present, false)
+  assert.equal(owner.getSnapshot().sessionId, '')
+  owner.dispose()
+})
+
+test('0.2.0 扁平快照没有顶层 current 时，仍按 mainView retain 选中会话并建立卡片运行时', async t => {
+  const h = harness({ snapshotShape: 'flat' })
+  const owner = h.client.createTavernScriptSessionOwner(h.options)
+  t.after(() => owner.dispose())
+  owner.start(); await h.poll()
+  assert.equal(owner.getSnapshot().sessionId, 'A', '主视图 retained 的会话必须被选中')
+  assert.equal(h.runtimes.length, 1, '0.2.0 宿主下页面必须自建脚本运行时，否则卡片 UI 永不挂载')
+  assert.equal(h.runtimes[0].foreground, true, 'retained 会话的宿主卡片产物必须保持可见')
+  owner.dispose()
 })

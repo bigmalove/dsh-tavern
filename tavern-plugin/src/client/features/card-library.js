@@ -76,7 +76,7 @@
 				if (!files.length || busy || importing.current) return;
 				importing.current = true;
 				setBusy(true); setError("");
-				let imported = 0;
+				let imported = 0, existing = 0;
 				let lastPath = "";
 				const failures = [], notices = [];
 				try {
@@ -85,14 +85,20 @@
 						setImportStatus("正在导入 " + (index + 1) + "/" + files.length + "：" + file.name);
 						try {
 							const result = await importTavernCardFile(file, rpc);
-							imported += 1; lastPath = result.card.path;
+							lastPath = result.card.path;
+							if (result.card.duplicate) {
+								existing += 1;
+								notices.push((files.length > 1 ? file.name + "：" : "") + "这张卡已经导入过（「" + result.card.name + "」），没有重复添加");
+								continue;
+							}
+							imported += 1;
 							const notice = tavernCardAssetNotice(result.card.assets, result.card);
 							if (notice) notices.push((files.length > 1 ? file.name + "：" : "") + notice);
 						} catch (err) { failures.push(file.name + "：" + String(err && err.message || err)); }
 					}
-					setImportStatus("已导入 " + imported + " 张" + (failures.length ? "，" + failures.length + " 张失败" : "") + (notices.length ? "。" + notices.join("\n") : ""));
+					setImportStatus("已导入 " + imported + " 张" + (existing ? "，" + existing + " 张已在卡库中" : "") + (failures.length ? "，" + failures.length + " 张失败" : "") + (notices.length ? "。" + notices.join("\n") : ""));
 					if (failures.length) setError(failures.join("\n"));
-					if (imported) {
+					if (imported || existing) {
 						notifyTavernDataChanged(["cards"], "cards");
 						await refreshCards();
 						if (files.length === 1) await loadCard(lastPath);
@@ -145,13 +151,13 @@
 			const h = React.createElement;
 			if (selectedPath) {
 				if (!card) return h("div", { className: "dsh-tavern-library dsh-tavern-card-library" }, h("div", { className: "dsh-tavern-status-head" }, h("button", { className: "dsh-tavern-btn", onClick: clearCard }, "← 返回人物卡库")), loading ? h("div", { className: "dsh-tavern-empty" }, "正在读取人物卡…") : error ? h("div", { className: "dsh-tavern-dock-error" }, error, h("button", { className: "dsh-tavern-btn", onClick: function () { loadCard(selectedPath); } }, "重新读取")) : h("div", { className: "dsh-tavern-empty" }, "人物卡读取失败", h("button", { className: "dsh-tavern-btn", onClick: function () { loadCard(selectedPath); } }, "重新读取")));
-				return h(React.Fragment, null, h(TavernCardPluginsBox, { path: selectedPath }), h(CardFieldsPanel, { view: { card: card }, library: true, organizationSettings: organization.detailSettings(cards.find(item => item.path === selectedPath)), busy: busy, onBack: clearCard, onAttach: sessionMode === "card" ? function () { props.appendMention(card.path, card.name); } : null, onOpenWorldBook: props.openWorldBook, onRename: renameCard, onExport: exportCardFile, onExportCharx: exportCardCharx, onDelete: deleteCardFile, onSaved: function (saved) { setCard(Object.assign({}, saved, { path: selectedPath })); refreshCards(); } }));
+				return h(React.Fragment, null, h(TavernCardStageBox, { path: selectedPath }), h(TavernCardPluginsBox, { path: selectedPath }), h(CardFieldsPanel, { view: { card: card }, library: true, organizationSettings: organization.detailSettings(cards.find(item => item.path === selectedPath)), busy: busy, onBack: clearCard, onAttach: sessionMode === "card" ? function () { props.appendMention(card.path, card.name); } : null, onOpenWorldBook: props.openWorldBook, onRename: renameCard, onExport: exportCardFile, onExportCharx: exportCardCharx, onDelete: deleteCardFile, onSaved: function (saved) { setCard(Object.assign({}, saved, { path: selectedPath })); refreshCards(); } }));
 			}
 			const visible = organization.visible;
 			// "@" quotes a card into the card workspace conversation; only there does it mean anything.
 			const mentionButton = sessionMode === "card" ? function (item) { return h("button", { type: "button", className: "dsh-tavern-card-mention", title: "在对话中引用", "aria-label": "在对话中引用：" + item.name, onClick: function (event) { event.stopPropagation(); props.appendMention(item.path, item.name); } }, "@"); } : null;
 			return h("div", { className: "dsh-tavern-library dsh-tavern-card-library" },
-				h("div", { className: "dsh-tavern-status-head" }, h("div", { className: "dsh-tavern-status-title" }, "人物卡库"), h("div", { className: "dsh-tavern-question-sub" }, cards.length + " 张人物卡"), h("div", { className: "dsh-tavern-library-head-actions" }, h(MobileCardImportButton, { inputRef: importInput, disabled: busy, onImported: async function (imported) { await refreshCards(); await loadCard(imported.path); notifyTavernDataChanged(["cards"], "cards"); } }), h("input", { ref: importInput, type: "file", multiple: true, accept: ".png,.json,.charx,.dshcard", style: { display: "none" }, onChange: function (event) { const files = Array.from(event.target.files || []); importCardFiles(files); event.target.value = ""; } }))),
+				h("div", { className: "dsh-tavern-status-head" }, h("div", { className: "dsh-tavern-status-title" }, "人物卡库"), h("div", { className: "dsh-tavern-question-sub" }, cards.length + " 张人物卡"), h("div", { className: "dsh-tavern-library-head-actions" }, h(MobileCardImportButton, { inputRef: importInput, disabled: busy, onImported: async function (imported) { await refreshCards(); await loadCard(imported.path); notifyTavernDataChanged(["cards"], "cards"); } }), h("input", { ref: importInput, type: "file", multiple: true, accept: TAVERN_CARD_FILE_ACCEPT, style: { display: "none" }, onChange: function (event) { const files = Array.from(event.target.files || []); importCardFiles(files); event.target.value = ""; } }))),
 				h("div", { className: "dsh-tavern-question-sub dsh-tavern-card-import-hint", role: "status" }, importStatus || "支持多选 PNG、JSON、CHARX、DSH 人物卡一起导入"),
 				organization.toolbar(),
 				h("div", { className: "dsh-tavern-resource-body" }, error ? h("div", { className: "dsh-tavern-dock-error" }, error) : null, visible.length ? h(TavernCardList, { place: "library", cards: visible, batch: cardBatch, busy: busy, open: function (item) { loadCard(item.path); }, menu: organization.rowMenu, mention: mentionButton, builtin: function () { return organization.renderCards(function (item) { return h("div", { key: item.path, className: "dsh-tavern-library-card-row" },

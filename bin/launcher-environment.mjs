@@ -7,7 +7,6 @@ import { fileURLToPath } from 'node:url'
 import { resolveDshCliEntry, resolveNpmCliEntry } from './plugin-dependencies.mjs'
 
 // Shared installation paths and process invocation; no install/start/update effects on import.
-export const PROFILE = 'tavern'
 export const INSTALL_HOSTS = new Set(['cli', 'desktop', 'android'])
 export const CLI_HOST = '127.0.0.1'
 export const CLI_PORT = resolveServicePort(process.env.DSH_TAVERN_PORT)
@@ -22,6 +21,9 @@ export const LEGACY_DSH_ROOT = process.env.DSH_TAVERN_LEGACY_DSH_HOME || process
 export const DSH_ROOT = path.resolve(RUNTIME_HOST === 'cli'
   ? (process.env.DSH_TAVERN_CLI_HOME || (installation.host === 'cli' && installation.dshHome) || path.join(os.homedir(), '.dsh-tavern'))
   : (process.env.DSH_HOME || path.join(os.homedir(), '.dsh')))
+// All new testing installations own a separate tavern profile.
+export function installedProfile() { return 'tavern' }
+export const PROFILE = installedProfile(RUNTIME_HOST, DSH_ROOT)
 export const CLI_RUNTIME_ROOT = path.join(DSH_ROOT, 'runtime')
 export function runtimeEnvironment({ installation = true } = {}) {
   const environment = { ...process.env }
@@ -79,6 +81,8 @@ export const TAVERN_SIDEBAR_DEFAULTS = {
 }
 export const REQUIRED_SOURCE_FILES = [
   'package.json',
+  'bin/desktop-profile-installation.mjs',
+  'tavern-plugin/packages/dsh-profile-bridge/lib/helper.mjs',
   'cordis.patch.yml',
   path.join('config', 'legacy-profile-patch-v0.6.yml'),
   'pnpm-workspace.yaml',
@@ -86,7 +90,9 @@ export const REQUIRED_SOURCE_FILES = [
   path.join('tavern-plugin', 'cordis.patch.yml'),
   path.join('tavern-plugin', 'packages', 'dsh-image-gen', 'src', 'module.js'),
   path.join('tavern-plugin', 'packages', 'dsh-image-gen', 'src', 'configuration.js'),
-  path.join('presets', 'tavern', 'preset.yml'),
+  // 0.2.0-rc.2 适配：presets/tavern/preset.yml 已随 preset 容器模型变更移除，
+  // preset 定义改由 tavern-plugin/cordis.patch.yml 的声明行承载。
+  path.join('tavern-plugin', 'lib', 'user-tools-bridge.js'),
 ]
 
 export function resolveServicePort(value, fallback = 3081) {
@@ -136,6 +142,11 @@ export function findDshCommand(host = RUNTIME_HOST) {
     if (!existsSync(command)) throw new Error('Tavern 独立 DSH 尚未安装，请重新运行 Tavern 安装器；不会回退到全局 DSH。')
     return command
   }
+  if (host === 'desktop') {
+    const pinned = pinnedDesktopDsh(host)
+    if (pinned) return pinned.bootstrap
+    throw new Error('请通过官方 DeepSeek Harness 的酒馆安装入口运行；未找到官方桌面运行环境。')
+  }
   if (commandExists('dsh')) {
     if (process.platform === 'win32') return 'dsh'
     return run('sh', ['-c', 'command -v dsh'], { capture: true })
@@ -157,14 +168,13 @@ export function findDshCommand(host = RUNTIME_HOST) {
   throw new Error('找不到 dsh，请先安装 DeepSeek Harness，并重新打开终端。')
 }
 
-// Windows Desktop (the one-click Setup and the Desktop terminal) names its own
-// bundled DSH. Looking up `dsh` by name can reach an unrelated DSH the user
+// Official Desktop on both platforms names its own bundled DSH. Looking up `dsh` by name can reach an unrelated DSH the user
 // installed elsewhere, so installs run this exact bootstrap instead.
 export function pinnedDesktopDsh(host, env = process.env, platform = process.platform) {
-  if (host !== 'desktop' || platform !== 'win32') return null
-  const executable = env.DSH_DESKTOP_APP_EXECUTABLE
+  if (host !== 'desktop') return null
+  const executable = env.DSH_DESKTOP_NODE_EXECUTABLE || env.DSH_DESKTOP_APP_EXECUTABLE
   const bootstrap = env.DSH_DESKTOP_DSH_BOOTSTRAP
-  if (!executable || !bootstrap || !existsSync(executable) || !existsSync(bootstrap)) return null
+  if (!executable || !bootstrap || !existsSync(executable) || (!existsSync(bootstrap) && !bootstrap.includes('app.asar' + path.sep))) return null
   return { executable, bootstrap }
 }
 

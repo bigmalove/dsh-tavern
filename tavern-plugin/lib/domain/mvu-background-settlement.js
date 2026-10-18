@@ -450,7 +450,7 @@ export function projectMvuBackgroundRequest(frame) {
       role: 'assistant',
       regexPlacement: 2,
       content: [{ type: 'text', text: str(output.storyText) }],
-      source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'mvu-final-story' }
+      source: { kind: 'plugin:dsh-tavern', form: 'mvu-final-story' }
     }],
     // Stable schema and rules precede the per-turn snapshot so the shared background prefix stays cacheable.
     turnContext: [

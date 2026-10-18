@@ -3,7 +3,7 @@ import { assertRescueHistoryEditable } from './chat-history-rescue.js'
 import { replaceSessionSurface } from './session-surface-mutations.js'
 import { canUndoRollback, restoreSurface, preflightSurfaceRestore, unchangedSinceRollback } from './surface-restoration.js'
 import { rewindBackgroundSurface } from './background-surface.js'
-import { sessionEvents } from './session-events.js'
+import { releaseOpeningTurn, sessionEvents, withSurfaceEditTurn } from './session-events.js'
 import { randomUUID } from 'node:crypto'
 import { createRegenerationRecovery } from './regeneration-recovery.js'
 import { isDeepStrictEqual } from 'node:util'
@@ -231,6 +231,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
     const rolledMessageCount = (chat.messages || []).length
     const guide = str(guidance).trim()
     const syntheticText = originalUserText + (guide !== '' ? '\n\n【本轮补充要求】\n' + guide : '')
+    releaseOpeningTurn(agent.session, agent)
     const beforeLastTurn = agent.phase !== undefined && agent.phase !== null && Number.isFinite(Number(agent.phase.lastTurn)) ? Number(agent.phase.lastTurn) : 0
     let committedChat, body, syntheticTurn
     try {
@@ -242,7 +243,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
         id: randomUUID(),
         role: 'user',
         content: projectPlayerContent(msgs0[oldAssistantIndex - 1].inputAttachments, syntheticText),
-        source: { kind: 'plugin', plugin: 'dsh-tavern-regen', regenerationId: operationId }
+        source: { kind: 'plugin:dsh-tavern-regen', regenerationId: operationId }
       })
       await agent.whenIdle()
       syntheticTurn = agent.phase !== undefined && agent.phase !== null && Number.isFinite(Number(agent.phase.lastTurn)) ? Number(agent.phase.lastTurn) : (beforeLastTurn + 1)
@@ -419,6 +420,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
     }
     const guide = str(guidance).trim()
     const syntheticText = originalUserText + (guide !== '' ? '\n\n【本轮补充要求】\n' + guide : '')
+    releaseOpeningTurn(agent.session, agent)
     const beforeLastTurn = agent.phase !== undefined && agent.phase !== null && Number.isFinite(Number(agent.phase.lastTurn)) ? Number(agent.phase.lastTurn) : 0
     let committedChat, body, syntheticTurn
     try {
@@ -430,7 +432,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
         id: randomUUID(),
         role: 'user',
         content: projectPlayerContent(originalUser.inputAttachments, syntheticText),
-        source: { kind: 'plugin', plugin: 'dsh-tavern-regen', regenerationId: operationId }
+        source: { kind: 'plugin:dsh-tavern-regen', regenerationId: operationId }
       })
       await agent.whenIdle()
       syntheticTurn = agent.phase !== undefined && agent.phase !== null && Number.isFinite(Number(agent.phase.lastTurn)) ? Number(agent.phase.lastTurn) : (beforeLastTurn + 1)
@@ -566,6 +568,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
       // prepare/finalize pipeline commits it exactly like a typed message. Its
       // source must stay kind 'user': hosts render anything else as a context
       // node, which would hide the player's text instead of resending it.
+      releaseOpeningTurn(agent.session, agent)
       agent.followup({
         id: randomUUID(),
         role: 'user',
@@ -734,7 +737,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
       version: 1, id: randomUUID(), ready: false, turn: expectedTurn || hiddenTurn,
       beforeRevision: Number(originalChat._storageRevision || 0),
       ...(Number(originalChat._storageRevision || 0) ? {} : { before: structuredClone(originalChat) }),
-      foreground: { sessionId: session.id || chat.sessionId, nodes: [...nodes] }, background: []
+      foreground: { formatVersion: 4, sessionId: session.id || chat.sessionId, nodes: [...nodes] }, background: []
     }
     if (undo.before) delete undo.before.rollbackUndo
     const rolled = storyTimeline.apply({ chat, intent: rollbackIntent })
@@ -832,7 +835,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
     }
     const undo = {
       version: 1, id: randomUUID(), ready: false, turn: expectedTurn || hiddenTurn, beforeRevision: revision,
-      foreground: { sessionId: session.id || chat.sessionId, nodes: [...nodes] }, background: []
+      foreground: { formatVersion: 4, sessionId: session.id || chat.sessionId, nodes: [...nodes] }, background: []
     }
     const rolled = storyTimeline.apply({ chat: { ...header, messages: [] }, intent: { kind: 'turn.rollback', turn: hiddenTurn, beforeChat: { ...checkpointHeader, messages: [] } } }).chat
     rolled.rollbackUndo = undo
@@ -904,16 +907,19 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
     // 3) 原生消息面：用空消息替换最近一轮的所有 surface 节点（模型不再看到），UI 由客户端隐藏对应 turn tail
     try {
       if (rollbackSurface === null) throw Object.assign(new Error('原生上下文中找不到这一轮'), { code: 'NATIVE_TARGET_MISSING' })
-      replaceSessionSurface(session, 'assistant/message', {
-        turn: rollbackSurface.turn,
-        step: rollbackSurface.step,
+      // A rollback runs between turns, and the replacement is read at the log
+      // tail: give it a turn of its own when none is open, so the archive keeps
+      // loading instead of failing "does not match an open turn and step."
+      withSurfaceEditTurn(session, agent, (turn, step) => replaceSessionSurface(session, 'assistant/message', {
+        turn,
+        step,
         message: {
           id: randomUUID(),
           role: 'assistant',
           content: [],
           source: rollbackSurface.source
         }
-      }, { start: rollbackSurface.userSeq, end: rollbackSurface.endSeq, sourceEventSeqs: shadowedSeqs })
+      }, { start: rollbackSurface.userSeq, end: rollbackSurface.endSeq, sourceEventSeqs: shadowedSeqs }))
     } catch (error) {
       // The save has rolled back; bring the model context after it instead of undoing the story.
       if (typeof repairNative !== 'function') {
@@ -960,8 +966,8 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
           } finally { clearTimeout(timeout) }
         }
         if (typeof sessions.flush !== 'function') throw new Error('当前宿主未提供后台会话保存接口')
-        const checkpoint = { sessionId: participant.sessionId, nodes: [...background.surface.nodes] }
-        rewindBackgroundSurface(background, participant.rewindTo)
+        const checkpoint = { formatVersion: 4, sessionId: participant.sessionId, nodes: [...background.surface.nodes] }
+        rewindBackgroundSurface(background, participant.rewindTo, worker, participant.formatVersion || 3)
         checkpoint.afterCount = sessionEvents(background).length
         undo.background.push(checkpoint)
         await sessions.flush(background)
@@ -1021,17 +1027,17 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
           const handle = await sessions.resume(checkpoint.sessionId)
           handles.push(handle); worker = handle.agent; background = worker?.session
         }
-        if (!background || worker?.phase?.kind === 'running' || !unchangedSinceRollback(background, checkpoint.afterCount)) throw new Error('后台上下文已有变化，不能撤销回退')
+        if (!background || worker?.phase?.kind === 'running' || !unchangedSinceRollback(background, checkpoint.afterCount, checkpoint.formatVersion || 3)) throw new Error('后台上下文已有变化，不能撤销回退')
         targets.push({ session: background, saved: checkpoint })
       }
       // The foreground context comes back from the save if its saved nodes cannot be restored.
       let repairForeground = false
-      try { preflightSurfaceRestore(session, saved.foreground.nodes) }
+      try { preflightSurfaceRestore(session, saved.foreground.nodes, saved.foreground.formatVersion || 3) }
       catch (error) { if (typeof repairNative !== 'function') throw error; repairForeground = true; targets.shift() }
-      for (const target of targets) if (target.session !== session) preflightSurfaceRestore(target.session, target.saved.nodes)
+      for (const target of targets) if (target.session !== session) preflightSurfaceRestore(target.session, target.saved.nodes, target.saved.formatVersion || 3)
       for (const target of targets) {
         changed.push({ session: target.session, nodes: [...target.session.surface.nodes] })
-        restoreSurface(target.session, target.saved.nodes)
+        restoreSurface(target.session, target.saved.nodes, target.saved.formatVersion || 3)
         if (sessions.flush) await sessions.flush(target.session)
       }
       const undo = current => {
@@ -1041,7 +1047,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
         for (const participant of Object.values(result.timeline.participants)) {
           const target = targets.find(item => item.saved.sessionId === participant.sessionId)
           if (target) Object.assign(participant, { status: 'current', syncedRevision: result.timeline.revision,
-            boundary: target.session.surface.nodes.at(-1) ?? -1, rewindTo: null })
+            boundary: target.session.surface.nodes.at(-1) ?? -1, formatVersion: 4, rewindTo: null })
         }
         return result
       }

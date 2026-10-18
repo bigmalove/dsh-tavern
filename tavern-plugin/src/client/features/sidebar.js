@@ -1,14 +1,29 @@
 		function createTavernShellFeatureModule() {
 		// @include modules/host-compatibility.js
-		// A game's settings and status tabs open once per page, when the game first becomes ready.
-		// Readiness flickers while the session list refreshes (after the first turn, when the
-		// sidebar remounts); reopening then would cover the tab the player brought forward, such as the stage.
-		const tavernSettingsTabsOpened = new Set();
+		// Entering a game opens its settings and status tabs (the 「进入游戏时打开酒馆状态」 setting, on by default).
+		// Only a switch to another game reopens them: readiness flickers while the session list refreshes
+		// (after the first turn, when the sidebar remounts), and reopening then would cover the tab the
+		// player brought forward, such as the stage.
+		let tavernSettingsTabsShownFor = "";
+		// Hosts that open a tab without expanding a collapsed right column still show the panel.
+		function expandTavernRightColumn(ctx) {
+			try {
+				const column = typeof ctx.get === "function" ? ctx.get("sidebarRight") : null;
+				if (column && typeof column.isExpanded === "function" && column.isExpanded() === false && typeof column.toggleExpanded === "function") column.toggleExpanded();
+			} catch (_) {}
+		}
+		const tavernAutoOpenStatus = (function () {
+			let enabled = true, loaded = null;
+			function load() { loaded = rpc("getTavernSettings").then(function (result) { enabled = !(result && result.settings && result.settings.autoOpenStatusPanel === false); }, function () {}); return loaded; }
+			if (typeof window.addEventListener === "function") window.addEventListener("dsh-tavern-settings-changed", function () { void load(); });
+			return { read: function () { return (loaded || load()).then(function () { return enabled; }); } };
+		})();
 
 		function TavernSidebar(props) {
             const askConfirm = useTavernConfirm(props.sessionId || props.scope?.sessionId);
 			const collapsed = props.collapsed;
-			const current = props.useSessions(function (state) { return state.current; });
+			// 0.2 hosts dropped the snapshot's top-level current; the main view's retain names it now.
+			const current = props.useSessions(function (state) { return mainSessionId(state) || ""; });
 			const summaries = props.useSessions(function (state) { return state.byId; });
 			const workspaceId = props.useWorkspaces(function (state) { return props.conversationHost.workspaceId(state, current); });
 			const [cards, setCards] = React.useState([]);
@@ -158,13 +173,7 @@
                 playPrewarmRef.current = createConversationPrewarmModule({ resolveWorkspace: playWorkspaceResolverRef.current });
             }
 			if (sessionListRecoveryRef.current === null) {
-				sessionListRecoveryRef.current = createSessionListRecoveryModule({
-					summary: function (sessionId) { return props.sessions.list.getSnapshot().byId[sessionId]; },
-					binding: function (sessionId) { return props.sessions.binding(sessionId); },
-					refresh: function () { return typeof props.sessions.refresh === "function" ? props.sessions.refresh() : Promise.resolve(); },
-					open: function (sessionId) { props.sessions.open(sessionId); },
-					isUnknownSession: isUnknownSessionSelectError
-				});
+				sessionListRecoveryRef.current = createSessionListRecoveryModule(sessionListAdapters(props.sessions));
 			}
 			const currentSummary = current ? summaries[current] : null;
 			const readyTavernSession = current && summaries[current] && summaries[current].blank === false && history.some(function (entry) { return entry.sessionId === current && isBodyMode(entry.mode); }) ? current : "";
@@ -174,7 +183,8 @@
 				if (!current || !summaries[current] || !props.sessions.binding(current)) return;
 				const latest = tavernErrorHub.getSnapshot()[0];
 				if (!latest || latest.source !== "左侧栏操作") return;
-				if (latest.message === "DSH Session 列表同步超时，请刷新页面后重试：" + current) setError("");
+				if (latest.message === "DSH Session 列表同步超时，请刷新页面后重试：" + current
+					|| (latest.message && latest.message.indexOf("已不在宿主列表中") >= 0 && latest.message.indexOf(current) >= 0)) setError("");
 			}, [current, summaries]);
 			function call(method, args, requestOptions) { return rpc(method, args, undefined, requestOptions); }
 			function isMissingUpdateApiError(error) {
@@ -308,6 +318,10 @@
 				}, 250);
 				return function () { stopped = true; window.clearTimeout(timer); };
 			}, [openingPicker && openingPicker.card && openingPicker.card.path, openingPicker && openingPicker.userName, openingPicker && openingPicker.preparing, requestMode, compatibilityAvailable]);
+			// Leaving the game (for another game, a card-design chat or the start page) lets coming back open the tabs again.
+			React.useEffect(function () {
+				if (current !== tavernSettingsTabsShownFor) tavernSettingsTabsShownFor = "";
+			}, [current]);
 			React.useEffect(function () {
 				if (!readyTavernSession || typeof props.openConversationSettingsTab !== "function") return;
 				props.openConversationSettingsTab(readyTavernSession);
@@ -426,14 +440,29 @@
 			async function waitForSessionSummary(sessionId) {
 				await sessionListRecoveryRef.current.wait(sessionId);
 			}
-			function isUnknownSessionSelectError(error) {
-				return /sessions\.select: unknown session/i.test(String(error && error.message || error || ""));
-			}
 			async function openSessionWhenReady(sessionId) {
-				await sessionListRecoveryRef.current.open(sessionId);
+				await openSessionOrRepair(sessionId);
 				await call("markConversationOpened", { sessionId: sessionId });
 				await refresh(["sessions"]);
 				setError("");
+			}
+			// A turn the live Agent numbered twice leaves the stored log unreadable and DSH
+			// refuses to open it. Ask the host to repair that one log, then open again.
+			async function openSessionOrRepair(sessionId) {
+				try {
+					await sessionListRecoveryRef.current.open(sessionId);
+					return;
+				} catch (openError) {
+					let repaired = false;
+					try {
+						const result = await call("repairSessionLog", { sessionId: sessionId });
+						repaired = Boolean(result && result.repaired);
+					} catch (repairError) {
+						// A host without the repair route reports the original open failure.
+					}
+					if (!repaired) throw openError;
+					await sessionListRecoveryRef.current.open(sessionId);
+				}
 			}
 			async function finishPendingOpen(pending) {
 				await openSessionWhenReady(pending.sessionId);
@@ -644,6 +673,9 @@
 			}
 			// 一份记录一个新对话；人物卡、称呼与“仅导入正文”对这一批里的每份都一样。
 			async function importConversationEntry(request, entry) {
+				// 仅导入正文只作用于变量不兼容的那几份，其余照常恢复 MVU 状态；
+				// 称呼留空时由服务端沿用每份记录自己的称呼。
+				request = Object.assign({}, request, { textOnly: request.textOnly && Boolean(entry.preview.incompatible) });
 				const key = "dsh-tavern:chat-import:" + JSON.stringify([entry.preview.digest, request.cardPath, request.userName, request.textOnly]);
 				let attempt;
 				try { attempt = JSON.parse(localStorage.getItem(key) || "null"); } catch (_) {}
@@ -1058,11 +1090,11 @@
 						? h("p", null, "文件：" + chatImport.entries[0].fileName)
 						: h("p", null, "共 " + chatImport.entries.length + " 份记录，各自成为独立对话：" + chatImport.entries.map(function (entry) { return entry.fileName + "（" + entry.preview.count + " 条）"; }).join("、")),
 					h("p", null, "共 " + chatImport.preview.count + " 条消息"),
-					h("label", null, "玩家称呼", h("input", { value: chatImport.userName, maxLength: 80, disabled: busy, onChange: function (event) { setChatImport(Object.assign({}, chatImport, { userName: event.target.value })); } })),
+					h("label", null, "玩家称呼", h("input", { value: chatImport.userName, maxLength: 80, disabled: busy, placeholder: chatImport.entries.length > 1 ? "沿用各份记录里的称呼" : undefined, onChange: function (event) { setChatImport(Object.assign({}, chatImport, { userName: event.target.value })); } })),
 					chatImport.preview.lastMessage ? h(React.Fragment, null, h("p", null, "最后一条消息："), h("pre", { style: { whiteSpace: "pre-wrap", overflowWrap: "anywhere" } }, chatImport.preview.lastMessage)) : null,
 					h("p", null, chatImport.entries.length === 1 ? "将创建独立对话，使用这张人物卡及其关联世界书。" : "每份记录各创建一个独立对话，都使用这张人物卡及其关联世界书；导入后不会自动打开，请在左侧列表中选择。"),
 					chatImport.preview.warnings.map(function (warning, index) { return h("p", { key: index }, warning); }),
-					chatImport.preview.incompatible ? h("label", null, h("input", { type: "checkbox", checked: chatImport.textOnly, disabled: busy, onChange: function (event) { setChatImport(Object.assign({}, chatImport, { textOnly: event.target.checked })); } }), "变量结构不兼容：仅导入正文，使用人物卡初值（也可返回换卡）") : h("p", null, chatImport.preview.hasMvu ? "将恢复 MVU 状态" : "将导入聊天正文")),
+					chatImport.preview.incompatible ? h("label", null, h("input", { type: "checkbox", checked: chatImport.textOnly, disabled: busy, onChange: function (event) { setChatImport(Object.assign({}, chatImport, { textOnly: event.target.checked })); } }), chatImport.entries.length === 1 ? "变量结构不兼容：仅导入正文，使用人物卡初值（也可返回换卡）" : "变量结构不兼容（" + chatImport.entries.filter(function (entry) { return entry.preview.incompatible; }).map(function (entry) { return entry.fileName; }).join("、") + "）：这几份仅导入正文，使用人物卡初值；其余照常导入") : h("p", null, chatImport.preview.hasMvu ? "将恢复 MVU 状态" : "将导入聊天正文")),
 				h("div", { className: "dsh-tavern-picker-foot" },
 					h("button", { className: "dsh-tavern-btn", disabled: busy, onClick: function () { setChatImport(null); setError(""); } }, "返回"),
 					h("button", { className: "dsh-tavern-question-primary", disabled: busy || Boolean(pendingOpen) || (chatImport.preview.incompatible && !chatImport.textOnly), onClick: importConversation },
@@ -1115,7 +1147,7 @@
 							h("button", { type: "button", role: "menuitem", disabled: busy, title: "在其他电脑的 DSH Tavern 导出的存档，作为一局新游戏继续玩", onClick: function () { if (saveImportFile.current) saveImportFile.current.click(); } }, "DSH Tavern 存档（.dshsave）"),
 							h("button", { type: "button", role: "menuitem", disabled: busy, title: "SillyTavern 导出的聊天记录，需要对应的人物卡", onClick: function () { if (sillyTavernChatFile.current) sillyTavernChatFile.current.click(); } }, "SillyTavern 聊天记录（.jsonl）"))),
 					h("button", { className: "dsh-tavern-btn", onClick: closePicker }, "关闭")),
-				h("input", { ref: fileRef, type: "file", accept: ".png,.json,.charx,.dshcard", style: { display: "none" }, onChange: function (e) { const f = e.target.files && e.target.files[0]; if (f) importCard(f); e.target.value = ""; } }),
+				h("input", { ref: fileRef, type: "file", accept: TAVERN_CARD_FILE_ACCEPT, style: { display: "none" }, onChange: function (e) { const f = e.target.files && e.target.files[0]; if (f) importCard(f); e.target.value = ""; } }),
 				pendingChatImport ? h("div", { className: "dsh-tavern-side-empty", role: "status", style: { padding: "4px 6px", display: "flex", alignItems: "center", gap: "8px" } }, h("span", null, "选择这份 SillyTavern 聊天记录对应的人物卡" + (pendingChatImport.characterName ? "（记录里的角色：" + pendingChatImport.characterName + "）" : "")), h("button", { className: "dsh-tavern-btn", disabled: busy, onClick: function () { setPendingChatImport(null); } }, "取消")) : null,
 				organization.toolbar(),
 				organization.visible.length ? h(React.Fragment, null, h("div", { className: "dsh-tavern-side-empty", style: { padding: "4px 6px" } }, "已绑定剧本的人物卡将自动按剧本推进；未绑定的按自由故事推进。剧本绑定在“卡片模式”中管理。"), h(TavernCardList, { place: "play", cards: organization.visible, batch: cardBatch, busy: busy, open: function (card) { if (!card.readError) preparePlayConversation(card); }, builtin: function () { return organization.renderCards(function (card) { return h("div", { key: card.path, className: "dsh-tavern-card-pick-wrap" },
@@ -1182,7 +1214,7 @@
 					: null);
 			const cardPicker = h("div", { className: "dsh-tavern-card-picker", role: "dialog", "aria-modal": "true", "aria-label": "选择卡片工作台起始任务" }, pickerError,
 				h("div", { className: "dsh-tavern-card-picker-head" }, cardEntry ? h("button", { className: "dsh-tavern-btn", onClick: function () { setCardEntry(""); } }, "← 返回") : h("span", null, "选择起始任务"), cardEntry === "writing-skill" ? h("span", null, "选择参考素材（至少 1 份）") : cardEntry === "extract" ? h("span", null, "选择初始剧本（至少 1 份）") : cardEntry === "mvu" ? h("span", null, "选择要转换的人物卡") : cardEntry === "resource-edit" ? h("span", null, "选择一个编辑目标") : null, h("span", { className: "dsh-tavern-spacer" }), cardEntry === "edit" || cardEntry === "gentle" || cardEntry === "mvu" ? h(MobileCardImportButton, { inputRef: fileRef, disabled: busy, onImported: async function () { await refresh(); notifyDataChanged(["cards"]); } }) : null, initialImportButtons, h("button", { className: "dsh-tavern-btn", onClick: closePicker }, "关闭")),
-				h("input", { ref: fileRef, type: "file", accept: ".png,.json,.charx,.dshcard", style: { display: "none" }, onChange: function (e) { const f = e.target.files && e.target.files[0]; if (f) importCard(f); e.target.value = ""; } }),
+				h("input", { ref: fileRef, type: "file", accept: TAVERN_CARD_FILE_ACCEPT, style: { display: "none" }, onChange: function (e) { const f = e.target.files && e.target.files[0]; if (f) importCard(f); e.target.value = ""; } }),
 				h("input", { ref: initialImportRef, type: "file", accept: ".txt,.md,.json,.epub,text/plain,text/markdown,application/json,application/epub+zip", style: { display: "none" }, onChange: function (e) { const f = e.target.files && e.target.files[0]; if (f) importInitialResource(f, initialImportKindRef.current); e.target.value = ""; } }),
 					(cardEntry === "edit" || cardEntry === "gentle") ? cardEditRows : cardEntry === "mvu" ? cardMvuRows : cardEntry === "writing-skill" || cardEntry === "extract" || cardEntry === "resource-edit" ? initialResourcePicker : h(React.Fragment, null,
 						h("button", { className: "dsh-tavern-card-pick", disabled: busy, onClick: function () { newCardConversation(null, "create", "新建人物卡"); } }, h("b", null, "新建人物卡"), h("span", null, "逐题问答确定角色与开场，可选 MVU 变量和前端美化，先看草图再建卡")),
@@ -1272,7 +1304,7 @@
 				!picking && error ? h("div", { className: "dsh-tavern-dock-error", role: "alert" }, error) : null,
 				h("div", { className: "dsh-tavern-update" },
 					h("div", { className: "dsh-tavern-update-row" },
-						h("div", { className: "dsh-tavern-update-identity", title: "DSH Tavern " + currentVersionLabel + " · " + currentCommitLabel + " · " + updateHostLabel }, "DSH Tavern " + currentVersionLabel + " · " + currentCommitLabel),
+						h("div", { className: "dsh-tavern-update-identity", title: "DSH Tavern " + currentVersionLabel + " · " + currentCommitLabel + " · " + updateHostLabel }, "DSH Tavern " + currentVersionLabel + " · DSH 0.2.1 · " + currentCommitLabel),
 						updateActions),
                     h(TavernHostCompatibility),
 					updateStatus.phase === "idle" || updateStatus.phase === "loading" ? null : h("div", { className: "dsh-tavern-update-status" + (updateStatus.phase === "failed" || updateStatus.phase === "check-failed" || updateStatus.phase === "blocked" || updateStatus.stalled ? " error" : "") }, updateMessage)
@@ -1286,6 +1318,10 @@
 			const ctx = input.ctx;
 			const slots = input.slots;
 			const uiConversation = ctx.get("uiConversation") || ctx.get("conversation");
+			// uiWorkspace 由 dsh-client-ui-workspace 提供；缺失时（老宿主/未加载）退化为 sessions.retain。
+			function resolveUiWorkspace() {
+				try { return ctx.get("uiWorkspace") || null; } catch (_) { return null; }
+			}
 			ctx.effect(function () {
 				document.body.classList.add("dsh-tavern-shell-active");
 				const releaseLandingStyles = installTavernLandingStyles(document);
@@ -1298,6 +1334,26 @@
 					document.body.classList.remove("dsh-tavern-shell-active");
 				};
 			}, "dsh-tavern: shell marker");
+			// Keep the native account menu, but present its launcher as Settings.
+			ctx.effect(function () {
+				const originals = new Map();
+				function sync() {
+					for (const button of document.querySelectorAll('[data-slot="settings.launcher"] button[data-signed-out]')) {
+						if (!originals.has(button)) originals.set(button, button.getAttribute("aria-label"));
+						if (button.getAttribute("aria-label") !== "设置") button.setAttribute("aria-label", "设置");
+					}
+				}
+				const observer = new MutationObserver(sync);
+				observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-label"] });
+				sync();
+				return function () {
+					observer.disconnect();
+					for (const [button, label] of originals) {
+						if (label === null) button.removeAttribute("aria-label");
+						else button.setAttribute("aria-label", label);
+					}
+				};
+			}, "dsh-tavern: settings launcher label");
 			// Until the session list first loads, the host cannot tell whether it will
 			// restore the last conversation, so it paints the hero and then jumps away.
 			// Keep the hero blank while the list is pending.
@@ -1327,7 +1383,7 @@
 				function (props) { sidebarWide = Boolean(props.wide); return React.createElement(TavernSidebar, Object.assign({}, props, {
 					collapsed: !props.wide,
 					embedded: true,
-					sessions: ctx.sessions,
+					sessions: createSessionCompat(ctx.sessions, resolveUiWorkspace(ctx)),
 					workspaces: ctx.workspaces,
 					conversationHost: createConversationHostAdapter(ctx),
                     executeSlash: createTavernFrameSlashExecutor(ctx),
@@ -1343,7 +1399,16 @@
 					toggleSidebar: function () { if (props.wide) ctx.layout.toggleSidebar(); else props.expandSidebar(); },
 					// Entering a game or the card workspace opens these tabs beside it. On phone-width
 					// layouts the right column covers the story, so leave it closed and show the story (#213).
-					openConversationSettingsTab: async function (sessionId) { if (narrowLayout()) return closeNarrowSidebar(); if (tavernSettingsTabsOpened.has(sessionId)) return; tavernSettingsTabsOpened.add(sessionId); await openTavernSidebarTab(ctx, { type: "dsh-tavern:conversation-settings" }, { sessionId: sessionId }); await openTavernSidebarTab(ctx, { type: "dsh-tavern:status" }, { sessionId: sessionId }); },
+					openConversationSettingsTab: async function (sessionId) {
+						if (narrowLayout()) return closeNarrowSidebar();
+						if (tavernSettingsTabsShownFor === sessionId) return;
+						tavernSettingsTabsShownFor = sessionId;
+						if (!await tavernAutoOpenStatus.read()) return;
+						const opened = await openTavernSidebarTab(ctx, { type: "dsh-tavern:conversation-settings" }, { sessionId: sessionId }) && await openTavernSidebarTab(ctx, { type: "dsh-tavern:status" }, { sessionId: sessionId });
+						// Not opened (the player already moved on, or the host refused): try again next time this game is entered.
+						if (!opened) { if (tavernSettingsTabsShownFor === sessionId) tavernSettingsTabsShownFor = ""; return; }
+						expandTavernRightColumn(ctx);
+					},
 					openCardLibraryTab: function (sessionId) { if (narrowLayout()) return closeNarrowSidebar(); return openTavernSidebarTab(ctx, { type: "dsh-tavern:cards", meta: null }, { sessionId: sessionId }); },
 					openPresetLibraryTab: function (sessionId) { if (narrowLayout()) return closeNarrowSidebar(); return openTavernSidebarTab(ctx, { type: "dsh-tavern:presets" }, { sessionId: sessionId }); },
 					openWorldBookLibraryTab: function (sessionId) { if (narrowLayout()) return closeNarrowSidebar(); return openTavernSidebarTab(ctx, { type: "dsh-tavern:worldbooks" }, { sessionId: sessionId }); },

@@ -55,6 +55,9 @@ card.spec = 'chara_card_v3'
 card.spec_version = '3.0'
 entries.push({ path: 'card.json', content: JSON.stringify(card, null, 2) })
 
+// The recommended preset for new games (dsh.json defaults).
+for (const file of await readdir(path.join(here, 'presets'))) entries.push({ path: 'presets/' + file, content: await readFile(path.join(here, 'presets', file)) })
+
 // The card plugin: everything in ./plugin.
 const pluginDir = path.join(here, 'plugin')
 for (const file of await readdir(pluginDir)) entries.push({ path: 'plugins/galgame/' + file, content: await readFile(path.join(pluginDir, file)) })
@@ -63,7 +66,13 @@ entries.push({ path: 'dsh.json', content: JSON.stringify({
   format: 'dshcard', formatVersion: 1,
   card: { version: '1.0.0', title: data.name, author: data.creator || '' },
   requires: { tavernApi: 2 },
-  plugins: [{ name: 'galgame', path: 'plugins/galgame/', purpose: '每轮导演舞台：换场景、时段、服装和背景音乐，在舞台上显示' }],
+  plugins: [{ name: JSON.parse(await readFile(path.join(pluginDir, 'package.json'), 'utf8')).name, path: 'plugins/galgame/', purpose: '每轮导演舞台：换场景、时段、服装和背景音乐，在舞台上显示' }],
+  // A new game starts with the stage-friendly preset and settlement on; no status bar, no web search.
+  defaults: {
+    stage: true,
+    preset: { path: 'presets/dafeiyu-stage.json', title: '大肥鱼 · 舞台演出' },
+    settings: { statusBarPlacement: 'sidebar', backgroundTasks: { posture: true, variables: true }, webSearch: false, sceneImages: false }
+  },
   packs
 }, null, 2) })
 await zip.close()

@@ -1,3 +1,5 @@
+import { upgradeReferences, upgradedAnchor } from './domain/session-upgrade-references.js'
+import { producerSource } from './domain/message-source.js'
 import { sceneSaveKeyMap } from './domain/scene-save.js'
 import { createGameSaveSnapshot } from './domain/game-save-snapshot.js'
 import { createGameSaveResources } from './domain/game-save-resources.js'
@@ -32,7 +34,8 @@ import { withPluginWorldbookEntries } from './domain/plugin-worldbook.js'
 import { createTemplateWindowReader, templateStateFields } from './domain/template-window-reader.js'
 import { createSessionResourceAccess } from './domain/session-resource-access.js'
 import { worldBookDisplayName } from './domain/worldbook-resource.js'
-import { createConversationMigration } from './domain/conversation-migration.js'
+import { createSaveUpgrade, prepareSaveUpgrade, saveSessionIds, unreadySaveSessions } from './domain/save-upgrade.js'
+import { storedSessionVersion } from './domain/session-upgrade.js'
 import { createTaskStateReader, taskStateFields } from './domain/task-state-reader.js'
 import { installHostProjectionReplay } from './domain/host-projection-replay.js'
 import { createBoundedHistory, readRecentWindow, readRowsAt } from './domain/bounded-history.js'
@@ -42,6 +45,8 @@ import { createInputFieldsProjection } from './domain/input-fields-projection.js
 import { createScopedMessages, isScopedMessages } from './domain/scoped-messages.js'
 import {registerVariableReadTool} from './domain/read-variables.js'
 import { createBackgroundSessionRetirement, installRetiredBackgroundFilter } from './domain/background-session-retirement.js'
+import { createBackgroundCatalogBackfill } from './domain/background-catalog.js'
+import { createGameTitles } from './domain/game-titles.js'
 import { createCardMemory, CARD_MEMORY_TOOLS } from '../packages/dsh-tavern-card-memory/index.js'
 import { projectPlayerContent } from './domain/player-input-content.js'
 import { installSkillCatalogSessionScope } from './domain/skill-catalog-session-scope.js'
@@ -58,7 +63,7 @@ import { rescueHistoryNotice } from './domain/chat-history-rescue.js'
 import { readHostCompatibility } from './domain/host-compatibility.js'
 import { installHostSessionPatch } from './domain/host-session-patch.js'
 import { installHostSubprocessPatch } from './domain/host-subprocess-patch.js'
-import { migrateInstalledLegacySessions } from './domain/legacy-session-migration.js'
+import { repairStoredSessionLog } from './domain/session-log-repair.js'
 import { measureForegroundPressure } from './domain/foreground-context-pressure.js'
 import { replaceSessionSurface } from './domain/session-surface-mutations.js'
 import { createPresetDiagnostics } from './domain/preset-diagnostics.js'
@@ -109,6 +114,7 @@ import { scriptPromptScanText } from './domain/tavern-script-prompts.js'
 import { createOpeningPreparation } from './domain/opening-preparation.js'
 import { createChatHistoryImportService } from './domain/chat-history-import-service.js'
 import { sessionEvents } from './domain/session-events.js'
+import { setAgentResolver } from './domain/agent-lookup.js'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createHash, randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
@@ -147,7 +153,7 @@ import { extractEpubText } from './domain/epub-text.js'
 import { createFileResourceStore, normalizeResourcePath, resourceKind, stripPngTextChunks } from './domain/file-resources.js'
 import { createMobileCardImport } from './domain/mobile-card-import.js'
 import { createForegroundHandoff } from './domain/foreground-handoff.js'
-import { createForegroundFrameBuilder } from './domain/agent-input-frame.js'
+import { createForegroundFrameBuilder, foregroundRequestContext } from './domain/agent-input-frame.js'
 import { retireForegroundFrames } from './domain/foreground-frame-retirement.js'
 import { compactionFailureMessage } from './domain/compaction-failure.js'
 import { createForegroundFrameSessionAdapter } from './domain/foreground-frame-session-adapter.js'
@@ -177,6 +183,7 @@ import { readCardArchive } from './domain/card-archive.js'
 import { openZipFile } from './domain/zip-file.js'
 import { createUploads } from './domain/uploads.js'
 import { createCardPlugins } from './domain/card-plugins.js'
+import { createCardImportIdentity } from './domain/card-import-identity.js'
 import { createPostureItem, createSettlementItems, plainSettlementPlan, runPipelineStages } from './domain/background-pipeline.js'
 import { TAVERN_COMPATIBILITY_CAPABILITIES, createTavernCompatibilityDiagnosticStore } from './domain/tavern-compatibility-diagnostics.js'
 import { createMvuDiagnosticStore, createMvuDiagnosticExport, sanitizeRuntimeDiagnostics, sanitizeModuleFailure, sanitizeMvuLoadDiagnostic, redactMvuLoadError } from './domain/mvu-diagnostics.js'
@@ -262,22 +269,29 @@ export async function apply(ctx) {
     query: ctx.get('sessionQuery'),
   })
   if (sessionPatch.status === 'failed') console.warn('dsh-tavern: 会话补丁未安装，正文编辑、回退和重新生成不可用：' + sessionPatch.reason)
-  // 更新到 0.1.5-rc.2 后，每次启动都在对话被打开之前准备旧档。已经能打开的不改文件。补丁没装上也要做。
-  if (sessionPatch.view().hostVersion === '0.1.5-rc.2') {
+  // Only the installed compatibility reader may publish a new generation.
+  // Run before opening any foreground, background, or card-design Session.
+  let saveUpgradePreparation
+  if (sessionPatch.status === 'ready') {
     const open = (persistence?.tracker?.openHandles?.size || 0) + (persistence?.tracker?.writers?.size || 0)
-    if (open) console.warn('dsh-tavern: 会话已经打开，旧档留到下次启动再迁移')
-    else await migrateInstalledLegacySessions(resolveTavernDataRoot(), sessionPatch.loadSessionCatalog)
+    if (open) console.warn('dsh-tavern: 会话已经打开，旧档留到下次启动再升级')
+    else saveUpgradePreparation = await prepareSaveUpgrade(resolveTavernDataRoot(), sessionPatch.loadSessionMigration)
   }
   await clearLegacyTavernDefault(ctx.get('settings'))
   const llm = ctx.get('llm')
   const agentRegistry = ctx.get('agents')
   const sessionStore = ctx.get('sessions')
+  // New games are named after their card until the first turn (domain/game-titles.js).
+  const gameTitles = createGameTitles({ sessionTitle: () => ctx.get('sessionTitle'), sessions: sessionStore })
   ctx.effect(() => installTavernTokenMeter(ctx.get('tokenMeter')))
   ctx.effect(() => installHostProjectionReplay(ctx.get('sessionProjections')))
   if (llm === undefined || agentRegistry === undefined || sessionStore === undefined) {
     console.error('dsh-tavern: 缺少 llm、agents 或 sessions 服务')
     return
   }
+  // Surface rewrites that happen between rounds need the live Agent to publish
+  // their edit turn as used (V4 numbers the next turn from phase.lastTurn).
+  setAgentResolver(sessionId => agentRegistry.get(String(sessionId || '')))
   const agentDefaultModel = ctx.get('agentDefaultModel')
   let autoCompaction = null
   const compactionTimers = new Map()
@@ -493,9 +507,37 @@ export async function apply(ctx) {
     return !(chat?.disabledWritingSkills || []).map(canonicalTavernSkillName).includes(skill.name)
   }
   let invalidateTavernSkills = () => {}
+  // 0.2.0-rc.2 适配：宿主已移除 sessionSkillCatalog 服务（全 asar 零命中），dsh-skill 也没有
+  // scopeFor 方法，因此这个注入在 0.2.0 永不触发、shim 不会安装（静默降级，不报错）。
+  // tavern 的 Skill 来源仍由下方 host `skills` registry 的 registerProvider 提供；冷菜单查询
+  // 在这个宿主上拿不到 session 身份，按角色过滤（enabledFor）只对活会话生效。
+  // 若宿主后续给出等价接缝，改挂到那个服务上；在此之前保留注入与模块，避免留下孤儿模块。
   ctx.inject(['sessionSkillCatalog'], scope => {
     scope.effect(() => installSkillCatalogSessionScope(scope.get('sessionSkillCatalog')))
   })
+  // Plugins' own skills directories (tavern.skillSource): one read-only file provider each.
+  const pluginSkillRoots = new Set()
+  const EMPTY_SKILL_PROVIDER = Object.freeze({ list: async () => [], get: async () => undefined, dispose: async () => {} })
+  let skillHost = null
+  function attachPluginSkillRoot(entry) {
+    if (!skillHost || entry.slot !== undefined) return
+    entry.slot = skillHost.providers.length
+    skillHost.providers.push(new FileSystemSkillProvider(ctx, skillHost.control, { providerName: 'tavern-plugin-files-' + entry.slot, includeDefaultRoots: false, bundledSkillDir: entry.dir }))
+  }
+  function addPluginSkillRoot({ owner, dir, role }) {
+    const entry = { owner, dir, role }
+    pluginSkillRoots.add(entry)
+    const dropRoot = tavernSkills.addRoot({ path: dir, role, owner })
+    attachPluginSkillRoot(entry)
+    skillHost?.control.invalidate()
+    return () => {
+      pluginSkillRoots.delete(entry)
+      dropRoot()
+      // Slots keep their index: candidates already listed locate their provider by it.
+      if (skillHost && entry.slot !== undefined) { const provider = skillHost.providers[entry.slot]; skillHost.providers[entry.slot] = EMPTY_SKILL_PROVIDER; void provider.dispose?.() }
+      skillHost?.control.invalidate()
+    }
+  }
   const skillRegistry = ctx.get('skills')
   if (!skillRegistry) throw new Error('dsh-tavern: 缺少原生 Skills 服务')
   skillRegistry.registerProvider(control => {
@@ -504,8 +546,10 @@ export async function apply(ctx) {
       new FileSystemSkillProvider(ctx, control, { providerName: 'tavern-interactive-files', includeDefaultRoots: false, customSkillDirs: [dataRoot + '/skills'], bundledSkillDir: sourceRoot + '/presets/tavern/skills' }),
       new FileSystemSkillProvider(ctx, control, { providerName: 'tavern-background-files', includeDefaultRoots: false, bundledSkillDir: sourceRoot + '/presets/tavern-background/skills' })
     ]
+    skillHost = { control, providers }
+    for (const entry of pluginSkillRoots) { entry.slot = undefined; attachPluginSkillRoot(entry) }
     ctx.effect(() => tavernSkills.subscribe(control.invalidate))
-    ctx.effect(() => () => Promise.all(providers.map(provider => provider.dispose())))
+    ctx.effect(() => () => Promise.all(providers.map(provider => provider.dispose?.())))
     ctx.on('fs/observed', (target, _observation, actor) => {
       if (actor?.name === 'write' || actor?.name === 'edit') providers.forEach(provider => provider.observeHostMutation(target.displayPath))
     })
@@ -513,15 +557,16 @@ export async function apply(ctx) {
   })
 
   // ---------- profile 私有 preset ----------
-  // rc.6 启动器会固定系统 roots，因此在独立 Tavern 进程内追加 profile 自带目录。
-  // 不写入全局 `.agent-presets`，避免 Tavern 出现在普通 Web profile 的模式列表。
+  // 0.2.0-rc.2 适配：宿主不再扫描 preset 目录——agentPresets 服务改由
+  // @deepseek-ai/dsh-agent-preset-registry 提供，实例字段只有
+  // owner/definitions/generations/bindings/switches，**没有 resolvedRoots**
+  // （0.1.5 的 `agentPresets.resolvedRoots.unshift(...)` 会在这里 TypeError）。
+  // preset 定义现在是 bundle patch 里的 @deepseek-ai/dsh-agent-preset 声明行
+  // （见 tavern-plugin/cordis.patch.yml 的 preset-tavern / preset-tavern-background）。
+  // 这里只保留服务句柄，供下方 agentPresets.mount(childCtx, 'tavern-background') 按 id 挂载。
   const agentPresetsProxy = ctx.get('agentPresets')
   if (agentPresetsProxy === undefined) throw new Error('dsh-tavern: 缺少 agentPresets 服务')
   const agentPresets = agentPresetsProxy[Symbol.for('cordis.original')] || agentPresetsProxy
-  const presetSourceDir = fileURLToPath(new URL('../../presets/', import.meta.url))
-  if (!agentPresets.resolvedRoots.some(function (root) { return root.path === presetSourceDir })) {
-    agentPresets.resolvedRoots.unshift({ path: presetSourceDir, trust: 'user' })
-  }
 
   // ---------- 基础工具 ----------
   function uid(prefix) {
@@ -543,6 +588,8 @@ export async function apply(ctx) {
     await profileData.writeJson(rel, value)
   }
   const CARD_PROJECTION_REVISIONS = 'card-projection-revisions.json'
+  // Told after a card's working copy changed (plugins' onCardChanged).
+  const cardRevisionListeners = new Set()
   async function cardProjectionRevision(cardPath) {
     const state = await readJson(CARD_PROJECTION_REVISIONS)
     return Math.max(0, Number(state && state.cards && state.cards[str(cardPath)]) || 0)
@@ -556,6 +603,7 @@ export async function apply(ctx) {
       return { version, cards: Object.assign({}, cards, { [normalized]: version }) }
     })
     void coordinationEvents?.publishAll()
+    for (const listener of cardRevisionListeners) { try { listener(normalized, Number(saved?.cards?.[normalized]) || 0) } catch {} }
     return saved
   }
   function groupOfMode(mode) {
@@ -1035,12 +1083,14 @@ export async function apply(ctx) {
   // DSH cards (docs/design/dsh-card-format.md): asset packs stored once by content; big files uploaded to disk.
   const assetPacks = createAssetPacks({ root: dataRoot, store: profileData })
   const uploads = createUploads({ root: dataRoot })
-  const cardPlugins = createCardPlugins({ dataRoot, pluginsDir: userPluginPaths(dataRoot).plugins })
+  const cardPlugins = createCardPlugins({ dataRoot, pluginsDir: userPluginPaths(dataRoot).plugins, keyOf: castAssets.keyOf })
   void uploads.sweep().catch(() => {})
+  const cardImportIdentity = createCardImportIdentity({ cardPaths: () => fileResources.list('card'), castAssets, readCardText: cardPath => fileResources.readText(cardPath) })
   // Voiced dialogue: channels are Tavern's and the plugins' (pluginApi is created later; read lazily).
   const speech = createSpeech({ store: profileData, credentials: () => ctx.get('credentials'), plugins: () => pluginApi.speechProviders() })
   resourceGraph = createResourceGraph({
     castAssets,
+    cardPlugins,
     cardOrganization,
     resources: fileResources,
     presets: runtimePresets,
@@ -1073,6 +1123,10 @@ export async function apply(ctx) {
   // A CHARX, DSH card or card bundle read from disk: its packs first, so a failure leaves no card behind.
   async function importCardArchiveFile(file, name) {
     const label = /\.dshcard$/i.test(name) ? 'DSH 人物卡' : 'CHARX'
+    // The very same file again: open the card already imported from it (if still unchanged).
+    const archiveSha256 = await cardImportIdentity.fileSha256(file)
+    const existing = await cardImportIdentity.find(archiveSha256)
+    if (existing) return { path: existing, name: (await cardSummaries.read(existing).catch(() => null))?.name || existing.split('/').pop(), duplicate: true }
     const zip = await openZipFile(file, { label })
     try {
       const archive = await readCardArchive(zip)
@@ -1083,9 +1137,11 @@ export async function apply(ctx) {
       }
       const imported = await storeImportedCard(cardImportFromCard({ card: archive.card, resolve: archive.resolve, name }), { unique: true })
       if (packs.length) await castAssets.bindPacks(imported.path, packs)
+      await cardImportIdentity.remember(imported.path, archiveSha256)
       // The card's plugins come on with it, confined to this card; the card library can turn them off.
       const plugins = archive.plugins.length ? await cardPlugins.stage(zip, { cardKey: castAssets.keyOf(imported.path), plugins: archive.plugins }) : []
       let pluginError = ''
+      const defaults = archive.defaults ? await storeStartDefaults(imported.path, archive.defaults) : null
       if (plugins.length) {
         try { await cardPlugins.enable({ cardKey: castAssets.keyOf(imported.path), cardPath: imported.path, plugins }) }
         catch (error) { pluginError = str(error?.message || error) }
@@ -1094,8 +1150,54 @@ export async function apply(ctx) {
       return { ...imported, format: archive.kind, ...(archive.info ? { info: archive.info } : {}),
         ...(packs.length ? { packs: packs.map(({ id, contentHash, title, format, files, reused }) => ({ id, contentHash, title, format, files, reused })) } : {}),
         ...(plugins.length ? { plugins: plugins.map(({ name, purpose, files, bytes }) => ({ name, purpose, files, bytes, enabled: !pluginError })) } : {}),
-        ...(pluginError ? { pluginError } : {}) }
+        ...(pluginError ? { pluginError } : {}),
+        ...(defaults ? { startDefaults: { preset: defaults.presetPath ? defaults.presetPath.split('/').pop() : '', settings: defaults.settings || null } } : {}) }
     } finally { await zip.close() }
+  }
+  // A card file in a format a plugin imports (tavern.cardImporter): the plugin converts, Tavern stores it as any card.
+  async function importPluginCardFile(file, name) {
+    const archiveSha256 = await cardImportIdentity.fileSha256(file)
+    const existing = await cardImportIdentity.find(archiveSha256)
+    if (existing) return { path: existing, name: (await cardSummaries.read(existing).catch(() => null))?.name || existing.split('/').pop(), duplicate: true }
+    const converted = await pluginApi.convertCard(name, await readFile(file))
+    const resolve = uri => {
+      if (typeof uri !== 'string') return undefined
+      if (uri.startsWith('embeded://')) return converted.files.get(uri.slice('embeded://'.length))
+      const match = /^data:[^,]*;base64,(.*)$/s.exec(uri)
+      return match ? Buffer.from(match[1], 'base64') : undefined
+    }
+    const packs = []
+    for (const pack of converted.packs) {
+      const { pack: stored, reused } = await assetPacks.importFiles(pack.files, { id: pack.id, format: pack.format, title: pack.title })
+      packs.push({ id: stored.id, contentHash: stored.contentHash, format: stored.format, title: stored.title, name: '', files: Object.keys(stored.files).length, reused })
+    }
+    const imported = await storeImportedCard(cardImportFromCard({ card: converted.card, resolve, name: str(name).replace(/\.[^.]+$/, '') }), { unique: true })
+    if (packs.length) await castAssets.bindPacks(imported.path, packs)
+    await cardImportIdentity.remember(imported.path, archiveSha256)
+    await pluginApi.cardImported(converted, imported.path)
+    return { ...imported, format: 'plugin', importer: converted.label,
+      ...(packs.length ? { packs: packs.map(({ id, contentHash, title, format, files, reused }) => ({ id, contentHash, title, format, files, reused })) } : {}) }
+  }
+  // A card's suggested preset goes into the preset library (a new name when one is taken by another file).
+  async function storeStartDefaults(cardPath, defaults) {
+    let presetPath = ''
+    if (defaults.preset) {
+      const base = defaults.preset.name.replace(/\.json$/i, '')
+      const existing = new Map((await presetLibrary.catalog()).presets.map(preset => [preset.path, preset]))
+      for (let index = 0; !presetPath; index++) {
+        const name = (index ? base + ' (' + index + ')' : base) + '.json'
+        const target = 'presets/' + name
+        if (existing.has(target)) {
+          if (await fileResources.readText(target).catch(() => undefined) === defaults.preset.text) presetPath = target
+          continue
+        }
+        presetPath = (await importPreset({ name, text: defaults.preset.text })).path
+      }
+    }
+    const stored = { ...(presetPath ? { presetPath } : {}), ...(defaults.settings ? { settings: defaults.settings } : {}) }
+    await castAssets.setStartDefaults(cardPath, Object.keys(stored).length ? stored : null)
+    if (defaults.stage) await castAssets.setStage(cardPath, true)
+    return stored
   }
   async function storeImportedCard({ payload, collected }, options = {}) {
     const workspace = cardPreparation.create({ kind: 'import', payload: payload })
@@ -1294,7 +1396,7 @@ export async function apply(ctx) {
       })
     }
   }
-  const updateCard = createCardEditor({ readCardWorkspace, cardPreparation, fileResources, bumpCardProjectionRevision, syncCardName })
+  const updateCard = createCardEditor({ readCardWorkspace, cardPreparation, fileResources, bumpCardProjectionRevision, syncCardName, cardRevision: path => cardProjectionRevision(normalizeResourcePath(path, 'card')) })
   async function replaceCardVariables(cardPath, variables) {
     const workspace = await readCardWorkspace(cardPath)
     if (workspace === undefined) throw new Error('人物卡不存在: ' + cardPath)
@@ -1343,14 +1445,14 @@ export async function apply(ctx) {
     if (!plugins.length) throw new Error('这张人物卡没有卡内插件')
     const cardKey = castAssets.keyOf(cardPath)
     if (enabled) await cardPlugins.enable({ cardKey, cardPath, plugins })
-    else await cardPlugins.disable({ cardKey, plugins })
+    else await cardPlugins.disable({ cardPath, plugins })
     const next = await castAssets.setPlugins(cardPath, plugins.map(plugin => ({ ...plugin, enabled: enabled === true })))
     return next.plugins
   }
   async function deleteCard(cardPath) {
     const plugins = (await castAssets.read(normalizeResourcePath(cardPath, 'card')).catch(() => null))?.plugins || []
     const result = await cardDeletion.remove(cardPath)
-    if (result.deleted && plugins.length) await cardPlugins.remove({ cardKey: castAssets.keyOf(normalizeResourcePath(cardPath, 'card')), plugins }).catch(error => console.warn('dsh-tavern: 删除卡内插件失败', error?.message || error))
+    if (result.deleted && plugins.length) await cardPlugins.remove({ cardKey: castAssets.keyOf(normalizeResourcePath(cardPath, 'card')), cardPath: normalizeResourcePath(cardPath, 'card'), plugins }).catch(error => console.warn('dsh-tavern: 删除卡内插件失败', error?.message || error))
     if (result.deleted) await cardOrganization.movePath(normalizeResourcePath(cardPath, 'card'), null)
     return result
   }
@@ -2218,7 +2320,12 @@ export async function apply(ctx) {
       const source = await chatForSession(preparation.sourceSessionId)
       if (!source || !sessionOpeningDescriptor(source, await readChatCard(source)) || Number(source.tavernHelperLifecycleRevision || 0) !== preparation.sourceLifecycleRevision) throw new Error('原对话已变化，请重新选择开场')
     }
-    return await requestPerformance.stage('initializeConversation', () => conversationInitialization.start({ cardPath, sessionId, mode, openingId, userName, requestMode, preparation, cardTask }))
+    const started = await requestPerformance.stage('initializeConversation', () => conversationInitialization.start({ cardPath, sessionId, mode, openingId, userName, requestMode, preparation, cardTask }))
+    if (groupOfMode(mode || 'story') === 'play') {
+      const chat = await chatForSession(sessionId).catch(() => null)
+      gameTitles.name(sessionId, chat?.cardName)
+    }
+    return started
   }
 
   async function scriptPreviewOf(chat) {
@@ -2465,7 +2572,8 @@ export async function apply(ctx) {
     return message.data.content[0].text
   }
   const conversationInitialization = createConversationInitialization({
-    cards: { read: readCard, readChat: readChatCard, script: readScript, extensions: readCardExtensions },
+    cards: { read: readCard, readChat: readChatCard, script: readScript, extensions: readCardExtensions,
+      startDefaults: async cardPath => (await castAssets.read(normalizeResourcePath(cardPath, 'card'))).startDefaults || null },
     chats: { resolve: chatForSession, publish: conversationRegistry.publish, write: writeChat },
     timeline: storyTimeline,
     snapshots: playCardSnapshots,
@@ -2545,7 +2653,13 @@ export async function apply(ctx) {
     let session = sessionStore.get(source.sessionId) || agentRegistry.get(source.sessionId)?.session
     if (!session) { handle = await agentRegistry.resume({ resumeSessionId: source.sessionId }); session = handle.agent.session }
     try {
-      return { source, state, turn, atSeq: conversationForkBoundary(session, state, turn) }
+      const references = upgradeReferences(sessionEvents(session))
+      const mapped = structuredClone(state)
+      for (const message of mapped.messages || []) {
+        if (message.nativeAnchor) message.nativeAnchor = upgradedAnchor(message.nativeAnchor, references)
+        if (message.bodyEdit) message.bodyEdit = { ...message.bodyEdit, seq: references.sequence(message.bodyEdit.seq, message.bodyEdit.formatVersion), formatVersion: 4 }
+      }
+      return { source, state: mapped, turn, atSeq: conversationForkBoundary(session, state, turn) }
     } finally { if (handle) await handle.dispose() }
   }
   // Plugin data and media are bound to text versions, whose keys hash the game id:
@@ -2583,6 +2697,9 @@ export async function apply(ctx) {
 
   const backgroundRetirement = createBackgroundSessionRetirement(profileData, { readState: taskStateReader.forSession, isRunning: id => agentRegistry.get(id)?.status === 'running' })
   ctx.effect(() => installRetiredBackgroundFilter(ctx.get('subagents'), backgroundRetirement, ctx.get('sessionQuery')))
+  // Games whose background agents predate their catalog entry get them listed when opened.
+  const backgroundCatalog = createBackgroundCatalogBackfill({ agents: agentRegistry, sessionQuery: ctx.get('sessionQuery'),
+    onListed: parentId => sessionSignals.publish(parentId, { kind: 'subagents', version: String(Date.now()) + ':' + Math.random().toString(36).slice(2) }) })
   const runtimePresetSnapshots = new Map()
   const BACKGROUND_TOOLS = [...WORLD_BOOK_FILTER_TOOLS, POSTURE_SUBMIT_TOOL, CHARACTER_DESIGN_READ_TOOL, CHARACTER_DESIGN_SAVE_TOOL, CHARACTER_DESIGN_REUSE_TOOL, MVU_SUBMIT_UPDATE_TOOL, CANDIDATE_SUBMIT_TOOL, SCRIPT_READ_TOOL, SCRIPT_POINT_TOOL, LEDGER_SUBMIT_TOOL]
   const backgroundAgentRunner = createBackgroundAgentRunner({
@@ -2590,6 +2707,8 @@ export async function apply(ctx) {
     // The browser's session list keeps a disposed subagent as an idle row until the list is
     // reloaded; tell the game's page so its header count drops the retired worker at once.
     onRetired: (_id, parentId) => sessionSignals.publish(parentId, { kind: 'subagents', version: String(Date.now()) + ':' + Math.random().toString(36).slice(2) }),
+    // Nor does it learn of a new one; the same signal reloads the list so the header counts it.
+    onCreated: (_id, parentId) => sessionSignals.publish(parentId, { kind: 'subagents', version: String(Date.now()) + ':' + Math.random().toString(36).slice(2) }),
     systemAppend: () => runtimePrompt('system-append'),
     imageSystemPrompt: () => runtimePrompt('scene-image-system'),
     resolveModelSelection: async input => backgroundModelSelection(await backgroundConfigForSession(input.sessionId)) || input.selection,
@@ -2767,7 +2886,8 @@ export async function apply(ctx) {
   const pluginSettlementProgress = createPluginSettlementProgress()
   // Dialogue speakers and emotions, annotated by settlement (docs/design/cast-presentation.md).
   const castPresentation = createCastPresentation({
-    enabled: async () => (await readTavernSettings()).castPresentation === true,
+    // On for every game with the global switch, and for games of a card whose stage is on (the stage reads the annotations).
+    enabled: async gameId => (await readTavernSettings()).castPresentation === true || (gameId ? await cardStageOn(str(gameId)) : false),
     turns: pluginTurns,
     data: pluginData,
     publish: (sessionId, annotation) => {
@@ -2781,8 +2901,27 @@ export async function apply(ctx) {
   function castAssetView(cardPath, manifest) {
     const key = castAssets.keyOf(cardPath)
     const url = file => file ? '/api/dsh-tavern/cast-asset?' + new URLSearchParams({ card: key, file }).toString() : ''
-    return manifest.characters.map(character => ({ name: character.name, aliases: character.aliases || [], avatarUrl: url(character.avatar), voices: character.voices || {},
+    return manifest.characters.map(character => ({ name: character.name, aliases: character.aliases || [], avatarUrl: url(character.avatar), avatars: {}, voices: character.voices || {},
       sprites: Object.fromEntries(Object.entries(character.sprites || {}).map(([emotion, file]) => [emotion, url(file)])) }))
+  }
+  // The cast as everyone sees it: the player's own assets, then what plugins offer (a DSH card's packs).
+  // A character both have keeps the player's pictures and fills only what the player left empty.
+  async function castView(sessionId, cardPath, manifest) {
+    const own = castAssetView(cardPath, manifest)
+    const offered = await pluginApi.castAssetSources({ gameId: str(sessionId) }).catch(() => [])
+    const names = character => [character.name, ...character.aliases]
+    for (const item of offered) {
+      const match = own.find(character => names(character).some(name => names(item).includes(name)))
+      if (!match) { own.push({ ...item, voices: {} }); continue }
+      if (!match.avatarUrl) match.avatarUrl = item.avatarUrl
+      match.avatars = { ...item.avatars, ...match.avatars }
+      match.sprites = { ...item.sprites, ...match.sprites }
+    }
+    return own
+  }
+  async function cardStageOn(sessionId) {
+    const card = await castCardOf(sessionId).catch(() => null)
+    return Boolean(card && (await castAssets.read(card.path)).stage === true)
   }
   async function castCardOf(sessionId) {
     const header = await chatHeaderForSession(str(sessionId), ['cardPath', 'cardName', 'mode', 'macroState'])
@@ -2803,9 +2942,10 @@ export async function apply(ctx) {
     }
     const manifest = await castAssets.read(card.path)
     const background = (manifest.backgrounds || [])[0]
-    return { enabled: annotated.enabled, player: card.player, card: { name: card.name, imageUrl: '/api/dsh-tavern/card-image?path=' + encodeURIComponent(card.path) },
+    // The stage is the card's choice: off for ordinary cards, on when the player or the card turned it on.
+    return { enabled: manifest.stage === true, player: card.player, card: { name: card.name, imageUrl: '/api/dsh-tavern/card-image?path=' + encodeURIComponent(card.path) },
       background: background ? '/api/dsh-tavern/cast-asset?' + new URLSearchParams({ card: castAssets.keyOf(card.path), file: background.file }).toString() : '',
-      cast: castAssetView(card.path, manifest), turns }
+      cast: await castView(sessionId, card.path, manifest), turns }
   }
   // One line in its speaker's voice on the chosen channel; { skip } when voicing is off or narration is silent.
   async function speakLine(sessionId, { speaker, text, emotion, narration } = {}) {
@@ -2816,7 +2956,7 @@ export async function apply(ctx) {
     const character = card && name ? (await castAssets.read(card.path)).characters.find(item => item.name === name || (item.aliases || []).includes(name)) : null
     const voice = speech.voiceFor({ character, provider: current.provider, config: current.config, narration: narration === true })
     if (voice === null) return { skip: true, reason: 'narration' }
-    return speechReply(await speech.synthesize({ provider: current.provider.id, text, voice, emotion }))
+    return speechReply(await speech.synthesize({ provider: current.provider.id, text, voice, emotion, gameId: str(sessionId), speaker: name, narration: narration === true }))
   }
   function speechReply(result) {
     return result.browser ? result : { url: '/api/dsh-tavern/speech-audio?id=' + result.id, mediaType: result.mediaType }
@@ -2827,11 +2967,17 @@ export async function apply(ctx) {
     return ((await castAssets.read(card.path)).packs || []).map(pack => ({ ...pack,
       baseUrl: '/api/dsh-tavern/pack-file?' + new URLSearchParams({ pack: pack.id, v: pack.contentHash }).toString() + '&path=' }))
   }
+  // A card's cast or packs changed outside the stage page: games of that card re-read them.
+  async function castAssetsChanged(cardPath) {
+    for (const item of await conversationRegistry.list().catch(() => [])) {
+      if (item && item.cardPath === cardPath && item.sessionId) sessionSignals.publish(item.sessionId, { kind: 'cast', version: String(Date.now()) + ':' + Math.random().toString(36).slice(2) })
+    }
+  }
   async function castEdit(sessionId, edit) {
     const card = await castCardOf(sessionId)
     const result = await edit(card.path, card)
     const manifest = result?.cast || result
-    return { ...(result?.cast ? { imported: result.imported, skipped: result.skipped, characters: result.characters } : {}), cast: castAssetView(card.path, manifest) }
+    return { ...(result?.cast ? { imported: result.imported, skipped: result.skipped, characters: result.characters } : {}), cast: await castView(sessionId, card.path, manifest) }
   }
   // ---------- 插件接口：读人物卡与历史、改变量、后台任务（docs/plugin-api.md） ----------
   const pluginStoryTurn = message => Number(message?.turn || (message?.greeting ? 1 : 0))
@@ -2889,6 +3035,10 @@ export async function apply(ctx) {
   const pluginApi = createTavernPluginApi({
     ctx,
     logger: console,
+    // A plugin's settings changed in a game: its page side re-reads them (tavernUi.watchGameSettings).
+    settingsChanged: (gameId, plugin) => sessionSignals.publish(gameId, { kind: 'plugin-settings', version: plugin + ':' + Date.now() + ':' + Math.random().toString(36).slice(2) }),
+    // A plugin published new state for its page side (tavernUi.watchState re-reads it).
+    publishState: (gameId, plugin, name) => sessionSignals.publish(gameId, { kind: 'plugin-state:' + plugin + ':' + name, version: Date.now() + ':' + Math.random().toString(36).slice(2) }),
     reservedToolNames: [...BACKGROUND_TOOLS, HISTORY_RECALL_TOOL].map(tool => tool?.name).concat([STORY_SUBMIT_TOOL_NAME, 'character_design_finish', 'worldbook_search', 'web_search', 'skill']).filter(Boolean),
     media: pluginMedia,
     data: pluginData,
@@ -2907,14 +3057,45 @@ export async function apply(ctx) {
       const workspace = await readCardWorkspace(cardPath)
       return workspace === undefined ? null : cardPreparation.present({ card: workspace, as: 'raw' })
     },
-    updateCardRaw: async (card, operations, owner) => {
+    updateCardRaw: async (card, operations, owner, options = {}) => {
       const cardPath = normalizeResourcePath(card, 'card')
       if (await readCardWorkspace(cardPath) === undefined) throw Object.assign(new Error('人物卡不存在：' + card), { code: 'TAVERN_PLUGIN_NOT_FOUND' })
-      return (await updateCard(cardPath, {}, { ts: Date.now(), summary: '插件 ' + owner + ' 修改' }, operations)).changed === true
+      const changed = (await updateCard(cardPath, {}, { ts: Date.now(), summary: '插件 ' + owner + ' 修改' }, operations, options)).changed === true
+      return { changed, revision: await cardProjectionRevision(cardPath) }
+    },
+    // Plugins writing a card's cast and packs: the same store and checks as the player's stage page.
+    editCast: async (card, change) => {
+      const cardPath = normalizeResourcePath(card, 'card')
+      if (await readCardWorkspace(cardPath) === undefined) throw Object.assign(new Error('人物卡不存在：' + card), { code: 'TAVERN_PLUGIN_NOT_FOUND' })
+      await change(castAssets, cardPath)
+      await castAssetsChanged(cardPath)
+    },
+    saveCardPack: async (card, { id, format, title, files }) => {
+      const cardPath = normalizeResourcePath(card, 'card')
+      if (await readCardWorkspace(cardPath) === undefined) throw Object.assign(new Error('人物卡不存在：' + card), { code: 'TAVERN_PLUGIN_NOT_FOUND' })
+      const { pack } = await assetPacks.importFiles(files, { id, format, title })
+      const current = (await castAssets.read(cardPath)).packs || []
+      await castAssets.bindPacks(cardPath, current.filter(item => item.id !== pack.id).concat([{ id: pack.id, contentHash: pack.contentHash, format: pack.format, title: pack.title, name: '' }]))
+      await castAssetsChanged(cardPath)
+      return { id: pack.id, contentHash: pack.contentHash }
+    },
+    removeCardPack: async (card, id) => {
+      const cardPath = normalizeResourcePath(card, 'card')
+      const current = (await castAssets.read(cardPath)).packs || []
+      if (!current.some(item => item.id === id)) return false
+      await castAssets.bindPacks(cardPath, current.filter(item => item.id !== id))
+      await castAssetsChanged(cardPath)
+      return true
+    },
+    cardRevision: async card => {
+      const cardPath = normalizeResourcePath(card, 'card')
+      if (await readCardWorkspace(cardPath) === undefined) throw Object.assign(new Error('人物卡不存在：' + card), { code: 'TAVERN_PLUGIN_NOT_FOUND' })
+      return await cardProjectionRevision(cardPath)
     },
     // Tavern decides where its own tools show; a plugin may only scope the tools it registered.
     isControlledTool: name => controlledToolNames.has(name),
     skills: tavernSkills,
+    addSkillRoot: addPluginSkillRoot,
     readCardImage: async sessionId => {
       const header = await chatHeaderForSession(sessionId, ['cardPath'])
       const cardPath = str(header?.cardPath)
@@ -2923,6 +3104,7 @@ export async function apply(ctx) {
     },
     readHistory: readPluginHistory,
     readCast: (sessionId, turn) => castPresentation.annotation(sessionId, turn),
+    readRequestContext: async (sessionId, turn) => foregroundRequestContext(await chatHeaderForSession(sessionId, ['foregroundFrames', 'timeline']), turn),
     listCardPacks: sessionId => cardPacksOf(sessionId),
     cardScope: () => cardPlugins.scope(),
     cardPathOf: async sessionId => str((await chatHeaderForSession(str(sessionId), ['cardPath']))?.cardPath) || null,
@@ -2936,7 +3118,7 @@ export async function apply(ctx) {
     readCastAssets: async sessionId => {
       const card = await castCardOf(sessionId)
       return { player: card.player, card: { name: card.name, imageUrl: '/api/dsh-tavern/card-image?path=' + encodeURIComponent(card.path) },
-        characters: castAssetView(card.path, await castAssets.read(card.path)) }
+        characters: await castView(sessionId, card.path, await castAssets.read(card.path)) }
     },
     readActivity: async sessionId => {
       const chat = await taskStateReader.forSession(sessionId)
@@ -2954,6 +3136,7 @@ export async function apply(ctx) {
     publish: sessionId => sessionSignals.publish(sessionId, { kind: 'plugin-media', version: String(Date.now()) + ':' + Math.random().toString(36).slice(2) })
   })
   ctx.provide('tavern', pluginApi.service)
+  cardRevisionListeners.add((cardPath, revision) => pluginApi.cardChanged(cardPath, revision))
   // Tell plugins the story line changed (informational: their turn data follows text versions
   // by itself). After an edit or an undone rollback the visible version may be new to them.
   function notifyPluginTimeline(sessionId, kind, { turn, settled = false } = {}) {
@@ -3699,7 +3882,7 @@ export async function apply(ctx) {
         throw error
       }
       result = { posture: mvuResult.posture }
-    } else if (!backgroundTasksSettings.posture && !await settlementItems.wanted()) {
+    } else if (!backgroundTasksSettings.posture && !await settlementItems.wanted({ gameId: snapshot.sessionId })) {
       result = {}
     } else if (await settleByPlugin()) {
       // A plugin replaced this settlement; its validated result is committed like Tavern's own.
@@ -3723,7 +3906,7 @@ export async function apply(ctx) {
           role: 'user',
           regexPlacement: 2,
           content: [{ type: 'text', text: settleUserText(snapshot, backgroundTasksSettings.posture, taskRun.participantRequest.rewindTo == null ? lastSubmittedPosture(trace.sessionId && (agentRegistry.get(trace.sessionId)?.session || sessionStore.get(trace.sessionId))) : '') }],
-          source: { kind: 'plugin', plugin: 'dsh-tavern' }
+          source: producerSource('dsh-tavern')
         }],
         system: plan.system,
         tools: plan.tools,
@@ -3767,11 +3950,19 @@ export async function apply(ctx) {
     const gameId = str(state?.sessionId)
     const onStart = label => pluginSettlementProgress.begin(gameId, label)
     const activity = state ? backgroundTasks.activity(state) : null
-    // The turn's pipeline (docs/design/background-task-pipeline.md): before-tasks, the main settlement, after-tasks.
+    const turnPending = () => Boolean(gameId) && activity?.role === 'settlement' && ['pending', 'running'].includes(activity.phase)
+    // A new turn may have replaced versions plugins are still working on.
+    if (gameId) await pluginApi.checkVersions(gameId).catch(() => {})
+    // The turn's pipeline (docs/design/background-task-pipeline.md): before-tasks, the main settlement
+    // with the parallel tasks running alongside it, after-tasks.
     await runPipelineStages([
-      { id: 'before', when: () => Boolean(gameId) && activity?.role === 'settlement' && ['pending', 'running'].includes(activity.phase),
+      { id: 'before', when: turnPending,
         run: () => pluginApi.runSettlementTasks({ gameId, phase: 'before', signal, onStart }) },
-      { id: 'settle', run: () => runSettlement(chatId, signal) },
+      { id: 'settle', run: async () => {
+        const alongside = turnPending() && !signal?.aborted ? pluginApi.runSettlementTasks({ gameId, phase: 'parallel', signal, onStart })
+          .catch(error => console.warn('dsh-tavern: 插件并行任务失败:', str(error?.message || error))) : null
+        try { await runSettlement(chatId, signal) } finally { await alongside }
+      } },
       // Tavern's settlement is committed by now: a plugin-task operation keeps the game busy (and stoppable).
       { id: 'after', when: () => Boolean(gameId) && !signal?.aborted,
         run: () => pluginApi.runSettlementTasks({ gameId, phase: 'after', signal, onStart, around: work => inPluginTaskOperation(chatId, work) }) }
@@ -3811,6 +4002,7 @@ export async function apply(ctx) {
         void candidateWorldbookPreparation.warm(latest.sessionId)
         void worldbookPrefilter.start(chatId)
         void pluginApi.turnSettled(latest.sessionId).catch(error => console.warn('dsh-tavern: 插件轮次通知失败:', str(error?.message || error)))
+        void gameTitles.afterTurn(latest.sessionId, latest.cardName)
         void sceneIllustrations?.autoGenerate(latest.sessionId).catch(error => console.warn('dsh-tavern: 自动生图未执行:', str(error?.message || error)))
       }
     } catch {
@@ -4247,27 +4439,37 @@ export async function apply(ctx) {
   const cardResponseTest = createCardResponseTest({ api: gameplayApi, store: profileData, chatForSession })
   ctx.effect(() => () => cardResponseTest.dispose())
 
-  const conversationMigration = createConversationMigration({
+  const preparedSaveSessions = new Map((saveUpgradePreparation?.sessions || []).map(session => [session.id, session]))
+  const saveUpgrade = createSaveUpgrade({
     store: chatJournalStore,
+    inspectSessions: async chat => {
+      if (sessionPatch.status !== 'ready') return { ready: false, error: 'DSH 会话兼容模块未就绪，请重启酒馆后重试' }
+      const failed = await unreadySaveSessions(saveSessionIds(chat), {
+        live: id => sessionStore.get(id) || agentRegistry.get(id)?.session,
+        stored: id => storedSessionVersion(path.join(path.dirname(resolveTavernDataRoot()), 'sessions'), id),
+        prepared: id => preparedSaveSessions.get(id),
+      })
+      return failed.length ? { ready: false, error: '会话日志未完成升级，请重启酒馆后重试。原档保留：' + failed.map(id => id + (preparedSaveSessions.get(id)?.error ? '（' + preparedSaveSessions.get(id).error + '）' : '')).join('、') } : { ready: true, version: 4 }
+    },
     assertIdle: chat => {
       if (chat.mode === 'card' || backgroundTasks.activity(chat).busy || chat.regenInProgress || agentRegistry.get(chat.sessionId)?.phase?.kind === 'running') {
-        throw new Error('请等待本轮游玩和后台结算完成后再迁移')
+        throw new Error('请等待本轮游玩和后台结算完成后再升级')
       }
     },
     notify: id => { void readSessionMap().then(map => {
-      for (const [sessionId, chatId] of Object.entries(map)) if (chatId === id) sessionSignals.publish(sessionId, {kind:'tavern-state',version:'storage-migration:'+Date.now()})
-    }).catch(error => console.warn('dsh-tavern: 迁移状态通知失败:', error.message)) }
+      for (const [sessionId, chatId] of Object.entries(map)) if (chatId === id) sessionSignals.publish(sessionId, {kind:'tavern-state',version:'save-upgrade:'+Date.now()})
+    }).catch(error => console.warn('dsh-tavern: 存档升级通知失败:', error.message)) }
   })
-  ctx.effect(() => () => conversationMigration.dispose())
+  ctx.effect(() => () => saveUpgrade.dispose())
 
   async function dispatchMethod(method, args, serverTemplate = false) {
     if (method.startsWith('gameplay.')) return await gameplayApi.call(method.slice(9), args || {})
     switch (method) {
-      case 'getStorageMigration':
-      case 'migrateStorage': {
+      case 'getSaveUpgrade':
+      case 'upgradeSave': {
         const chatId = (await readSessionMap())[str(args?.sessionId)]
         if (!chatId) throw new Error('找不到当前存档')
-        return method === 'getStorageMigration' ? conversationMigration.status(chatId) : conversationMigration.start(chatId)
+        return method === 'getSaveUpgrade' ? saveUpgrade.status(chatId) : saveUpgrade.start(chatId)
       }
       case 'getCardOrganization': return { groups: (await cardOrganization.read()).groups }
       case 'organizeCards': return { groups: (await cardOrganization.update(args || {}, await fileResources.list('card'))).groups }
@@ -4526,7 +4728,13 @@ export async function apply(ctx) {
       case 'listSceneImageModels': return await enabledSceneIllustrations().listModels(args)
       case 'testSceneImageGeneration': return await enabledSceneIllustrations().testGenerate()
       case 'pluginMediaForTurn': return await pluginMediaForTurn(args && args.sessionId, args && args.turn)
-      case 'castForTurns': return await castPresentation.forTurns(str(args && args.sessionId), args && args.turns)
+      // The lines come with the cast, so the story shows each speaker's picture for the line's emotion.
+      case 'castForTurns': {
+        const sessionId = str(args && args.sessionId)
+        const result = await castPresentation.forTurns(sessionId, args && args.turns)
+        const card = await castCardOf(sessionId).catch(() => null)
+        return { ...result, characters: card ? await castView(sessionId, card.path, await castAssets.read(card.path)) : [] }
+      }
       case 'castStage': return await castStage(args && args.sessionId, args && args.count)
       case 'castSetImage': return await castEdit(args && args.sessionId, cardPath => castAssets.setImage({ cardPath, name: args.name, slot: args.slot, bytes: Buffer.from(str(args.data), 'base64') }))
       case 'castRemoveImage': return await castEdit(args && args.sessionId, cardPath => castAssets.removeImage({ cardPath, name: args.name, slot: args.slot }))
@@ -4598,6 +4806,9 @@ export async function apply(ctx) {
         return { title: saved.title }
       }
       case 'markConversationOpened': return await conversationRegistry.touch(args && args.sessionId, Date.now())
+      // A log the host cannot open is repaired on demand: the client retries the open
+      // once after this reports a rewrite, and untouched logs cost one read.
+      case 'repairSessionLog': return await repairStoredSessionLog(resolveTavernDataRoot(), str(args && args.sessionId), sessionPatch.loadSessionCatalog)
       case 'listMobileCardImports': return await mobileCardImport.list()
       case 'importMobileCard': {
         const archive = await mobileCardImport.archive(args && args.id)
@@ -4606,13 +4817,20 @@ export async function apply(ctx) {
       case 'importCard': return { card: await importCard(args && args.payload) }
       case 'importCardUpload': {
         const upload = await uploads.take(args && args.uploadId)
-        try { return { card: await importCardArchiveFile(upload.file, str(args && args.name) || '人物卡.dshcard') } }
+        const name = str(args && args.name) || '人物卡.dshcard'
+        try {
+          if (/\.(charx|dshcard)$/i.test(name)) return { card: await importCardArchiveFile(upload.file, name) }
+          if (await pluginApi.cardImporterFor(name)) return { card: await importPluginCardFile(upload.file, name) }
+          throw new Error('无法识别的人物卡文件（需要 PNG、JSON、CHARX、DSH 人物卡 .dshcard，或装上能导入这种文件的插件）')
+        }
         finally { await upload.remove() }
       }
       case 'cardPacks': return { packs: await cardPacksOf(args && args.sessionId) }
       case 'cardPlugins': return { plugins: (await castAssets.read(normalizeResourcePath(args && args.path, 'card'))).plugins || [] }
       case 'setCardPlugins': return { plugins: await setCardPlugins(args && args.path, args && args.enabled === true) }
-      case 'cardPluginScopes': return { scopes: Object.fromEntries([...await cardPlugins.scope()].map(([name, scope]) => [name, scope.cardPath])) }
+      case 'cardStage': return { enabled: (await castAssets.read(normalizeResourcePath(args && args.path, 'card'))).stage === true }
+      case 'setCardStage': return { enabled: (await castAssets.setStage(normalizeResourcePath(args && args.path, 'card'), args && args.enabled === true)).stage === true }
+      case 'cardPluginScopes': return { scopes: Object.fromEntries([...await cardPlugins.scope()].map(([name, scope]) => [name, scope.cards])) }
       case 'deleteCard': return await deleteCard(args && args.path)
       case 'prepareDeleteChats': return await deleteChats(args && args.chatIds, true)
       case 'deleteChats': return await deleteChats(args && args.chatIds)
@@ -4802,6 +5020,7 @@ export async function apply(ctx) {
       case 'getSession': {
         // A save opened for the first time in this process is checked once, while nothing runs.
         await reconcileWhenIdle(args && args.sessionId, { once: true })
+        void backgroundCatalog(str(args && args.sessionId))
         if(args?.fullView === true)templateHistoryFrom.set(args.sessionId,0)
         else if(Number.isSafeInteger(args?.historyFrom) && args.historyFrom >= 0)templateHistoryFrom.set(args.sessionId,args.historyFrom)
         return sessionViews.response(args || {})
@@ -4888,7 +5107,9 @@ export async function apply(ctx) {
       case 'deleteGuide': return { guides: await conversationGuides.remove(args?.sessionId, args) }
       case 'getBodyEdit': return { edit: await bodyEditor.read(args && args.sessionId, args) }
       case 'listGamePlugins': return { plugins: await pluginApi.gamePlugins(str(args && args.sessionId)) }
-      case 'setGamePlugin': return { plugins: await pluginApi.setGamePlugin(str(args && args.sessionId), { name: args && args.name, enabled: args && args.enabled, replace: args && args.replace, task: args && args.task, taskOrder: args && args.taskOrder }) }
+      case 'setGamePlugin': return { plugins: await pluginApi.setGamePlugin(str(args && args.sessionId), { name: args && args.name, enabled: args && args.enabled, replace: args && args.replace, task: args && args.task, taskOrder: args && args.taskOrder, setting: args && args.setting }) }
+      case 'pluginState': return { data: await pluginApi.pluginState(str(args && args.sessionId), str(args && args.plugin), str(args && args.name)) }
+      case 'pluginGameSettings': return { values: await pluginApi.pluginGameSettings(str(args && args.sessionId), str(args && args.plugin)) }
       case 'startPluginTask': return await startPluginTask(args && args.sessionId, args && args.key, args && args.input)
       case 'saveBodyEdit': {
         await reconcileStory(args && args.sessionId)
@@ -5277,7 +5498,7 @@ export async function apply(ctx) {
         role: item.role,
         content: projectPlayerContent(item.inputAttachments, item.content, { fallback: false }),
         source: {
-          kind: 'plugin', plugin: 'dsh-tavern', form: 'sillytavern-compatibility',
+          kind: 'plugin:dsh-tavern', form: 'sillytavern-compatibility',
           sections: [{ name: 'tavern:sillytavern:' + label, text: item.content }],
           trace: item.source
         }

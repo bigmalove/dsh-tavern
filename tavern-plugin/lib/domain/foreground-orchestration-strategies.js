@@ -7,6 +7,7 @@ import { STORY_SUBMIT_PROMPT, STORY_SUBMIT_TOOL_NAME } from './story-tool-submis
 import { projectHistoryAsToolCalls } from './history-tool-call.js'
 import { markRequestHandled, requestHandledBy } from './request-lineage.js'
 import { inputKind } from './session-turn-input.js'
+import { isProducerSource, isSystemPromptSource } from './message-source.js'
 
 const CARD_REFERENCE_SECTIONS = new Set(['tavern:character-card', 'tavern:card-system-prompt', 'tavern:constant-worldbook'])
 // The card Agent resends its system prompt on every tool step and reads live
@@ -107,7 +108,7 @@ function snapshotMessage(text) {
     role: 'user',
     content: [{ type: 'text', text: str(text) }],
     source: {
-      kind: 'plugin', plugin: 'dsh-tavern', form: 'snapshot',
+      kind: 'plugin:dsh-tavern', form: 'snapshot',
       sections: [{ name: 'tavern:turn', text: str(text) }]
     }
   }
@@ -121,7 +122,7 @@ function hasProviderContent(message) {
 function isNativeStablePrefix(message) {
   const source = message && message.source
   return str(message && message.id).startsWith('tavern-session-prefix:') && message.role === 'user'
-    && source && source.kind === 'plugin' && source.plugin === 'dsh-tavern'
+    && isProducerSource(source, 'dsh-tavern')
     && (source.form === 'snapshot' || source.form === 'session-prefix')
 }
 
@@ -266,7 +267,7 @@ export function createCompatibilityOrchestrationStrategy(options) {
 // the provider, and the trajectory keeps its own unannotated message.
 function labelPresetFront(messages, texts) {
   if (!Array.isArray(messages) || !texts?.length) return messages
-  const index = messages.findIndex(message => message?.role === 'system' && message.source?.plugin === '@deepseek-ai/dsh-system-prompt')
+  const index = messages.findIndex(message => message?.role === 'system' && isSystemPromptSource(message.source))
   const message = messages[index]
   const body = (message?.content || []).map(block => block?.type === 'text' ? block.text : '').join('')
   if (index < 0 || !texts.every(text => body.includes(text))) return messages
@@ -277,8 +278,12 @@ function labelPresetFront(messages, texts) {
 
 function presetFrontSections(snapshot) {
   const entries = Array.isArray(snapshot?.front?.entries) ? snapshot.front.entries : []
+  // The front phase is resolved by Tavern's own macro engine; unknown extension macros (for example
+  // "{{压缩相邻消息::...}}" from ecosystem preset tools) intentionally stay literal. DSH's strict
+  // system-prompt variable scanner would reject any residual {{...}} as a malformed variable, so the
+  // section must be non-interpolating to keep those macros verbatim instead of failing the turn.
   return entries.filter(entry => str(entry?.content).trim() !== '')
-    .map(entry => ({ name: 'tavern:runtime-preset-front', text: str(entry.content) }))
+    .map(entry => ({ name: 'tavern:runtime-preset-front', text: str(entry.content), interpolate: false }))
 }
 
 export function createNativePlayOrchestrationStrategy(options) {

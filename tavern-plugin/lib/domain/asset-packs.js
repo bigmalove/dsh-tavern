@@ -3,7 +3,7 @@ import { createWriteStream } from 'node:fs'
 import { mkdir, rename, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { pipeline } from 'node:stream/promises'
-import { Transform } from 'node:stream'
+import { Readable, Transform } from 'node:stream'
 
 // Asset packs (docs/design/dsh-card-format.md): what a DSH card carries besides its text, kept as
 // opaque data. Every file is stored once by its SHA-256; a pack is an index of path → file, named
@@ -28,6 +28,12 @@ export function packMediaType(file) {
 }
 
 export function validPackId(value) { return typeof value === 'string' && PACK_ID.test(value) }
+
+/** A relative path inside a pack: no absolute paths, no `.`/`..` or hidden parts, no backslashes. */
+export function validPackPath(value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= 300 && !value.includes('\\') && !value.startsWith('/')
+    && value.split('/').every(part => part && !part.startsWith('.'))
+}
 
 /** A pack's content hash when it does not bring one: over its sorted path and file digests. */
 export function packContentHash(files) {
@@ -87,13 +93,31 @@ export function createAssetPacks({ root, store }) {
       files[entry.path.slice(prefix.length)] = stored
     }
     if (!Object.keys(files).length) throw Object.assign(new Error('素材包是空的：' + id), { code: 'TAVERN_PACK_INVALID' })
-    const hash = contentHash || packContentHash(files)
+    return await publish(id, contentHash || packContentHash(files), { format, title, credits, files })
+  }
+
+  async function publish(id, hash, { format, title, credits, files }) {
     const known = await readPack(id, hash)
     if (known) return { pack: known, reused: true }
     const pack = { id, contentHash: hash, format: String(format).slice(0, 80), title: String(title).slice(0, 120),
       credits: credits.filter(file => typeof file === 'string' && Object.hasOwn(files, file)), files, importedAt: Date.now() }
     await store.writeJson(indexPath(id, hash), pack)
     return { pack, reused: false }
+  }
+
+  /** A pack from loose files [{ path, data }] (a plugin building one); same storage as a card's packs. */
+  async function importFiles(entries, { id, format = '', title = '', credits = [], maxFileBytes = 512 * 1024 * 1024 } = {}) {
+    if (!validPackId(id)) throw Object.assign(new Error('素材包 id 无效：' + id), { code: 'TAVERN_PACK_INVALID' })
+    if (!Array.isArray(entries) || !entries.length) throw Object.assign(new Error('素材包是空的：' + id), { code: 'TAVERN_PACK_INVALID' })
+    const files = {}
+    for (const entry of entries) {
+      const relative = String(entry?.path || '')
+      if (!validPackPath(relative)) throw Object.assign(new Error('素材包内的路径无效：' + relative.slice(0, 200)), { code: 'TAVERN_PACK_INVALID' })
+      if (Object.hasOwn(files, relative)) throw Object.assign(new Error('素材包内的路径重复：' + relative), { code: 'TAVERN_PACK_INVALID' })
+      if (!(entry.data instanceof Uint8Array)) throw Object.assign(new Error('素材文件 ' + relative + ' 的 data 必须是 Uint8Array 或 Buffer'), { code: 'TAVERN_PACK_INVALID' })
+      files[relative] = await putBlob(Readable.from([Buffer.from(entry.data)]), { maxBytes: maxFileBytes })
+    }
+    return await publish(id, packContentHash(files), { format, title, credits, files })
   }
 
   /** A pack file on disk, with how to serve it; undefined when the pack or file is unknown. */
@@ -106,5 +130,5 @@ export function createAssetPacks({ root, store }) {
     return { path: absolute, size: entry.size, sha256: entry.sha256, ...packMediaType(relative) }
   }
 
-  return Object.freeze({ readPack, importFromZip, file, putBlob })
+  return Object.freeze({ readPack, importFromZip, importFiles, file, putBlob })
 }

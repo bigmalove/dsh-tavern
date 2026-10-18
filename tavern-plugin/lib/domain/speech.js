@@ -340,9 +340,10 @@ export function createSpeech({ store, credentials, plugins = () => [], fetchImpl
     return provider ? { provider, config: settingsOf(provider, stored) } : null
   }
 
-  async function produce(provider, config, text, voice, emotion, signal) {
+  async function produce(provider, config, text, voice, emotion, signal, line) {
     if (provider.plugin) {
-      const result = await provider.plugin.synthesize({ text, voice, emotion: emotion || 'neutral', signal })
+      const result = await provider.plugin.synthesize({ text, voice, emotion: emotion || 'neutral', signal,
+        ...(line.gameId ? { gameId: line.gameId } : {}), speaker: line.speaker || '', narration: line.narration === true })
       return { data: result?.data, mediaType: result?.mediaType }
     }
     const apiKey = await keyOf(provider)
@@ -355,7 +356,7 @@ export function createSpeech({ store, credentials, plugins = () => [], fetchImpl
    * Say one line with a channel: { browser: true, voice, text } for the browser's own voices,
    * or { id, mediaType } of the cached audio. Same channel, settings, voice and text share one file.
    */
-  async function synthesize({ provider: id, text: raw, voice, emotion = 'neutral', signal } = {}) {
+  async function synthesize({ provider: id, text: raw, voice, emotion = 'neutral', signal, gameId, speaker: character, narration } = {}) {
     const stored = await readConfig()
     const provider = providerOf(id || stored.provider)
     const config = settingsOf(provider, stored)
@@ -365,14 +366,17 @@ export function createSpeech({ store, credentials, plugins = () => [], fetchImpl
     if (provider.browser) return { browser: true, voice: speaker, text }
     if (!speaker) throw invalid('请先为「' + provider.label + '」填写默认声音')
     const { voice: _voice, narratorVoice: _narrator, ...fields } = config
-    const usesEmotion = provider.plugin || provider.emotional === true || (provider.id === 'openai' && /gpt-4o/.test(config.model))
-    const digest = hash(JSON.stringify([provider.id, fields, speaker, usesEmotion ? emotion : '', text]))
+    const usesEmotion = provider.plugin || provider.emotional === true || provider.id === 'minimax' || (provider.id === 'openai' && /gpt-4o/.test(config.model))
+    // A plugin channel also hears who speaks and may voice them differently; its version marks changed synthesis.
+    const line = { gameId: typeof gameId === 'string' ? gameId : '', speaker: typeof character === 'string' ? character.trim() : '', narration: narration === true }
+    const digest = hash(JSON.stringify(provider.plugin ? [provider.id, fields, speaker, emotion, text, provider.plugin.version || '', line.speaker, line.narration]
+      : [provider.id, fields, speaker, usesEmotion ? emotion : '', text]))
     for (const extension of Object.keys(AUDIO_TYPES)) {
       if (await cached(CACHE_DIR + '/' + digest + '.' + extension)) return { id: digest + '.' + extension, mediaType: AUDIO_TYPES[extension] }
     }
     if (pending.has(digest)) return pending.get(digest)
     const job = (async () => {
-      const result = await produce(provider, config, text, speaker, emotion, signal)
+      const result = await produce(provider, config, text, speaker, emotion, signal, line)
       const data = result?.data ? Buffer.from(result.data) : null
       const extension = audioExtension(result?.mediaType)
       if (!data?.length) throw new Error('配音渠道没有返回音频')

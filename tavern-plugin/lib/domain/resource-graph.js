@@ -29,6 +29,7 @@ export function createResourceGraph(options = {}) {
     if (kind === 'card') {
       await options.cardOrganization?.movePath(renamed.oldPath, renamed.path)
       await options.castAssets?.movePath(renamed.oldPath, renamed.path)
+      await options.cardPlugins?.movePath(renamed.oldPath, renamed.path)
       await checkpoint(operation, 'card-assets-moved')
     }
     if (kind === 'preset' && presets && typeof presets.rename === 'function') await presets.rename(renamed.oldPath, renamed.path)

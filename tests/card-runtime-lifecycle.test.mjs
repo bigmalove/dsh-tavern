@@ -72,6 +72,199 @@ function execution(options = {}) {
   })
 }
 
+const announcementDelays = [1500, 4000, 9000]
+const announcementTimers = h => [...h.timers.entries()].filter(([, timer]) => announcementDelays.includes(timer.delay))
+function runAnnouncement(h, delay) {
+  const entry = announcementTimers(h).find(([, timer]) => timer.delay === delay)
+  assert.ok(entry, `no pending chat announcement timer for ${delay}ms`)
+  h.timers.delete(entry[0])
+  return entry[1].run()
+}
+
+test('coordination subscription performs an authoritative initial refresh when a restart signal was lost', async () => {
+  const h = host()
+  const states = []
+  let refreshes = 0
+  const coordination = h.client.createTavernCoordinationEventModule({
+    connect(_sessionId, handlers) {
+      return {
+        close() {},
+        refresh() {
+          refreshes++
+          handlers.message({ task: { kind: 'candidate', status: 'succeeded', busy: false, terminal: true } })
+        }
+      }
+    }
+  })
+
+  const stop = coordination.subscribe('A', state => states.push(copy(state)))
+  await tick()
+  assert.equal(refreshes, 1)
+  assert.equal(states.at(-1).view.task.status, 'succeeded')
+  stop()
+})
+
+test('script owner acquires one lease, reuses sandbox on variable changes, initializes and releases on empty view', async () => {
+  const h = execution()
+  h.module.sync('A', view())
+  h.module.sync('A', view(2))
+  assert.equal(h.runtimes.length, 1)
+  assert.equal(h.timers.size, 1)
+  assert.equal(h.runtimes[0].syncs.at(-1).view.tavernHelperScripts.length, 0, 'no script execution before lease acquisition')
+  await h.settle()
+  assert.equal(h.module.inspect().active, true)
+  assert.equal(h.runtimes[0].syncs.at(-1).view.tavernHelper.stateRevision, 2)
+  await h.runtimes[0].options.onReady('A')
+  assert.equal(h.runtimes[0].emissions[0][0], 'CHAT_CHANGED')
+  assert.deepEqual(copy(h.runtimes[0].emissions[0][1]), ['tavern-chat'], 'MVU transition requires the Tavern chat ID, not the DSH session ID or undefined')
+  assert.equal(h.runtimes[0].emissions[0][2].stateRevision, 2)
+  h.module.sync('A', view(3))
+  assert.equal(await h.module.triggerButton('script', 'button'), 'clicked')
+  h.module.sync('A', {})
+  assert.equal(h.runtimes[0].disposed, 1)
+  assert.equal(h.timers.size, 0)
+  assert.equal(h.calls.at(-1).method, 'releaseTavernHelperRuntime')
+  assert.equal(h.calls.at(-1).requestOptions.keepalive, true, 'navigation must not abort the ownership release')
+  h.module.dispose()
+  assert.equal(h.calls.filter(x => x.method === 'releaseTavernHelperRuntime').length, 1)
+})
+
+test('8 秒的短暂请求积压恢复后仍领取同一执行器，不被旧 3 秒超时打断', async t => {
+  const h = execution(), response = deferred()
+  t.after(() => h.module.dispose())
+  h.respond(method => method === 'claimTavernScriptWork' ? response.promise : {})
+  h.module.sync('A', view())
+  await tick()
+  // Replay an 8-second response delay without waiting on wall-clock time.
+  for (const [id, timer] of [...h.timers]) {
+    if (timer.delay <= 8000) { h.timers.delete(id); timer.run() }
+  }
+  await h.settle()
+  response.resolve({ active: true })
+  await h.settle()
+  assert.equal(h.module.inspect().active, true)
+  assert.equal(h.calls.filter(call => call.method === 'claimTavernScriptWork').length, 1)
+})
+
+test('script readiness without a chat identity never cancels MVU initialization with an undefined transition', async () => {
+  const h = execution(), input = view()
+  delete input.chatId
+  h.module.sync('A', input)
+  await h.settle()
+  await h.runtimes[0].options.onReady('A')
+  assert.equal(h.runtimes[0].emissions.length, 0)
+  h.module.dispose()
+})
+
+test('初始变量尚未保存时重发 CHAT_CHANGED，让卡脚本重跑聊天级初始化且重发有界', async () => {
+  const h = execution(), input = view()
+  h.module.sync('A', input)
+  await h.settle()
+  await h.runtimes[0].options.onReady('A')
+  assert.equal(h.runtimes[0].emissions.length, 1, 'readiness announces the chat once')
+
+  h.runtimes[0].options.onMvuLoadState({ phase: 'evaluating' })
+  for (const [index, delay] of [1500, 4000, 9000].entries()) {
+    runAnnouncement(h, delay)
+    await h.settle()
+    const emitted = h.runtimes[0].emissions.slice(-2)
+    assert.equal(emitted.length, 2, `retry ${index + 1} announces twice`)
+    assert.deepEqual(copy(emitted[0][1]), [''], 'the forced retry first announces an identity MVU cannot adopt')
+    assert.deepEqual(copy(emitted[1][1]), ['tavern-chat'], 'the forced retry then announces the Tavern chat')
+    assert.equal(h.runtimes[0].emissions.length, index * 2 + 3, `retry ${index + 1} re-initializes the chat once`)
+  }
+  assert.equal(announcementTimers(h).length, 0, 'retries stop after the bounded schedule')
+  h.module.dispose()
+})
+
+test('初始变量保存后不再重发 CHAT_CHANGED', async () => {
+  const h = execution(), input = view()
+  h.module.sync('A', input)
+  await h.settle()
+  await h.runtimes[0].options.onReady('A')
+  h.runtimes[0].options.onMvuLoadState({ phase: 'evaluating' })
+  assert.equal(announcementTimers(h).length, 1, 'a missing initial variable schedules one retry')
+  h.runtimes[0].options.onMvuLoadState({ phase: 'ready' })
+  assert.equal(announcementTimers(h).length, 0, 'saved initial variables cancel the pending retry')
+  h.runtimes[0].options.onMvuLoadState({ phase: 'evaluating' })
+  h.module.dispose()
+  assert.equal(announcementTimers(h).length, 0, 'disposal cancels the retry')
+})
+
+test('A -> B -> A rejects late claims/readiness and uses distinct leases', async () => {
+  const h = execution(), late = deferred()
+  let firstClaim = true
+  h.respond(method => {
+    if (method !== 'claimTavernScriptWork') return Promise.resolve({})
+    if (firstClaim) { firstClaim = false; return late.promise }
+    return Promise.resolve({ active: true })
+  })
+  h.module.sync('A', view())
+  await tick()
+  h.module.sync('B', view())
+  h.module.sync('A', view(3))
+  const last = h.runtimes.at(-1)
+  await h.runtimes[0].options.onReady('A')
+  late.resolve({ active: true, event: { id: 'old-event', name: 'OLD', args: [] } })
+  await h.settle()
+  assert.equal(last.emissions.length, 0)
+  assert.equal(h.module.inspect().active, true)
+  assert.ok(h.calls.some(call => call.method === 'releaseTavernHelperRuntime' && call.args.runtimeId === h.calls[0].args.runtimeId), 'late claim cannot retain the old server lease')
+  h.module.sync('A', view(4))
+  h.wake()
+  await h.settle()
+  assert.equal(last.syncs.at(-1).view.tavernHelper.stateRevision, 4)
+  const claims = h.calls.filter(x => x.method === 'claimTavernScriptWork')
+  assert.notEqual(claims[0].args.runtimeId, claims.at(-1).args.runtimeId)
+  assert.equal(h.calls.some(x => x.method === 'completeTavernHelperEvent'), false)
+  h.module.dispose()
+})
+
+test('event completion stays in its lease; disposal during execution does not acknowledge into another lifetime', async () => {
+  const h = execution(), running = deferred()
+  let delivered = false
+  h.respond(method => {
+    if (method !== 'claimTavernScriptWork') return Promise.resolve({})
+    if (delivered) return Promise.resolve({ active: true })
+    delivered = true
+    return Promise.resolve({ active: true, event: { id: 'E', name: 'UPDATE', args: [1] } })
+  })
+  h.module.sync('A', view())
+  h.runtimes[0].emit = () => running.promise
+  await tick()
+  h.module.dispose()
+  h.module.sync('A', view())
+  running.resolve([2])
+  await h.settle()
+  assert.equal(h.calls.some(x => x.method === 'completeTavernHelperEvent'), false)
+  h.module.dispose()
+  assert.equal(h.timers.size, 0)
+})
+
+test('服务重启遗留的悬挂 claim 超时后由重放 signal 向新服务登记', async () => {
+  const h = execution({ pollRequestTimeoutMs: 100 })
+  const stale = deferred()
+  let restarted = false
+  h.respond(method => {
+    if (method !== 'claimTavernScriptWork') return Promise.resolve({})
+    return restarted ? Promise.resolve({ active: true }) : stale.promise
+  })
+  h.module.sync('A', view())
+  await tick()
+
+  restarted = true
+  assert.equal(h.timers.size, 1, '悬挂 claim 必须有独立超时保护')
+  await h.runTimer()
+  await h.settle()
+  h.wake()
+  await h.settle()
+
+  assert.equal(h.calls.filter(call => call.method === 'claimTavernScriptWork').length, 2)
+  assert.equal(h.module.inspect().active, true)
+  stale.resolve({ active: true })
+  h.module.dispose()
+})
+
 test('claim 响应丢失后自动重试同一 offer，脚本只执行一次', async () => {
   const h = execution({ pollRequestTimeoutMs: 100 })
   const lost = deferred()

@@ -1,5 +1,6 @@
 import { boundedCompaction } from './bounded-compaction.js'
 import { markRequestHandled, requestHandledBy } from './request-lineage.js'
+import { isPluginSource, sourceProducerName } from './message-source.js'
 
 // Internal metadata-only events are persisted on the Session surface but are
 // not user utterances. Native compaction replays that surface independently of
@@ -8,8 +9,8 @@ export function projectCompactionRequest(request) {
   if (request?.purpose !== 'compaction' || !Array.isArray(request.messages)) return request
   const messages = request.messages.filter(message => !(message?.role === 'user' &&
     Array.isArray(message.content) && message.content.length === 0 &&
-    message.source?.kind === 'plugin' &&
-    ['dsh-tavern', 'dsh-tavern-failed-turn-cleanup'].includes(message.source.plugin)))
+    isPluginSource(message.source) &&
+    ['dsh-tavern', 'dsh-tavern-failed-turn-cleanup'].includes(sourceProducerName(message.source))))
   return messages.length === request.messages.length ? request : { ...request, messages }
 }
 

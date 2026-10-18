@@ -1,3 +1,4 @@
+import { storyEventTurn } from './session-upgrade-references.js'
 import { isCompactionCheckpoint } from './compaction-checkpoint.js'
 import { inputAttachments } from './player-input-content.js'
 import { isRescuedHistoryMessage } from './chat-history-rescue.js'
@@ -8,6 +9,7 @@ import { createSurfaceOwnership, planSurfaceRecovery, planSurfaceRange, SurfaceR
 import { randomUUID } from 'node:crypto'
 import { inputKind, isTurnInput, isNewTurnInput, isNewPlayerInput, isFailedTurnEnd } from './session-turn-input.js'
 import { resolveRoundAnchor } from './round-anchor.js'
+import { isPluginSource, isProducerSource, sourceProducerName } from './message-source.js'
 
 function object(value) {
   return value !== null && typeof value === 'object' ? value : null
@@ -62,16 +64,17 @@ function modelSourceOf(event) {
 
 function isForegroundContext(event) {
   const source = event?.type === 'user/message' && event.data?.source
-  return source?.kind === 'plugin' && source.plugin === 'dsh-tavern' &&
+  return isProducerSource(source, 'dsh-tavern') &&
     ['foreground-frame', 'worldbook-snapshot', 'snapshot', 'variable-changes'].includes(source.form)
 }
 
 function isRollbackUserTombstone(event) {
   const source = event && event.type === 'user/message' && event.data && event.data.source
-  return source && source.kind === 'plugin' && (
-    source.plugin === 'dsh-tavern-failed-turn-cleanup' ||
-    source.plugin === 'dsh-tavern-regeneration-abort' ||
-    source.plugin === 'dsh-tavern-context-window'
+  const producer = sourceProducerName(source)
+  return producer !== '' && (
+    producer === 'dsh-tavern-failed-turn-cleanup' ||
+    producer === 'dsh-tavern-regeneration-abort' ||
+    producer === 'dsh-tavern-context-window'
   )
 }
 
@@ -91,7 +94,7 @@ function modelTurns(events, seqs) {
   const turns = new Set()
   for (const seq of seqs) {
     const event = eventAt(events, seq)
-    const turn = Number(event && event.data && event.data.turn)
+    const turn = storyEventTurn(event)
     if (event && event.type === 'assistant/message' && modelSourceOf(event) !== null && Number.isSafeInteger(turn) && turn > 0) turns.add(turn)
   }
   return [...turns].sort(function (left, right) { return left - right })
@@ -110,7 +113,7 @@ export function abortedRegenerationTurns(input) {
   const seqs = []
   for (const event of events) {
     const source = event && event.type === 'user/message' && event.data && event.data.source
-    if (!source || source.kind !== 'plugin' || source.plugin !== 'dsh-tavern-regeneration-abort') continue
+    if (!isProducerSource(source, 'dsh-tavern-regeneration-abort')) continue
     if (Array.isArray(event.sourceEventSeqs)) seqs.push(...event.sourceEventSeqs)
   }
   return modelTurns(events, seqs)
@@ -129,7 +132,7 @@ export function rolledBackSurfaceTurns(events) {
     visited.add(seq)
     const event = bySeq.get(seq)
     if (!event) return
-    const turn = Number(event.data?.turn)
+    const turn = storyEventTurn(event)
     if (event.type === 'assistant/message' && modelSourceOf(event) !== null && Number.isSafeInteger(turn) && turn > 0) turns.add(turn)
     if (event.surfaceOp?.op === 'replace') for (const source of event.sourceEventSeqs || []) visit(source)
   }
@@ -169,7 +172,7 @@ export function supersededRegenerationErrorTurns(input) {
     const content = event.data.message.content
     if (!Array.isArray(content) || content.length !== 0) continue
     const body = bySeq.get(surfaceReplacementRange(op).end)
-    const turn = Number(body && body.data && body.data.turn)
+    const turn = storyEventTurn(body)
     const end = endings.get(turn)
     if (!body || body.type !== 'assistant/message' || modelSourceOf(body) === null || !syntheticTurns.has(turn) || turn === Number(event.data.turn)) continue
     if (!end || end.seq <= body.seq || end.seq >= event.seq || end.data.reason.kind !== 'completed') continue
@@ -188,7 +191,7 @@ export function locateRegenerationSurface(input) {
   if (!Number.isSafeInteger(turn) || turn < 1) return null
   for (let index = nodes.length - 1; index >= 0; index -= 1) {
     const event = eventAt(events, nodes[index])
-    if (!event || event.type !== 'assistant/message' || Number(event.data && event.data.turn) !== turn) continue
+    if (!event || event.type !== 'assistant/message' || storyEventTurn(event) !== turn) continue
     const source = modelSourceOf(event)
     if (source === null) continue
     // Current swipes leave a non-empty replacement; legacy swipes can be empty.
@@ -210,7 +213,7 @@ export function pendingFailedSurfaceTurns({ events = [], nodes = [], suppressed 
     // marker and legacy context snapshots do not end the pending failure tail.
     if (isRollbackAssistantTombstone(event, events) || isForegroundContext(event)) continue
     if (!isRollbackUserTombstone(event)) break
-    if (event.data.source.plugin !== 'dsh-tavern-failed-turn-cleanup') continue
+    if (sourceProducerName(event.data.source) !== 'dsh-tavern-failed-turn-cleanup') continue
     ownership ??= createSurfaceOwnership(events)
     failures ??= turnIntervals(events).filter(interval => interval.failed && !hidden.has(interval.turn))
     const sources = event.sourceEventSeqs || []
@@ -237,7 +240,7 @@ export function replayableFailedTurn(input) {
   let lastEnd = null
   for (const event of events) {
     if (!event || event.type !== 'turn/end' || !Number.isSafeInteger(Number(event.seq))) continue
-    const turn = Number(event.data && event.data.turn)
+    const turn = storyEventTurn(event)
     if (!Number.isSafeInteger(turn) || turn < 1) continue
     if (lastEnd === null || Number(event.seq) > Number(lastEnd.seq)) lastEnd = event
   }
@@ -254,7 +257,7 @@ export function replayableFailedTurn(input) {
   }
   let startSeq = -1
   for (const event of events) {
-    if (!event || event.type !== 'turn/start' || Number(event.data && event.data.turn) !== turn) continue
+    if (!event || event.type !== 'turn/start' || storyEventTurn(event) !== turn) continue
     startSeq = Math.max(startSeq, Number(event.seq) || 0)
   }
   if (startSeq < 0) return null
@@ -285,7 +288,7 @@ export function locateRollbackSurface(input) {
     if (isCompactionCheckpoint(event)) return null
     // The round starts at its input: messages other plugins or card scripts add
     // around it belong to the round and go with it, never stand in for it.
-    if (event && event.type === 'user/message' && (isTurnInput(event.data) || event.data?.source?.kind !== 'plugin') && !isRollbackUserTombstone(event)) {
+    if (event && event.type === 'user/message' && (isTurnInput(event.data) || !isPluginSource(event.data?.source)) && !isRollbackUserTombstone(event)) {
       userIndex = index
       break
     }
@@ -313,13 +316,13 @@ export function locateRollbackSurface(input) {
   const ownership = createSurfaceOwnership(events)
   const start = ownership.firstOrigin(nodes[userIndex])
   const belongs = ownership.classify(event => event.seq >= start)
-  const turn = Number(assistantEvent.data?.turn)
+  const turn = storyEventTurn(assistantEvent)
   const range = planSurfaceRange({ nodes, start: nodes[userIndex], end: nodes.at(-1),
     accepts: seq => {
       const event = ownership.eventAt(seq)
       if (isRollbackUserTombstone(event) || isRollbackAssistantTombstone(event, events)) return true
       if (belongs(seq) !== OWNED) return false
-      if (event?.type === 'assistant/message' && Number(event.data?.turn) !== turn) return false
+      if (event?.type === 'assistant/message' && storyEventTurn(event) !== turn) return false
       const frameTurn = Number(event?.data?.source?.trace?.turn)
       return !(frameTurn > 0) || frameTurn === turn
     }, message: '回退消息归属不一致，无法安全清理' })
@@ -328,7 +331,7 @@ export function locateRollbackSurface(input) {
     userSeq: Number(nodes[userIndex]),
     assistantSeq: Number(nodes[assistantIndex]),
     endSeq: Number(shadowedSeqs[shadowedSeqs.length - 1]),
-    turn: Math.max(0, Number(assistantEvent.data && assistantEvent.data.turn) || 0),
+    turn: Math.max(0, storyEventTurn(assistantEvent) || 0),
     step: Math.max(1, Number(assistantEvent.data && assistantEvent.data.step) || 1),
     source,
     shadowedSeqs: Object.freeze(shadowedSeqs.slice())
@@ -412,7 +415,7 @@ export function regenerationProjection(replacement, data, operationId) {
     data,
     range: { start: replacement.start, end: replacement.end, sourceEventSeqs: [...replacement.shadowedSeqs] },
     cleanups: (replacement.cleanups || []).map((run, index) => ({
-      data: { id: 'tavern-regen-cleanup:' + operationId + ':' + index, role: 'user', content: [], source: { kind: 'plugin', plugin: 'dsh-tavern-regeneration-abort' } },
+      data: { id: 'tavern-regen-cleanup:' + operationId + ':' + index, role: 'user', content: [], source: { kind: 'plugin:dsh-tavern-regeneration-abort' } },
       range: { start: run.start, end: run.end, sourceEventSeqs: [...run.shadowedSeqs] }
     }))
   }
@@ -434,7 +437,7 @@ function turnIntervals(events) {
   const starts = new Map(), intervals = []
   for (const event of events) {
     if (!event) continue
-    const turn = Number(event.data?.turn)
+    const turn = storyEventTurn(event)
     if (event.type === 'turn/start') {
       // A turn that never ended before the next one began was cut off (the
       // server stopped mid-reply): it failed, and its input must not ride along.
@@ -503,7 +506,7 @@ export function clearFailedTurnSurface(input) {
     id: makeId(),
     role: 'user',
     content: [],
-    source: { kind: 'plugin', plugin: 'dsh-tavern-failed-turn-cleanup' }
+    source: { kind: 'plugin:dsh-tavern-failed-turn-cleanup' }
   }, { start: cleanup.start, end: cleanup.end, sourceEventSeqs: cleanup.shadowedSeqs })
   return cleanup.shadowedSeqs.length
 }
@@ -522,7 +525,7 @@ export function clearRegenerationAttemptSurface(input) {
     inScope: event => event.seq >= eventStart,
     // Failed cleanup may precede regeneration abort; convert it once to the
     // abort marker, then retries are true no-ops (including after a flush error).
-    ignore: event => event?.data?.source?.plugin === 'dsh-tavern-regeneration-abort',
+    ignore: event => sourceProducerName(event?.data?.source) === 'dsh-tavern-regeneration-abort',
     message: '重新生成临时消息不是连续区间，无法安全清理'
   })
   if (!cleanup) return 0
@@ -531,7 +534,7 @@ export function clearRegenerationAttemptSurface(input) {
     id: makeId(),
     role: 'user',
     content: [],
-    source: { kind: 'plugin', plugin: 'dsh-tavern-regeneration-abort' }
+    source: { kind: 'plugin:dsh-tavern-regeneration-abort' }
   }, { start: cleanup.start, end: cleanup.end, sourceEventSeqs: cleanup.shadowedSeqs })
   return cleanup.shadowedSeqs.length
 }
@@ -557,7 +560,7 @@ function unclearedFailedTail(chat, events, nodes) {
   if (tail === undefined) return []
   const latest = (chat.messages || []).findLast(message => message?.role === 'assistant')
   const lastEvent = eventAt(events, tail)
-  if (lastEvent?.type === 'assistant/message' && (Number(lastEvent.data?.turn) === Number(latest?.turn) || Number(lastEvent.data?.turn) === Number(chat.regeneratedDshTurns?.[String(latest?.turn)]))) return []
+  if (lastEvent?.type === 'assistant/message' && (storyEventTurn(lastEvent) === Number(latest?.turn) || storyEventTurn(lastEvent) === Number(chat.regeneratedDshTurns?.[String(latest?.turn)]))) return []
   const committed = new Set((chat.messages || []).filter(message => message?.role === 'assistant').map(message => Number(message.turn)))
   for (const turn of Object.values(chat.regeneratedDshTurns || {})) committed.add(Number(turn))
   const intervals = turnIntervals(events)
@@ -569,7 +572,7 @@ function unclearedFailedTail(chat, events, nodes) {
     if (isRollbackAssistantTombstone(event, events) || isRollbackUserTombstone(event) || isForegroundContext(event)) { remaining.pop(); continue }
     const origin = ownership.firstOrigin(event?.seq)
     const interval = intervals.findLast(item =>
-      (event?.type === 'assistant/message' && Number(event.data?.turn) === item.turn) ||
+      (event?.type === 'assistant/message' && storyEventTurn(event) === item.turn) ||
       (origin > item.start && origin < item.end))
     if (!interval?.failed || committed.has(interval.turn)) break
     const plan = planFailedTurnSurface({ events, nodes, turn: interval.turn, ownership })

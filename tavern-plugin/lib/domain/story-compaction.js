@@ -1,4 +1,5 @@
 import { sessionEvents } from './session-events.js'
+import { isPluginSource, isProducerSource } from './message-source.js'
 
 export function usesStoryCompaction(chat) {
   return chat !== null && typeof chat === 'object' && ['story', 'script', 'writing'].includes(chat.mode)
@@ -13,7 +14,7 @@ export function createStoryCompactionRequest(options, instruction) {
   const message = options.messages[lastIndex]
   const source = message && message.source
   if (message === null || typeof message !== 'object' || message.role !== 'user' ||
-    source === null || typeof source !== 'object' || source.plugin !== 'dsh-compaction-basic') return options
+    source === null || typeof source !== 'object' || !isProducerSource(source, 'dsh-compaction-basic')) return options
 
   const messages = options.messages.slice()
   messages[lastIndex] = Object.freeze(Object.assign({}, message, {
@@ -36,7 +37,7 @@ const transcriptHeader = count => `【最近 ${count} 轮原文（未压缩，�
 
 const textOf = message => (Array.isArray(message?.content) ? message.content : [])
   .filter(block => block?.type === 'text' && typeof block.text === 'string').map(block => block.text).join('\n').trim()
-const isPlayerMessage = message => message?.role === 'user' && message.source?.kind !== 'plugin' && textOf(message) !== ''
+const isPlayerMessage = message => message?.role === 'user' && !isPluginSource(message.source) && textOf(message) !== ''
 
 /** A message as story units: itself (without a carried transcript) plus that transcript's rounds. */
 function storyUnits(message) {

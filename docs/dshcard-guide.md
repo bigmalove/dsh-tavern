@@ -1,6 +1,6 @@
 # DSH 人物卡制作指南
 
-> 目前只有 DSH Tavern 测试版（官方 DeepSeek Harness 0.2.1，测试分支 `0.2.1版本`）能导入 DSH 人物卡，稳定版还不支持。当前格式版本为 1。
+> 需要当前版本的 DSH Tavern（适配 DSH 0.2.1）才能导入 DSH 人物卡，稳定版（DSH 0.1.5）不支持。当前格式版本为 1。
 
 ## DSH 人物卡是什么
 
@@ -37,7 +37,7 @@ DSH 人物卡（后缀 `.dshcard`）是一张普通的 Character Card V3，加�
 
 ## 从最小示例开始
 
-仓库里的 [examples/dshcard-hello](https://github.com/flizzywine/dsh-tavern/tree/0.2.1%E7%89%88%E6%9C%AC/examples/dshcard-hello) 是一张几十 KB 的完整示例卡「阿芙拉」：一张立绘、一个约 50 行的卡内插件。插件每轮在后台结算里顺带判断这一幕的氛围（温暖、平静、紧张、夜深），自己画的舞台按氛围换底色；本局设置里有一个开关可以关掉它。
+仓库里的 [examples/dshcard-hello](https://github.com/flizzywine/dsh-tavern/tree/main/examples/dshcard-hello) 是一张几十 KB 的完整示例卡「阿芙拉」：一张立绘、一个约 50 行的卡内插件。插件每轮在后台结算里顺带判断这一幕的氛围（温暖、平静、紧张、夜深），自己画的舞台按氛围换底色；本局设置里有一个开关可以关掉它。
 
 ```sh
 node examples/dshcard-hello/build.mjs
@@ -129,7 +129,7 @@ node examples/dshcard-hello/build.mjs
 
 ## 卡内插件
 
-卡内插件就是普通的 DSH Tavern 插件，写法和接口与全局插件相同，见[插件开发：接口参考](https://github.com/flizzywine/dsh-tavern/blob/0.2.1%E7%89%88%E6%9C%AC/docs/plugin-api.md)。区别只在于它跟着卡走：
+卡内插件就是普通的 DSH Tavern 插件，写法和接口与全局插件相同，见[插件开发：接口参考](https://github.com/flizzywine/dsh-tavern/blob/main/docs/plugin-api.md)。区别只在于它跟着卡走：
 
 - 导入卡时随卡启用，不需要玩家另装；删除卡时一起卸载。
 - 只在这张卡的局里生效：回调只对这张卡的局触发，带别的局的 `gameId` 调接口会被拒绝，浏览器侧注册的界面只在这张卡的局里出现。
@@ -144,7 +144,7 @@ node examples/dshcard-hello/build.mjs
 | `index.mjs` | 宿主侧：在 Tavern 进程里运行，可以读写每轮数据、参与后台结算 |
 | `client.js` | 浏览器侧：画舞台、面板，由页面直接加载，不需要打包 |
 
-示例卡的 [plugin](https://github.com/flizzywine/dsh-tavern/tree/0.2.1%E7%89%88%E6%9C%AC/examples/dshcard-hello/plugin) 文件夹可以直接复制改。
+示例卡的 [plugin](https://github.com/flizzywine/dsh-tavern/tree/main/examples/dshcard-hello/plugin) 文件夹可以直接复制改。
 
 ### 常用写法
 
@@ -188,13 +188,13 @@ node examples/dshcard-hello/build.mjs
 
 ## 体积与分发
 
-- 图片用 WebP，音乐用 Ogg（Opus 或 Vorbis），体积通常能减半以上。大肥鱼的分发版就是这样从 270 MB 压到 90 MB，压缩脚本见 [examples/dafeiyu-card/compress.mjs](https://github.com/flizzywine/dsh-tavern/blob/0.2.1%E7%89%88%E6%9C%AC/examples/dafeiyu-card/compress.mjs)。
+- 图片用 WebP，音乐用 Ogg（Opus 或 Vorbis），体积通常能减半以上。大肥鱼的分发版就是这样从 270 MB 压到 90 MB，压缩脚本见 [examples/dafeiyu-card/compress.mjs](https://github.com/flizzywine/dsh-tavern/blob/main/examples/dafeiyu-card/compress.mjs)。
 - 大文件建议放 GitHub Releases（单文件上限 2 GB），再配一份国内网盘；Discord 免费用户单文件只有 10 MB。
 - 用到别人的素材，先取得授权，按许可要求署名，并在 `credits/` 里注明你做了哪些改动。
 
 ## 参考
 
 - [开发实例：大肥鱼](dshcard-tutorial.md)：按动手顺序拆解大肥鱼：卡片结构、卡内插件怎么导演和画舞台、打包与调试。
-- [大肥鱼样板卡](https://github.com/flizzywine/dsh-tavern/releases/tag/dafeiyu-card-v1)：4 个素材包、导演插件、全身立绘舞台、背景音乐、本局配置项，源码在 [examples/dafeiyu-card](https://github.com/flizzywine/dsh-tavern/tree/0.2.1%E7%89%88%E6%9C%AC/examples/dafeiyu-card)。
-- [格式设计](https://github.com/flizzywine/dsh-tavern/blob/0.2.1%E7%89%88%E6%9C%AC/docs/design/dsh-card-format.md)：为什么这样设计、存储和安全的细节。
-- [插件开发：接口参考](https://github.com/flizzywine/dsh-tavern/blob/0.2.1%E7%89%88%E6%9C%AC/docs/plugin-api.md)：每个接口的参数和行为。
+- [大肥鱼样板卡](https://github.com/flizzywine/dsh-tavern/releases/tag/dafeiyu-card-v1)：4 个素材包、导演插件、全身立绘舞台、背景音乐、本局配置项，源码在 [examples/dafeiyu-card](https://github.com/flizzywine/dsh-tavern/tree/main/examples/dafeiyu-card)。
+- [格式设计](https://github.com/flizzywine/dsh-tavern/blob/main/docs/design/dsh-card-format.md)：为什么这样设计、存储和安全的细节。
+- [插件开发：接口参考](https://github.com/flizzywine/dsh-tavern/blob/main/docs/plugin-api.md)：每个接口的参数和行为。

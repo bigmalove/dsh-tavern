@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -150,7 +150,7 @@ test('上传：原始请求体落盘，超过上限拒绝；取走后可删除�
   await assert.rejects(uploads.take(old.id), /不存在/)
 })
 
-test('卡内插件：导入时放在一边不加载；启用后进 plugins/ 并标明所属的卡；同名插件冲突时拒绝；停用、删卡后移除', async t => {
+test('卡内插件：导入时放在一边不加载；启用后进 plugins/；内容相同的多张卡共用一份，最后一张放手才删；同名不同内容拒绝；改名跟随', async t => {
   const { createCardPlugins } = await import('../tavern-plugin/lib/domain/card-plugins.js')
   const { existsSync } = await import('node:fs')
   const dir = await temp(t)
@@ -168,14 +168,79 @@ test('卡内插件：导入时放在一边不加载；启用后进 plugins/ 并�
 
   await plugins.enable({ cardKey: 'k'.repeat(64), cardPath: 'cards/鱼.png', plugins: staged })
   const scope = await plugins.scope()
-  assert.equal(scope.get('dsh-card-fish-director').cardPath, 'cards/鱼.png')
+  assert.deepEqual(scope.get('dsh-card-fish-director').cards, ['cards/鱼.png'])
   const folder = scope.get('dsh-card-fish-director').folder
   assert.match(await readFile(join(pluginsDir, folder, 'index.mjs'), 'utf8'), /apply/)
-  await assert.rejects(plugins.enable({ cardKey: 'j'.repeat(64), cardPath: 'cards/鱼 (1).png', plugins: staged }), /同名插件/, '同一张卡导入两份，只能启用一份')
-  await plugins.disable({ cardKey: 'k'.repeat(64), plugins: staged })
+
+  // 同一张卡导入两份：内容相同的插件只装一份，两张卡共用；最后一张放手才删。
+  await plugins.enable({ cardKey: 'j'.repeat(64), cardPath: 'cards/鱼 (1).png', plugins: staged })
+  assert.deepEqual((await plugins.scope()).get('dsh-card-fish-director').cards, ['cards/鱼.png', 'cards/鱼 (1).png'])
+  assert.deepEqual((await readdir(pluginsDir)).length, 1, '共用同一份安装')
+  await plugins.disable({ cardPath: 'cards/鱼.png', plugins: staged })
+  assert.deepEqual((await plugins.scope()).get('dsh-card-fish-director').cards, ['cards/鱼 (1).png'])
+  assert.equal(existsSync(join(pluginsDir, folder)), true, '还有卡在用，不删')
+
+  // 同名但内容不同（新版本、改过的副本）：宿主一个名字只能加载一份，拒绝并说明是哪张卡占着。
+  const changed = [{ ...staged[0], sha256: 'f'.repeat(64) }]
+  await assert.rejects(plugins.enable({ cardKey: 'k'.repeat(64), cardPath: 'cards/鱼.png', plugins: changed }), /同名插件.*鱼 \(1\)\.png.*内容不同/)
+
+  // 卡改名：插件跟着走，暂存的副本也跟着走。
+  await plugins.movePath('cards/鱼 (1).png', 'cards/大鱼.png')
+  assert.deepEqual((await plugins.scope()).get('dsh-card-fish-director').cards, ['cards/大鱼.png'])
+  await plugins.remove({ cardKey: 'j'.repeat(64), cardPath: 'cards/大鱼.png', plugins: staged })
+  assert.equal(existsSync(join(pluginsDir, folder)), false, '最后一张卡放手后删除')
   assert.equal((await plugins.scope()).size, 0)
+
+  // 同名的用户自装插件不让位。
+  await mkdir(join(pluginsDir, 'mine'), { recursive: true })
+  await writeFile(join(pluginsDir, 'mine', 'package.json'), JSON.stringify({ name: 'dsh-card-fish-director' }))
+  await assert.rejects(plugins.enable({ cardKey: 'k'.repeat(64), cardPath: 'cards/鱼.png', plugins: staged }), /同名插件.*plugins\/mine/)
+  await rm(join(pluginsDir, 'mine'), { recursive: true })
+
+  // 旧安装（按卡命名的目录，标记只写一张卡）照样认得，可以共用和停用。
+  const legacy = join(pluginsDir, 'card-kkkkkkkkkk-director')
+  await mkdir(legacy, { recursive: true })
+  await writeFile(join(legacy, 'package.json'), JSON.stringify({ name: 'dsh-card-fish-director' }))
+  await writeFile(join(legacy, '.dsh-card.json'), JSON.stringify({ cardPath: 'cards/鱼.png', sha256: staged[0].sha256 }))
+  await plugins.enable({ cardKey: 'j'.repeat(64), cardPath: 'cards/鱼 (1).png', plugins: staged })
+  assert.deepEqual((await plugins.scope()).get('dsh-card-fish-director'), { cards: ['cards/鱼.png', 'cards/鱼 (1).png'], folder: 'card-kkkkkkkkkk-director' })
+  await plugins.disable({ cardPath: 'cards/鱼.png', plugins: staged })
+  await plugins.disable({ cardPath: 'cards/鱼 (1).png', plugins: staged })
+  assert.equal(existsSync(legacy), false)
+
   await plugins.enable({ cardKey: 'k'.repeat(64), cardPath: 'cards/鱼.png', plugins: staged })
-  await plugins.remove({ cardKey: 'k'.repeat(64), plugins: staged })
-  assert.equal(existsSync(join(pluginsDir, folder)), false)
+  await plugins.remove({ cardKey: 'k'.repeat(64), cardPath: 'cards/鱼.png', plugins: staged })
   assert.equal(existsSync(join(dir, 'card-plugins', 'k'.repeat(64))), false)
+})
+
+test('开局默认：dsh.json 指向包内预设，只认少数几项设置，其余忽略', async t => {
+  const { startSettings } = await import('../tavern-plugin/lib/domain/card-archive.js')
+  const dir = await temp(t)
+  const dsh = { format: 'dshcard', formatVersion: 1, packs: [], plugins: [], defaults: { preset: 'presets/舞台.json',
+    settings: { statusBarPlacement: 'body', backgroundTasks: { posture: true, variables: 'x' }, webSearch: false, backgroundModel: { provider: 'p' }, playerName: '作者' } } }
+  const zip = await openZipFile(await zipFile(dir, 'a.dshcard', { 'card.json': '{"spec":"chara_card_v3","data":{"name":"鱼"}}', 'dsh.json': JSON.stringify(dsh), 'presets/舞台.json': '{"prompts":[]}' }))
+  const archive = await readCardArchive(zip)
+  await zip.close()
+  assert.deepEqual(archive.defaults, { preset: { name: '舞台.json', text: '{"prompts":[]}' }, settings: { statusBarPlacement: 'body', backgroundTasks: { posture: true }, webSearchEnabled: false } })
+  assert.equal(startSettings({ playerName: 'x' }), null)
+  const bad = await openZipFile(await zipFile(dir, 'b.dshcard', { 'card.json': '{}', 'dsh.json': JSON.stringify({ ...dsh, defaults: { preset: '../x.json' } }) }))
+  await assert.rejects(readCardArchive(bad), /defaults\.preset/)
+  await bad.close()
+  const staged = await openZipFile(await zipFile(dir, 'c.dshcard', { 'card.json': '{}', 'dsh.json': JSON.stringify({ ...dsh, defaults: { stage: true } }) }))
+  assert.deepEqual((await readCardArchive(staged)).defaults, { stage: true }, '卡可以要求打开自己的舞台')
+  await staged.close()
+})
+
+test('素材包：插件用零散文件建包，与卡带的包同一存储；路径不安全、重复或空包时拒绝', async t => {
+  const dir = await temp(t)
+  const packs = createAssetPacks({ root: dir, store: memoryStore() })
+  const first = await packs.importFiles([{ path: 'bg/night.png', data: PNG }, { path: 'manifest.json', data: Buffer.from('{}') }], { id: 'stage-bg', format: 'my-director', title: '背景' })
+  assert.equal(first.reused, false)
+  assert.equal(first.pack.format, 'my-director')
+  assert.deepEqual(await readFile((await packs.file('stage-bg', first.pack.contentHash, 'bg/night.png')).path), PNG)
+  assert.equal((await packs.importFiles([{ path: 'manifest.json', data: Buffer.from('{}') }, { path: 'bg/night.png', data: PNG }], { id: 'stage-bg' })).reused, true, '内容相同就复用')
+  for (const bad of ['../x.png', '/x.png', 'a/.hidden', 'a\\b.png', '']) await assert.rejects(packs.importFiles([{ path: bad, data: PNG }], { id: 'p' }), /路径无效/)
+  await assert.rejects(packs.importFiles([{ path: 'a.png', data: PNG }, { path: 'a.png', data: PNG }], { id: 'p' }), /重复/)
+  await assert.rejects(packs.importFiles([{ path: 'a.png', data: 'x' }], { id: 'p' }), /Uint8Array/)
+  await assert.rejects(packs.importFiles([], { id: 'p' }), /空/)
 })

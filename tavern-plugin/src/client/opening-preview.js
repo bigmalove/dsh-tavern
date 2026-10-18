@@ -240,3 +240,36 @@ function retainOpeningPreparation(id, options) {
     host.removeEventListener("focus", renew);
   };
 }
+
+// The opening preview renders card panels inline in the preview frame, while card host scripts run through the
+// preview window proxy whose parent is the frame itself. Panels then dispatch confirm events on the real app
+// document (window.parent.document) where no card listener exists. Mirror those events synchronously into the
+// preview document so preview-scope host scripts can answer them in the same dispatch.
+function installTavernPreviewHostEventRelay(parentWindow, frameWindow) {
+  let parentDocument = null;
+  try { parentDocument = parentWindow && parentWindow.document; } catch (error) { parentDocument = null; }
+  if (!parentDocument || parentDocument === frameWindow.document) return function () {};
+  if (parentDocument.__dshTavernPreviewEventRelay) return parentDocument.__dshTavernPreviewEventRelay.release;
+  const originalDispatch = parentDocument.dispatchEvent;
+  const release = function () {
+    if (Object.getOwnPropertyDescriptor(parentDocument, "dispatchEvent")?.value === dispatch) delete parentDocument.dispatchEvent;
+    delete parentDocument.__dshTavernPreviewEventRelay;
+  };
+  const dispatch = function (event) {
+    let result;
+    try { result = originalDispatch.call(parentDocument, event); } finally {
+      try {
+        const detail = event && event.detail;
+        if (event && typeof event.type === "string" && !String(event.type).startsWith("dsh-") && detail && typeof detail === "object") {
+          frameWindow.document.dispatchEvent(new frameWindow.CustomEvent(event.type, { detail: detail }));
+        }
+      } catch (error) { /* 预览帧已卸载时静默放弃 */ }
+    }
+    return result;
+  };
+  try {
+    Object.defineProperty(parentDocument, "dispatchEvent", { configurable: true, value: dispatch });
+    parentDocument.__dshTavernPreviewEventRelay = { release: release };
+  } catch (error) { return function () {}; }
+  return release;
+}

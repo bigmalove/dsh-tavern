@@ -267,6 +267,7 @@ export function createStoryTimeline(options = {}) {
       role: participantKey,
       sessionId: str(current.sessionId),
       rewindTo,
+      ...(current.formatVersion ? { formatVersion: current.formatVersion } : {}),
       lifetime: participantKey === 'background' ? participantLifetime(current.lifetime) : (current.lifetime || 'one-shot'),
       syncedRevision: current.syncedRevision === undefined ? null : current.syncedRevision
     }
@@ -294,6 +295,7 @@ export function createStoryTimeline(options = {}) {
       branchId: chat.timeline.branchId,
       syncedRevision: participant.identityOnly ? null : chat.timeline.revision,
       boundary: Number.isSafeInteger(participant.boundary) ? participant.boundary : null,
+      ...(participant.formatVersion ? { formatVersion: participant.formatVersion } : {}),
       status: 'current',
       rewindTo: null,
       updatedAt: now()
@@ -308,6 +310,7 @@ export function createStoryTimeline(options = {}) {
         sessionId: str(participant.sessionId), mode: lifetime === 'chat' ? 'continuable' : 'one-shot',
         branchId: chat.timeline.branchId, syncedRevision: chat.timeline.revision,
         boundary: Number.isSafeInteger(participant.boundary) ? participant.boundary : null,
+        ...(participant.formatVersion ? { formatVersion: participant.formatVersion } : {}),
         updatedAt: now()
       }
     }
@@ -316,11 +319,11 @@ export function createStoryTimeline(options = {}) {
   function participantCheckpointSource(value) {
     const participant = object(value)
     if (str(participant.sessionId) !== '' && Number.isSafeInteger(participant.boundary)) {
-      return { sessionId: participant.sessionId, boundary: participant.boundary }
+      return { sessionId: participant.sessionId, boundary: participant.boundary, ...(participant.formatVersion ? { formatVersion: participant.formatVersion } : {}) }
     }
     const pending = object(participant.forkFrom)
     if (str(pending.sessionId) !== '' && Number.isSafeInteger(pending.boundary)) {
-      return { sessionId: pending.sessionId, boundary: pending.boundary }
+      return { sessionId: pending.sessionId, boundary: pending.boundary, ...(pending.formatVersion ? { formatVersion: pending.formatVersion } : {}) }
     }
     return null
   }
@@ -471,6 +474,7 @@ export function createStoryTimeline(options = {}) {
         branchId,
         syncedRevision: null,
         boundary: source === null ? null : source.boundary,
+        ...(source?.formatVersion ? { formatVersion: source.formatVersion } : {}),
         status: source === null ? 'needs-session' : 'needs-rewind',
         rewindTo: source === null ? null : source.boundary,
         updatedAt: now()
@@ -492,18 +496,21 @@ export function createStoryTimeline(options = {}) {
   }
 
   // Prose changed under the resident background Agents: they must rewind to
-  // the checkpoint's boundary before their next run sees the new text.
+  // the checkpoint's boundary before their next run sees the new text. All
+  // rewind sites share this rule so a participant is never left with a stale
+  // boundary or a formatVersion the checkpoint never had.
   function rewindParticipants(chat) {
     const checkpoint = chat.timeline.checkpoints.at(-1)
     for (const [role, participant] of Object.entries(chat.timeline.participants)) {
       if (!persistentParticipant(participant.lifetime)) continue
       const previous = object(checkpoint?.participants?.[role])
       const source = participantCheckpointSource(previous)
-      const needsSession = participant.requiresNewSessionOnRewind === true || !str(participant.sessionId)
-      const boundary = source?.sessionId === participant.sessionId ? source.boundary : -1
+      const needsSession = !str(participant.sessionId)
+      const boundary = participant.requiresNewSessionOnRewind !== true && source?.sessionId === participant.sessionId ? source.boundary : -1
       chat.timeline.participants[role] = {
         ...participant, status: needsSession ? 'needs-session' : 'needs-rewind',
         sessionId: needsSession ? '' : participant.sessionId,
+        formatVersion: source?.formatVersion || 3,
         boundary: needsSession ? null : boundary, rewindTo: needsSession ? null : boundary,
         syncedRevision: null, updatedAt: now()
       }
@@ -733,6 +740,7 @@ export function createStoryTimeline(options = {}) {
         participants[role] = {
           role, lifetime: 'chat', sessionId: source === null ? '' : source.sessionId, branchId, syncedRevision: null,
           boundary: source === null ? null : source.boundary,
+          ...(source?.formatVersion ? { formatVersion: source.formatVersion } : {}),
           status: source === null ? 'needs-session' : 'needs-rewind', rewindTo: source === null ? null : source.boundary,
           updatedAt: now()
         }

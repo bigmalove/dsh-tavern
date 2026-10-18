@@ -21,6 +21,7 @@ ZIP 压缩包，后缀 `.dshcard`。分四块：卡本体（兼容 CHARX）、�
 ├─ card.json              Character Card V3，和 CHARX 完全相同；酒馆助手脚本也在这里
 ├─ assets/<名字>/         所有素材，一个子目录一个包，结构沿用 Galgame 分支的 dsh-asset-pack（manifest.json、media/、credits/……）
 ├─ plugins/<插件名>/      随卡 DSH 插件：package.json、index.mjs、client.js、assets/
+├─ presets/<名字>.json    （可选）卡推荐的预设（SillyTavern 预设 JSON），见下文「开局默认」；文件名用 ASCII，预设库里显示的名字写在 `title`
 └─ dsh.json               DSH 清单（见下）
 ```
 
@@ -74,6 +75,25 @@ ZIP 压缩包，后缀 `.dshcard`。分四块：卡本体（兼容 CHARX）、�
 - `plugins[].purpose`、`uses`：给玩家看的用途和用到的能力。**这是声明，不是沙箱**：Tavern 能强制的只有插件接口层面（见下文作用范围），Node 层面的文件和网络访问挡不住。
 - `packs`：素材包。`format` 说明由谁解读（例如 `dsh-asset-pack` 由 Galgame 插件解读），Tavern 只认 `format`、文件与摘要、署名许可、包 id。多张卡共用同一个包时按 `contentHash` 去重；包没附带时按 `url` 下载（只接受公开 HTTPS），下载前要玩家确认。插件给这张卡写的素材也存成一个包，归属是这个插件。
 
+## 开局默认
+
+卡可以带上作者推荐的开局设置，写在 `dsh.json` 的 `defaults` 里：
+
+```json
+"defaults": {
+  "stage": true,
+  "preset": { "path": "presets/dafeiyu-stage.json", "title": "大肥鱼 · 舞台演出" },
+  "settings": { "statusBarPlacement": "sidebar", "backgroundTasks": { "posture": true, "variables": true }, "webSearch": false, "sceneImages": false }
+}
+```
+
+- **只是新局的初始值**：导入卡不改全局设置。用这张卡开新局时，卡带的预设和设置作为这一局的初始值，卡没提到的项沿用玩家的全局默认；开局后玩家在本局设置里随便改。已经在玩的局不受影响。
+- **舞台**：舞台按卡开关，普通人物卡默认没有舞台。`"stage": true` 表示这张卡导入后就打开舞台（立绘、背景、逐句演出，在酒馆状态顶部）；玩家可在卡片详情里关掉。打开舞台的卡，这张卡的局会顺带标注台词的说话人和情绪，不需要玩家打开全局的「对话头像」。
+- **预设**：导入时放进预设库（重名时另取名字，内容相同的直接复用），新局用它当本局预设。
+- **只认少数几项设置**：状态栏位置、姿势与变量结算、联网搜索、场景生图。其余字段忽略，避免卡和版本绑死。
+- **不放玩家自己的东西**：模型、API、推理强度、玩家称呼、长期偏好都不由卡决定。
+- 导入结果会写明"开新局时默认使用卡里的预设和推荐设置"。
+
 ## 两种代码
 
 | | 酒馆助手脚本 | 随卡 DSH 插件 |
@@ -99,6 +119,7 @@ ZIP 压缩包，后缀 `.dshcard`。分四块：卡本体（兼容 CHARX）、�
   - 主动调用（`getTurn`、`saveTurnData`、`runTask`……）带别的局的 `gameId` 一律拒绝；
   - 浏览器侧注册的界面（面板、舞台画面、正文标记）只在打开这张卡的局时出现；
   - 人物卡库接口（`listCards`、`updateCardRaw`）只能读写本卡。
+- 在这张卡的局里，随卡插件是这一局的一部分：总是启用，不出现在本局设置的「插件」开关里，它的结算任务也不能单独关掉或调序。要整体停用，在卡片详情里停用卡内插件。
 - 插件名在 Tavern 内部加上卡的前缀（例如 `card:<本机卡编号>/dafeiyu-director`），避免和全局插件、其他卡的插件重名。
 - 同一张卡被导入两份时，是两张卡，各自的插件互不相干。
 

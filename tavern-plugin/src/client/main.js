@@ -53,9 +53,10 @@ window.__ModuleLoader__.load({
 
 		// @include text-resource-file.js
 
-		/** Import one card file: archives (CHARX, DSH cards) go up as raw files, others as parsed JSON. */
+		/** Import one card file: PNG and JSON go as parsed JSON; archives (CHARX, DSH cards) and other
+		 * formats (a plugin's importer, tavern.cardImporter) go up as raw files. */
 		async function importTavernCardFile(file, call) {
-			if (/\.(charx|dshcard)$/i.test(String(file.name || ""))) {
+			if (!/\.(png|json)$/i.test(String(file.name || "")) && /\.[^./\\]+$/.test(String(file.name || ""))) {
 				const response = await fetch("/api/dsh-tavern/card-upload", { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file });
 				let reply = null;
 				try { reply = await response.json(); } catch (_error) {}
@@ -69,6 +70,7 @@ window.__ModuleLoader__.load({
 		function tavernCardAssetNotice(assets, card) {
 			const extra = [];
 			if (card && card.plugins && card.plugins.length) extra.push(card.pluginError ? "卡内插件没有启用：" + card.pluginError : "卡内插件 " + card.plugins.map(function (plugin) { return plugin.name; }).join("、") + " 已启用，刷新页面后完整生效");
+			if (card && card.startDefaults) extra.push("用这张卡开新局时默认" + (card.startDefaults.preset ? "使用卡里的预设「" + card.startDefaults.preset.replace(/\.json$/i, "") + "」" + (card.startDefaults.settings ? "和推荐设置" : "") : "使用卡里的推荐设置") + "，开局后可在本局设置里改");
 			if (card && card.packs && card.packs.length) extra.push("素材包 " + card.packs.map(function (pack) { return pack.title || pack.id; }).join("、") + (card.packs.some(function (pack) { return pack.reused; }) ? "（已有的包直接复用）" : ""));
 			const base = tavernCardAssetText(assets);
 			return [base].concat(extra).filter(Boolean).join("；");
@@ -88,6 +90,11 @@ window.__ModuleLoader__.load({
 			return notes.join("；");
 		}
 
+		// No file filter on card import: macOS file dialogs (Chrome, Safari) grey out .dshcard and
+		// .charx however the accept list names them, since the system knows no type for them.
+		// The import checks the format and says what it accepts.
+		const TAVERN_CARD_FILE_ACCEPT = undefined;
+
 		function parseCardFile(file) {
 			const name = String(file.name || "");
 			if (name.toLowerCase().endsWith(".charx")) {
@@ -99,7 +106,7 @@ window.__ModuleLoader__.load({
 			return file.arrayBuffer().then(function (buf) {
 				const bytes = new Uint8Array(buf);
 				if (bytes.length <= 8 || ascii(bytes, 0, 8) !== "\x89PNG\r\n\x1a\n") {
-					throw new Error("无法识别的角色卡文件（需要 PNG、JSON 或 CHARX）");
+					throw new Error("无法识别的人物卡文件（需要 PNG、JSON、CHARX 或 DSH 人物卡 .dshcard）");
 				}
 				let off = 8;
 				while (off + 8 <= bytes.length) {
@@ -371,6 +378,7 @@ window.__ModuleLoader__.load({
 		// @include-domain indexed-array.js
 		// @include-domain ordered-numeric-index.js
 		// @include modules/session-view-sync.js
+		// @include modules/session-compat.js
 		const beginSessionViewRead = createSessionViewReader();
 
 		function rpc(method, args, sessionId, requestOptions) {
@@ -508,16 +516,21 @@ window.__ModuleLoader__.load({
             const operation = (async function () {
                 const deadline = Date.now() + 10000;
                 for (;;) {
-                    try { ctx.betterSidebar.openTab(seed, scope); return; }
+                    try { ctx.betterSidebar.openTab(seed, scope); return true; }
                     catch (error) {
                         // The session list can restore before DSH mounts its native
                         // sidebar seat. Retry this specific readiness error only.
                         if (!/sidebarRight: no session surface is mounted/.test(String(error.message || error)) || Date.now() >= deadline) throw error;
                         await new Promise(resolve => window.setTimeout(resolve, 100));
-                        if (ctx.sessions.list.getSnapshot().current !== scope.sessionId) return;
+                        // 0.2.0 没有顶层 current，主会话只在 byId 行上以 mainView retain
+                        // 表示；0.1.5 才用快照的 current。会话已切换则这次重试打开的 tab
+                        // 不再属于它。
+                        const snapshotNow = ctx.sessions.list.getSnapshot();
+                        const main = Object.values(snapshotNow.byId || {}).find(function (row) { return row && row.retainedBy && (row.retainedBy.mainView ?? 0) > 0; });
+                        if (main ? main.id !== scope.sessionId : snapshotNow.current !== scope.sessionId) return false;
                     }
                 }
-            })().catch(error => tavernErrorHub.report("打开酒馆侧栏", error)).finally(() => tavernSidebarOpens.delete(key));
+            })().catch(error => { tavernErrorHub.report("打开酒馆侧栏", error); return false; }).finally(() => tavernSidebarOpens.delete(key));
             tavernSidebarOpens.set(key, operation);
             return operation;
         }
@@ -775,6 +788,8 @@ window.__ModuleLoader__.load({
 
 // @include features/speech.js
 
+// @include features/music.js
+
 // @include features/cast-presentation.js
 
 // @include features/cast-stage.js
@@ -1022,6 +1037,14 @@ window.__ModuleLoader__.load({
 				}, function () {});
 				return function () { active = false; if (typeof dispose === "function") dispose(); };
 			}, "dsh-tavern: scene image settings section");
+			ctx.effect(function () {
+				return slots.inject("settings.section", function () { return slots.register({
+					name: "settings.section",
+					id: "dsh-tavern-speech",
+					order: 112,
+					label: function () { return "配音"; }
+				}, function () { return React.createElement("div", { className: "dsh-tavern-settings-section dsh-tavern-global-settings" }, React.createElement(TavernSpeechSettings, null)); }); });
+			}, "dsh-tavern: speech settings section");
 
 			ctx.effect(function () {
 				const dispose = ctx.betterSidebar.registerTab({ id: "dsh-tavern:system-prompts", title: "系统提示词", order: 5, single: true, component: SystemPromptSidebarTab });
@@ -1115,6 +1138,9 @@ window.__ModuleLoader__.load({
 		exports.tavernDataChangeAffects = tavernDataChangeAffects;
 		exports.createLiveTavernViewModule = createLiveTavernViewModule;
         exports.createSessionViewReader = createSessionViewReader;
+		exports.createSessionCompat = createSessionCompat;
+		exports.tavernMainSessionId = tavernMainSessionId;
+		exports.sessionListAdapters = sessionListAdapters;
 		exports.applyBodyRegenerationResult = applyBodyRegenerationResult;
 		exports.createTavernCoordinationEventModule = createTavernCoordinationEventModule;
 		exports.createTavernCoordinationConnection = createTavernCoordinationConnection;

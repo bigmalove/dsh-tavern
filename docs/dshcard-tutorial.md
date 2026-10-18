@@ -1,6 +1,6 @@
 # DSH 人物卡开发实例：大肥鱼
 
-> 只有 DSH Tavern 测试版（官方 DeepSeek Harness 0.2.1，测试分支 `0.2.1版本`）能导入 DSH 人物卡。本文的代码都摘自大肥鱼样板卡的实际文件，源码在 [examples/dafeiyu-card](https://github.com/flizzywine/dsh-tavern/tree/0.2.1%E7%89%88%E6%9C%AC/examples/dafeiyu-card)。
+> 需要当前版本的 DSH Tavern（适配 DSH 0.2.1）才能导入 DSH 人物卡，稳定版（DSH 0.1.5）不支持。本文的代码都摘自大肥鱼样板卡的实际文件，源码在 [examples/dafeiyu-card](https://github.com/flizzywine/dsh-tavern/tree/main/examples/dafeiyu-card)。
 
 [DSH 人物卡制作](dshcard-guide.md)讲格式：每个文件、每个字段是什么。这一篇拿[大肥鱼样板卡](https://github.com/flizzywine/dsh-tavern/releases/tag/dafeiyu-card-v1)从头走一遍：一张带 Galgame 式舞台的卡是怎么搭起来的，按动手的顺序讲。
 
@@ -326,9 +326,9 @@ for (const item of beats.slice(0, index + 1)) if (figure && item.kind === 'line'
 
 ## 打包、导入和调试
 
-**打包。** 把文件按上面的结构放好，压成 ZIP，后缀改成 `.dshcard`；压缩时选中这些文件本身，不要连外层文件夹一起压。大肥鱼的 `build.mjs` 是从 Galgame 分支的卡包转换过来的，只适用于它自己；做新卡照着[最小示例的 build.mjs](https://github.com/flizzywine/dsh-tavern/blob/0.2.1%E7%89%88%E6%9C%AC/examples/dshcard-hello/build.mjs) 写，几十行。
+**打包。** 把文件按上面的结构放好，压成 ZIP，后缀改成 `.dshcard`；压缩时选中这些文件本身，不要连外层文件夹一起压。大肥鱼的 `build.mjs` 是从 Galgame 分支的卡包转换过来的，只适用于它自己；做新卡照着[最小示例的 build.mjs](https://github.com/flizzywine/dsh-tavern/blob/main/examples/dshcard-hello/build.mjs) 写，几十行。
 
-**压体积。** 图片转 WebP、音乐转 Ogg Opus。大肥鱼用 [compress.mjs](https://github.com/flizzywine/dsh-tavern/blob/0.2.1%E7%89%88%E6%9C%AC/examples/dafeiyu-card/compress.mjs) 从 270 MB 压到 90 MB，还在每个素材包的 `credits/` 里写了一份改动说明，素材许可要求注明改动。
+**压体积。** 图片转 WebP、音乐转 Ogg Opus。大肥鱼用 [compress.mjs](https://github.com/flizzywine/dsh-tavern/blob/main/examples/dafeiyu-card/compress.mjs) 从 270 MB 压到 90 MB，还在每个素材包的 `credits/` 里写了一份改动说明，素材许可要求注明改动。
 
 **导入。** 人物卡库 → 导入人物卡 → 选文件，导入后刷新页面，插件的浏览器侧才会加载。
 

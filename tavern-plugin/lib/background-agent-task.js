@@ -6,7 +6,7 @@ import { projectWorldbookFilterContext } from './domain/worldbook-filter-context
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { prependSystemInstruction } from './domain/system-append.js'
 import { rewindBackgroundSurface } from './domain/background-surface.js'
-import { sessionEvents } from './domain/session-events.js'
+import { releaseOpeningTurn, sessionEvents } from './domain/session-events.js'
 import { randomUUID } from 'node:crypto'
 import { readSceneImageSystemInstruction } from './scene-image-prompts.js'
 import { CHARACTER_DESIGN_READ_TOOL } from './domain/character-design-document.js'
@@ -371,7 +371,7 @@ export function createBackgroundAgentTask(options) {
 
   // Hide the latest task (its request and everything after) from the model's
   // surface in the same Session; raw events stay for the trace. Fixed seeds remain.
-  async function undoLastTask(session, traceSessionId) {
+  async function undoLastTask(session, traceSessionId, agent) {
     const events = new Map(sessionEvents(session).map(event => [event.seq, event]))
     const nodes = Array.isArray(session?.surface?.nodes) ? session.surface.nodes : []
     const start = nodes.findLast(seq => {
@@ -379,7 +379,7 @@ export function createBackgroundAgentTask(options) {
       return event?.type === 'user/message' && !String(event.data?.id || '').startsWith('tavern-session-prefix:')
     })
     if (start === undefined) return { traceSessionId, undone: false }
-    try { rewindBackgroundSurface(session, start - 1) }
+    try { rewindBackgroundSurface(session, start - 1, agent) }
     catch (error) { throw new Error('撤销失败，对话未改变。原因：' + str(error?.message || error), { cause: error }) }
     if (typeof options.flushSession === 'function') await options.flushSession(session)
     return { traceSessionId, undone: true }
@@ -387,9 +387,9 @@ export function createBackgroundAgentTask(options) {
 
   async function execute({ agent, state, traceSessionId, persistent }, input) {
     state.session = agent.session
-    if (input.undoLastTask === true) return undoLastTask(agent.session, traceSessionId)
+    if (input.undoLastTask === true) return undoLastTask(agent.session, traceSessionId, agent)
     const runtimeInput = state.input
-    try { rewindBackgroundSurface(agent.session, input.rewindTo) }
+    try { rewindBackgroundSurface(agent.session, input.rewindTo, agent, input.rewindFormatVersion || 3) }
     catch (error) {
       const failure = new Error('后台历史回退失败，本次任务已停止，未基于旧上下文继续执行。原因：' + str(error?.message || error), { cause: error })
       failure.code = 'BACKGROUND_REWIND_FAILED'
@@ -418,6 +418,9 @@ export function createBackgroundAgentTask(options) {
         const background = existing && revision <= existing.revision ? existing.text : typeof options.resolveStablePrefix === 'function'
           ? await options.resolveStablePrefix(input) : input.backgroundContext
         const prefix = await ensureSessionStablePrefix(agent.session, background, options.stablePrefixStorage, revision)
+        // A background session never appends a greeting, so the turn reserved
+        // with its system head must close before this task opens its own turn.
+        releaseOpeningTurn(agent.session, agent)
         if (prefix && prefix.event !== existing?.event && typeof options.flushSession === 'function') await options.flushSession(agent.session)
       }
       // The filter reuses the last projection (or makes the first one after a restart) so the
@@ -449,7 +452,7 @@ export function createBackgroundAgentTask(options) {
         id: randomUUID(),
         role: 'user',
         content: [{ type: 'text', text: taskText }],
-        source: { kind: 'plugin', plugin: 'dsh-tavern', ...(systemUpdate ? { trace: cardSystemPromptSource(systemUpdate) } : {}), ...(snapshot ? { worldbookSnapshot: snapshot } : {}), ...(scriptContext?.body ? {
+        source: { kind: 'plugin:dsh-tavern', ...(systemUpdate ? { trace: cardSystemPromptSource(systemUpdate) } : {}), ...(snapshot ? { worldbookSnapshot: snapshot } : {}), ...(scriptContext?.body ? {
           candidateScriptWindow: { version: 1, start: taskText.indexOf(scriptContext.body), length: scriptContext.body.length, digest: scriptContext.digest }
         } : {}), ...(filterContext ? {
           worldbookFilterPayload: { version: 1, start: taskText.indexOf(filterContext.payloadText), length: filterContext.payloadText.length }

@@ -162,6 +162,13 @@ export async function createInitializationNative(bootPath, { preset, contextWind
       target.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: '继续。' }], source: { kind: 'human' } })
       await target.agent.whenIdle()
     },
+    // Continue on the SAME live Agent, as an open workbench does: rebuilding the
+    // Agent from disk would re-read the turn boundary and hide a turn number the
+    // live Agent never learned.
+    async continueInPlace() {
+      target.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: '继续。' }], source: { kind: 'human' } })
+      await target.agent.whenIdle()
+    },
     async dispose() { for (const handle of handles) await handle.dispose(); await ctx.fiber.dispose(); await rm(root, { recursive: true, force: true }) }
   }
 }

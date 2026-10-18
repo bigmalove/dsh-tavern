@@ -169,3 +169,20 @@ test('插件配音渠道：出现在设置里，合成交给插件，结果同�
   assert.equal(await speech.active(), null, '插件卸载后渠道不可用')
   await assert.rejects(speech.synthesize({ provider: 'edge-tts/edge', text: '你好' }), /没有这个配音渠道/)
 })
+
+test('插件配音渠道：收到局、说话人和是否旁白；说话人或渠道 version 不同各自合成', async () => {
+  const { speech, plugins } = harness()
+  const calls = []
+  const entry = { id: 'cache/tts', owner: 'cache', label: '缓存配音', voices: [], defaultVoice: 'v', version: '1',
+    synthesize: async input => { calls.push(input); return { data: new Uint8Array([calls.length]), mediaType: 'audio/mpeg' } } }
+  plugins.push(entry)
+  await speech.save({ enabled: true, provider: 'cache/tts' })
+  await speech.synthesize({ text: '你好', gameId: 'g', speaker: '林岚' })
+  await speech.synthesize({ text: '你好', gameId: 'g', speaker: '林岚' })
+  assert.equal(calls.length, 1)
+  assert.deepEqual([calls[0].gameId, calls[0].speaker, calls[0].narration], ['g', '林岚', false])
+  await speech.synthesize({ text: '你好', gameId: 'g', speaker: '小雪' })
+  entry.version = '2'
+  await speech.synthesize({ text: '你好', gameId: 'g', speaker: '林岚' })
+  assert.equal(calls.length, 3)
+})

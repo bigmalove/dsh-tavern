@@ -1,3 +1,4 @@
+import { storyEventTurn } from './session-upgrade-references.js'
 import { sessionEvents } from './session-events.js'
 import { isTurnInput } from './session-turn-input.js'
 import { isRescuedHistoryMessage } from './chat-history-rescue.js'
@@ -25,7 +26,7 @@ export function forkTurnsByMessageId(session, regeneratedDshTurns = {}) {
   const replies = new Map()
   const completed = new Set()
   for (const event of sessionEvents(session)) {
-    const turn = Number(event.data?.turn)
+    const turn = storyEventTurn(event)
     if (!Number.isSafeInteger(turn) || turn < 1) continue
     if (event.type === 'turn/start') { replies.delete(turn); completed.delete(turn) }
     else if (event.type === 'assistant/message' && event.data?.message?.source?.kind === 'model' && event.data.message.id) replies.set(turn, [...(replies.get(turn) || []), String(event.data.message.id)])

@@ -46,7 +46,7 @@ function userMessage(sessionId, index, texts, version) {
     id: id(sessionId, index, version),
     role: 'user',
     content: [{ type: 'text', text: texts[index] }],
-    source: { kind: 'plugin', plugin: 'dsh-tavern', form: 'synthetic-trajectory', version: version }
+    source: { kind: 'plugin:dsh-tavern', form: 'synthetic-trajectory', version: version }
   }
 }
 
@@ -68,7 +68,7 @@ export function sessionSeedTrajectoryMessages(sessionId, mode) {
   return Object.freeze([
     Object.freeze({ text: texts[0], type: 'user/message', data: userOne, intent: { surfaceOp: 'append' } }),
     Object.freeze({ text: texts[1], type: 'assistant/message', data: {
-      turn: 0, step: 1, message: assistant
+      turn: 1, step: 1, message: assistant
     }, intent: { surfaceOp: 'append', sourceEventSeqs: [] } }),
     Object.freeze({ text: texts[2], type: 'user/message', data: userTwo, intent: { surfaceOp: 'append' } })
   ])

@@ -265,6 +265,24 @@ export function createCastAssets({ store }) {
     return read(cardPath)
   }
 
+  /** Whether this card's games show the stage (off unless the player or the card turns it on). */
+  async function setStage(cardPath, on) {
+    await update(cardPath, manifest => { if (on) manifest.stage = true; else delete manifest.stage })
+    return read(cardPath)
+  }
+
+  /** The file the card was imported from (card-import-identity.js): { archiveSha256, cardSha256 }. */
+  async function setSource(cardPath, source) {
+    await update(cardPath, manifest => { if (source) manifest.source = source; else delete manifest.source })
+    return read(cardPath)
+  }
+
+  /** What a new game of this card starts with (card-archive.js startDefaults): { presetPath?, settings? }. */
+  async function setStartDefaults(cardPath, defaults) {
+    await update(cardPath, manifest => { if (defaults) manifest.startDefaults = defaults; else delete manifest.startDefaults })
+    return read(cardPath)
+  }
+
   /** Bytes of one of the card's material files, for export. */
   async function readFile(cardPath, file) {
     if (!/^[0-9a-f]{32}\.[a-z0-9]{1,10}$/.test(String(file))) return undefined
@@ -278,5 +296,5 @@ export function createCastAssets({ store }) {
     return bytes ? { bytes, mediaType: IMAGE_TYPES[file.split('.').pop()] } : undefined
   }
 
-  return Object.freeze({ read, movePath, setImage, removeImage, setCharacter, setVoice, removeCharacter, importSpritePack, importCardAssets, bindPacks, setPlugins, readFile, readImage, keyOf: cardPath => hash(String(cardPath)) })
+  return Object.freeze({ read, movePath, setImage, removeImage, setCharacter, setVoice, removeCharacter, importSpritePack, importCardAssets, bindPacks, setPlugins, setStage, setStartDefaults, setSource, readFile, readImage, keyOf: cardPath => hash(String(cardPath)) })
 }

@@ -1,4 +1,5 @@
 import { sessionEvents } from './session-events.js'
+import { isPluginSource, sourceProducerName } from './message-source.js'
 
 // The one place that decides which message is a turn's input. Readers that
 // guessed this separately drifted apart, and one of them took a template edit
@@ -15,8 +16,9 @@ export function inputKind(message) {
   const source = message && message.source
   if (!source) return null
   if (source.kind === 'user') return 'player'
-  if (source.kind !== 'plugin') return null
-  return source.plugin === 'dsh-tavern-regen' ? 'regenerate' : source.plugin === 'dsh-tavern-replay' ? 'replay' : null
+  if (!isPluginSource(source)) return null
+  const producer = sourceProducerName(source)
+  return producer === 'dsh-tavern-regen' ? 'regenerate' : producer === 'dsh-tavern-replay' ? 'replay' : null
 }
 
 export function isTurnInput(message) { return inputKind(message) !== null }

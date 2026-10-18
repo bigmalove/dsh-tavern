@@ -1,10 +1,13 @@
-// Native Session tests need the same 0.1.5-rc.2 surface relaxation Tavern installs
+// Native Session tests need the same host surface relaxation Tavern installs
 // at runtime: assistant/message replacements may cite shadowed nodes. Without it,
 // real Session.append rejects Tavern rollback/edit tombstones.
 // The dedicated installer test verifies unpatched rejection itself, so skip there.
+// 0.2.0-rc.2 适配：不再写死 0.1.5-rc.2，跟随 host-session-patch.js 的
+// SESSION_PATCH_VERSION，这样重钉版本后这里不会静默跳过（表面放宽没装上，
+// 用真实 Session 的用例会以难以定位的方式失败）。
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
-import { prepareExpandedPatch } from '../../tavern-plugin/lib/domain/host-session-patch.js'
+import { prepareExpandedPatch, SESSION_PATCH_VERSIONS } from '../../tavern-plugin/lib/domain/host-session-patch.js'
 
 const APPLIED = Symbol.for('dsh-tavern.host-session-patch-preload.v1')
 
@@ -23,7 +26,7 @@ if (!globalThis[APPLIED] && !process.argv.some(arg => arg.endsWith('/host-sessio
     const sessionPath = hostRequire.resolve('@deepseek-ai/dsh-session')
     runtimeRoot = sessionPath.split(/[/\\]node_modules[/\\]/)[0]
   }
-  if (version === '0.1.5-rc.2') {
+  if (SESSION_PATCH_VERSIONS.includes(version)) {
     await prepareExpandedPatch(runtimeRoot, { version })
     globalThis[APPLIED] = true
   }

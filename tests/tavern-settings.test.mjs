@@ -20,3 +20,10 @@ test('全局写作 Skill 逐项保存，恢复开启不改动其他 Skill', () =
   assert.deepEqual(document.defaultDisabledWritingSkills, ['two'])
   assert.throws(() => applyTavernSettingsPatch(document, { defaultWritingSkill: { name: 'one', enabled: 'false' } }), /无效/)
 })
+
+test('进入游戏时打开酒馆状态：默认开，可以关', () => {
+  assert.equal(presentTavernSettings({}, {}).autoOpenStatusPanel, true)
+  const off = applyTavernSettingsPatch({}, { autoOpenStatusPanel: false })
+  assert.equal(presentTavernSettings(off, {}).autoOpenStatusPanel, false)
+  assert.throws(() => applyTavernSettingsPatch({}, { autoOpenStatusPanel: 'no' }), /布尔值/)
+})

@@ -3,7 +3,7 @@ import { startupTimeoutMs, waitForServiceStartup, stopStartupChild } from './ser
 import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
-import { resolveDshCliEntry } from './plugin-dependencies.mjs'
+import { resolveDesktopAsarCommand, resolveDshCliEntry } from './plugin-dependencies.mjs'
 import path from 'node:path'
 import { migrateSessionPrefixEvents } from './session-prefix-migration.mjs'
 import { ensureSidebarDefaults } from './launcher-settings.mjs'
@@ -315,13 +315,24 @@ export async function startService() {
     runtimeHost,
   )
   if (process.platform === 'win32') {
-    invocation.args = [resolveDshCliEntry({ dsh }), ...invocation.args]
-    invocation.command = process.execPath
+    // 0.2.0-rc.2 适配：桌面 0.2.0 的 dsh 是「Electron 可执行文件 + app.asar 内 CLI」的 shim，
+    // 纯 Node 既定位不到 @deepseek-ai/dsh npm 包（resolveDshCliEntry 会抛「无法定位当前 DSH CLI 包」），
+    // 也读不了 asar 内文件；必须改用 Electron + ELECTRON_RUN_AS_NODE=1（即 shim 自身的形态）。
+    // 非 asar 形态（0.1.5 桌面、真实 npm 包布局、host=cli）保持原有行为不变。
+    const desktop = runtimeHost === 'desktop' ? resolveDesktopAsarCommand({ dsh }) : null
+    if (desktop) {
+      invocation.command = desktop.command
+      invocation.args = ['--expose-internals', desktop.entry, ...invocation.args]
+      invocation.env = { ...(invocation.env ?? {}), ...desktop.env }
+    } else {
+      invocation.args = [resolveDshCliEntry({ dsh }), ...invocation.args]
+      invocation.command = process.execPath
+    }
   }
   mkdirSync(LOG_DIR, { recursive: true })
   const logOffset = existsSync(LOG_FILE) ? statSync(LOG_FILE).size : 0
   const startupLog = (event, details = {}) => appendFileSync(LOG_FILE, JSON.stringify({ at: new Date().toISOString(), event, ...details }) + '\n')
-  startupLog('service.starting', { node: process.version, executable: invocation.command, entry: invocation.args[0], cwd: SOURCE_ROOT, home: DSH_ROOT, port: state.port, timeoutMs })
+  startupLog('service.starting', { node: process.version, executable: invocation.command, entry: invocation.args[0].startsWith('--') ? invocation.args[1] : invocation.args[0], cwd: SOURCE_ROOT, home: DSH_ROOT, port: state.port, timeoutMs })
   const logDescriptor = openSync(LOG_FILE, 'a')
   let child
   try {
@@ -329,7 +340,7 @@ export async function startService() {
       cwd: SOURCE_ROOT,
       // Track the actual Node service, not a cmd shim that can exit separately.
       detached: true,
-      env: runtimeEnvironment({ installation: false }),
+      env: { ...runtimeEnvironment({ installation: false }), ...(invocation.env ?? {}) },
       shell: false,
       windowsHide: true,
       stdio: ['ignore', logDescriptor, logDescriptor],

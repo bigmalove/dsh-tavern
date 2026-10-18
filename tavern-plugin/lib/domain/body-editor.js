@@ -1,3 +1,4 @@
+import { upgradeReferences } from './session-upgrade-references.js'
 import { replaceSessionSurface } from './session-surface-mutations.js'
 import { randomUUID } from 'node:crypto'
 import { editableReplyParts } from './reply-presentation.js'
@@ -60,8 +61,10 @@ function resolveFloor(chat, input) {
 
 /** Reconcile a durable Chat edit to native Surface; retries never duplicate history. */
 export async function synchronizeBodyEdits(session, chat, flush, persistChat) {
+  const events = sessionEvents(session)
+  const references = upgradeReferences(events)
   const recorded = new Set()
-  for (const event of sessionEvents(session)) {
+  for (const event of events) {
     if (event.type === 'assistant/message' && event.data?.message?.id) recorded.add(event.data.message.id)
     else if (event.type === 'user/message' && event.data?.id) recorded.add(event.data.id)
   }
@@ -69,7 +72,8 @@ export async function synchronizeBodyEdits(session, chat, flush, persistChat) {
   let sessionDirty = false
   for (const message of chat.messages || []) {
     if (!message?.bodyEdit) continue
-    const { id, seq, turn } = message.bodyEdit
+    const { id, turn } = message.bodyEdit
+    const seq = references.sequence(message.bodyEdit.seq, message.bodyEdit.formatVersion)
     if (recorded.has(id)) continue
     const user = message.bodyEdit.role === 'user' || message.role === 'user'
     let targetSeq = session.surface?.nodes.includes(seq) ? seq : null
@@ -88,7 +92,9 @@ export async function synchronizeBodyEdits(session, chat, flush, persistChat) {
       delete message.bodyEdit
       continue
     }
-    if (targetSeq !== seq) message.bodyEdit = { ...message.bodyEdit, seq: targetSeq, turn }
+    // formatVersion 4 marks the seq as already mapped by the migration, so a
+    // later pass never shifts an already-corrected marker a second time.
+    if (targetSeq !== seq) message.bodyEdit = { ...message.bodyEdit, seq: targetSeq, turn, formatVersion: 4 }
     replaceSessionSurface(session, user ? 'user/message' : 'assistant/message', user ? {
       id, role: 'user', content: [{ type: 'text', text: str(message.text) }], source: { kind: 'user' }
     } : {
@@ -252,7 +258,7 @@ export function createBodyEditor({ chats, sessions, timeline, activity, project,
       const patch = floor.role === 'user'
         ? { text }
         : { sourceText: text, projectionText: text }
-      if (located) patch.bodyEdit = { id: 'tavern-body-edit:' + randomUUID(), seq: located.seq, turn: located.turn, role: floor.role }
+      if (located) patch.bodyEdit = { formatVersion: 4, id: 'tavern-body-edit:' + randomUUID(), seq: located.seq, turn: located.turn, role: floor.role }
       if (floor.role !== 'user') {
         // Project against the floor itself: its macros and status blocks belong
         // to that round, never to the current scene.

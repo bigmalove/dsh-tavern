@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 /** DSH Message requires identity and attribution even for independent requests. */
 export function identifyHelperModelMessages(messages) {
   return messages.map(message => ({ ...message, id: message.id || randomUUID(),
-    source: message.source || { kind: 'plugin', plugin: 'dsh-tavern' } }))
+    source: message.source || { kind: 'plugin:dsh-tavern' } }))
 }
 
 /** Compile actual DSH card/preset/worldbook context without Session writes. */
