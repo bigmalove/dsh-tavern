@@ -236,9 +236,34 @@
                     h("span", { className: "dsh-tavern-settings-desc" }, notice)) : null);
         }
 
+        function TouchDiagnosticsSetting() {
+            const h = React.createElement;
+            const [busy, setBusy] = React.useState(false);
+            const [notice, setNotice] = React.useState("");
+            async function run() {
+                if (busy) return;
+                setBusy(true);
+                setNotice("已就绪：请在正文上按住往上拖一笔再松开，约 20 秒内出报告");
+                try {
+                    const result = await runTavernTouchDiagnostics(window);
+                    setNotice(result.ok ? "报告已生成" : String(result.message || "未取到数据"));
+                } catch (error) { setNotice("诊断失败：" + String(error.message || error)); }
+                finally { setBusy(false); }
+            }
+            return h("section", { className: "dsh-tavern-settings-group" },
+                h("div", { className: "dsh-tavern-settings-row" },
+                    h("div", { className: "dsh-tavern-settings-copy" },
+                        h("strong", { className: "dsh-tavern-settings-title" }, "移动端滑动诊断"),
+                        h("p", { className: "dsh-tavern-settings-desc" }, "在正文上拖一笔，采集这一笔里触点的样式链、帧内位移与会话容器位移，用于定位“正文划不动”。只读取，不改动任何设置。")),
+                    h("button", { type: "button", className: "dsh-tavern-btn", disabled: busy, onClick: run }, busy ? "采集中…" : "开始诊断")),
+                notice ? h("div", { className: "dsh-tavern-settings-row", role: "status" },
+                    h("span", { className: "dsh-tavern-settings-desc" }, notice)) : null);
+        }
+
         // @include modules/global-settings.js
         const { TavernSettingsSection } = createGlobalSettingsModule({
             React, rpc, notifySettingsChanged: () => window.dispatchEvent(new CustomEvent("dsh-tavern-settings-changed")),
             TavernDefaultModelSetting, TavernConversationWritingSkills, DisplayPreferencesSettings,
-            CandidatePreferencesSettings, PromptTemplateSettingsEntry, ContextCompactionSettings, TavernSpeechSettings
+            CandidatePreferencesSettings, PromptTemplateSettingsEntry, ContextCompactionSettings, TavernSpeechSettings,
+            TouchDiagnosticsSetting
         });

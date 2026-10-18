@@ -1,5 +1,5 @@
 // Settings owns its initial snapshot; each editor saves only its own resource.
-function createGlobalSettingsModule({ React, rpc, notifySettingsChanged, TavernDefaultModelSetting, TavernConversationWritingSkills, DisplayPreferencesSettings, CandidatePreferencesSettings, PromptTemplateSettingsEntry, ContextCompactionSettings, TavernSpeechSettings }) {
+function createGlobalSettingsModule({ React, rpc, notifySettingsChanged, TavernDefaultModelSetting, TavernConversationWritingSkills, DisplayPreferencesSettings, CandidatePreferencesSettings, PromptTemplateSettingsEntry, ContextCompactionSettings, TavernSpeechSettings, TouchDiagnosticsSetting }) {
     function GlobalPlayDefaults({ settings }) {
         const h = React.createElement;
         const [data, setData] = React.useState(null), [busy, setBusy] = React.useState(false), [message, setMessage] = React.useState("");
@@ -112,7 +112,8 @@ function createGlobalSettingsModule({ React, rpc, notifySettingsChanged, TavernD
                 state.settings ? h(SettingSwitch, { settings: state.settings, name: "storyToolCall", title: "正文走工具调用",
                     description: "让模型通过工具调用提交正文，可缓解 Gemini 等模型在正文中途截断或拒答。需要模型支持工具调用；正文生成完成后一次性显示。" }) : null,
                 h(PromptTemplateSettingsEntry),
-                h(ContextCompactionSettings)),
+                h(ContextCompactionSettings),
+                h(TouchDiagnosticsSetting)),
             state.error ? React.createElement("div", { className: "dsh-tavern-settings-error", role: "alert" }, "保存失败：" + state.error) : null
         );
     }

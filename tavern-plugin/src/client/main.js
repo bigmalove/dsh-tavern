@@ -746,6 +746,10 @@ window.__ModuleLoader__.load({
 
 // @include modules/host-theme.js
 
+// Measures one real stroke on a device: frame-side style chain + host-side movement.
+// Only runs when the user opens the diagnostic from settings.
+// @include modules/touch-diagnostics.js
+
 // @include runtime/helper-facade.js
 
         // Bounded, value-free timings shared by every card's initialization.
@@ -1056,6 +1060,7 @@ window.__ModuleLoader__.load({
 		exports.TavernMvuLoadRecovery = TavernMvuLoadRecovery;
 		exports.findTavernQuoteRanges = findTavernQuoteRanges;
         exports.installTavernTextColors = installTavernTextColors;
+        exports.runTavernTouchDiagnostics = runTavernTouchDiagnostics;
         exports.TavernColoredMarkdown = TavernColoredMarkdown;
         exports.apply = apply;
 		exports.createTurnHistoryProjection = createTurnHistoryProjection;

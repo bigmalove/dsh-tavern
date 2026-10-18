@@ -5530,6 +5530,10 @@ function tavernModelRefusalNotice(text) {
 		        if (rest) queue(rest);
 		    }
 		    addEventListener('touchstart', event => {
+		        // The touch probe measures the native path; its bypass must run before any of
+		        // this module's bookkeeping, or the measurement includes the very code it is
+		        // trying to rule out.
+		        if (window.__dshTavernTouchProbeBypass) return;
 		        stop();
 		        sequence++;
 		        send('dsh-tavern-frame-touch-start');
@@ -5639,6 +5643,109 @@ function tavernModelRefusalNotice(text) {
 		            }
 		        }
 		    };
+		}
+		// Serialized into the message document, next to installTavernFrameTouch.
+		//
+		// Answers what the frame alone can see about one real stroke: the style chain under
+		// the finger, whether this document actually moved, and whether anything cancelled
+		// the touch. The host adds the one thing the frame cannot see — how far the
+		// conversation scroller moved. Armed on demand only; the listeners exist while a
+		// measurement is running, so a normal scroll pays nothing.
+		function installTavernTouchProbe(token) {
+		    let session = null;
+		    function styles(node) {
+		        const style = getComputedStyle(node);
+		        return {
+		            node: String(node.tagName || '').toLowerCase() + (node.id ? '#' + node.id : ''),
+		            overflowY: style.overflowY,
+		            touchAction: style.touchAction,
+		            overscrollBehaviorY: style.overscrollBehaviorY,
+		            clientHeight: node.clientHeight,
+		            scrollHeight: node.scrollHeight,
+		        };
+		    }
+		    function chain(start) {
+		        const out = [];
+		        for (let node = start; node && node.nodeType === 1 && out.length < 10; node = node.parentElement) out.push(styles(node));
+		        const root = document.scrollingElement;
+		        if (root) out.push(Object.assign(styles(root), { node: 'scrollingElement' }));
+		        return out;
+		    }
+		    function detach() {
+		        removeEventListener('scroll', onScroll, { capture: true });
+		        removeEventListener('touchstart', onStart, { capture: true });
+		        removeEventListener('touchmove', onMove, { capture: true });
+		        removeEventListener('touchend', onEnd, { capture: true });
+		        removeEventListener('touchcancel', onEnd, { capture: true });
+		    }
+		    function stop() {
+		        const current = session;
+		        if (!current) return;
+		        session = null;
+		        window.__dshTavernTouchProbeBypass = false;
+		        detach();
+		        if (!current.chain) return;
+		        const root = document.scrollingElement;
+		        parent.postMessage({
+		            type: 'dsh-tavern-touch-probe-report', probeToken: current.probeToken,
+		            gesture: {
+		                moves: current.moves,
+		                cancelled: current.cancelled,
+		                scrollEvents: current.scrollEvents,
+		                startScrollTop: current.startScrollTop,
+		                endScrollTop: root ? root.scrollTop : 0,
+		                durationMs: Math.round(performance.now() - current.startedAt),
+		                chain: current.chain,
+		                target: current.target,
+		                selection: Boolean(String(window.getSelection() || '')),
+		            },
+		            document: root ? { scrollHeight: root.scrollHeight, clientHeight: root.clientHeight } : null,
+		            viewport: { width: innerWidth, height: innerHeight },
+		            userAgent: navigator.userAgent,
+		        }, '*');
+		    }
+		    function onScroll() { if (session) session.scrollEvents += 1; }
+		    function onStart(event) {
+		        if (!session) return;
+		        session.startedAt = performance.now();
+		        session.chain = chain(event.target);
+		        session.target = String(event.target && event.target.tagName || '').toLowerCase();
+		        const root = document.scrollingElement;
+		        session.startScrollTop = root ? root.scrollTop : 0;
+		        session.moves = 0;
+		        session.cancelled = 0;
+		        session.scrollEvents = 0;
+		    }
+		    function onMove(event) {
+		        if (!session || !session.chain) return;
+		        session.moves += 1;
+		        if (event.defaultPrevented) session.cancelled += 1;
+		    }
+		    function onEnd() {
+		        if (!session || !session.chain) return;
+		        // Momentum arrives after the finger lifts; wait for it before reporting.
+		        setTimeout(stop, 400);
+		    }
+		    addEventListener('message', event => {
+		        if (event.source !== parent || !event.data) return;
+		        if (event.data.type === 'dsh-tavern-touch-probe-arm') {
+		            // Bypass this module's own handlers so the stroke reaches the browser untouched.
+		            window.__dshTavernTouchProbeBypass = true;
+		            session = { startedAt: performance.now(), moves: 0, cancelled: 0, scrollEvents: 0, startScrollTop: 0, chain: null, probeToken: String(event.data.probeToken || '') };
+		            addEventListener('scroll', onScroll, { capture: true, passive: true });
+		            addEventListener('touchstart', onStart, { capture: true, passive: true });
+		            addEventListener('touchmove', onMove, { capture: true, passive: true });
+		            addEventListener('touchend', onEnd, { capture: true, passive: true });
+		            addEventListener('touchcancel', onEnd, { capture: true, passive: true });
+		            parent.postMessage({ type: 'dsh-tavern-touch-probe-ready', probeToken: session.probeToken }, '*');
+		        }
+		        if (event.data.type === 'dsh-tavern-touch-probe-finish') stop();
+		        if (event.data.type === 'dsh-tavern-touch-probe-cancel') {
+		            session = null;
+		            window.__dshTavernTouchProbeBypass = false;
+		            detach();
+		        }
+		    });
 		}
 
 		// A viewport-sized card cannot determine its own iframe viewport. Use the host
@@ -5970,7 +6077,7 @@ function tavernModelRefusalNotice(text) {
 				// Viewers without the execution lease still receive live variables. Legacy
 				// status panels read parent.Mvu; expose their Helper API below the executor.
 				+ (!preparationRuntime && input && input.helperContext && input.persistent === true && input.trustedCardMode === true ? '<script data-dsh-tavern-status-host>(function(){const release=(' + installTavernTrustedHostFacade.toString() + ')(window.parent,window,-0.5,["Mvu"]);window.addEventListener("pagehide",release,{once:true});window.addEventListener("unload",release,{once:true});})();<\/script>' : '')
-				+ '</head><body class="no-blur">' + (input && input.helperContext ? '<script data-dsh-tavern-legacy-composer>const createTavernFrameLifecycle=' + createTavernFrameLifecycle.toString() + ';(' + installLegacyTavernComposer.toString() + ')();<\/script>' : '') + (preparationRuntime ? preparationRuntime.body : '') + frameHtml + sizingRuntime + layoutNormalizer + (input && input.persistent ? "" : textColorRuntime) + reporter + '<script data-dsh-tavern-touch>(' + installTavernFrameTouch.toString() + ')(' + token + ',' + scrollTavernTouchChain.toString() + ');<\/script>' + readyReporter + '</body></html>';
+				+ '</head><body class="no-blur">' + (input && input.helperContext ? '<script data-dsh-tavern-legacy-composer>const createTavernFrameLifecycle=' + createTavernFrameLifecycle.toString() + ';(' + installLegacyTavernComposer.toString() + ')();<\/script>' : '') + (preparationRuntime ? preparationRuntime.body : '') + frameHtml + sizingRuntime + layoutNormalizer + (input && input.persistent ? "" : textColorRuntime) + reporter + '<script data-dsh-tavern-touch>(' + installTavernFrameTouch.toString() + ')(' + token + ',' + scrollTavernTouchChain.toString() + ');(' + installTavernTouchProbe.toString() + ')(' + token + ');<\/script>' + readyReporter + '</body></html>';
 		}
 
         function startTavernHelperLoader(source) {
@@ -6043,6 +6150,157 @@ function bindTavernFontZoom(node, win) {
     const unsubscribe = subscribeTavernHostTheme(win, apply);
     apply(currentTavernHostTheme(win));
     return function () { unsubscribe(); node.style.zoom = ""; };
+}
+
+// Measures one real stroke on a device: frame-side style chain + host-side movement.
+// Only runs when the user opens the diagnostic from settings.
+// Real-device scroll diagnosis. The frame is an opaque origin, so the host cannot
+// look inside it: it asks every message frame to run a probe, records what the
+// conversation scroller does during the same stroke, and merges the two reports.
+// Nothing here runs unless the user opens the diagnostic from settings.
+function tavernScrollableAncestor(start, view) {
+    for (let node = start; node && node.nodeType === 1; node = node.parentElement) {
+        const style = view.getComputedStyle(node);
+        if (style.overflowY !== 'auto' && style.overflowY !== 'scroll') continue;
+        if (node.scrollHeight > node.clientHeight) return node;
+    }
+    return null;
+}
+
+function tavernTouchReportText(report) {
+    const lines = [];
+    const frame = report.frame || {};
+    const gesture = frame.gesture || {};
+    lines.push('DSH Tavern 滑动诊断');
+    lines.push('时间：' + new Date(report.at).toISOString());
+    lines.push('UA：' + String(frame.userAgent || report.userAgent || '未知'));
+    lines.push('视口：' + (frame.viewport ? frame.viewport.width + '×' + frame.viewport.height : '未知'));
+    lines.push('');
+    lines.push('【结论】');
+    lines.push(report.verdict);
+    lines.push('');
+    lines.push('【同一笔手势内的位移】');
+    lines.push('会话容器：' + report.host.delta + 'px（' + report.host.before + ' → ' + report.host.after + '）');
+    lines.push('消息帧内：' + (gesture.endScrollTop - gesture.startScrollTop) + 'px（' + gesture.startScrollTop + ' → ' + gesture.endScrollTop + '）');
+    lines.push('帧内 scroll 事件：' + (gesture.scrollEvents ?? '未知'));
+    lines.push('touchmove 次数：' + (gesture.moves ?? '未知') + '，被 preventDefault：' + (gesture.cancelled ?? '未知'));
+    lines.push('手势时长：' + (gesture.durationMs ?? '未知') + 'ms，触点：' + (gesture.target || '未知'));
+    lines.push('存在选区：' + (gesture.selection ? '是' : '否'));
+    lines.push('');
+    lines.push('【帧文档】');
+    if (frame.document) lines.push('scrollHeight ' + frame.document.scrollHeight + ' / clientHeight ' + frame.document.clientHeight + (frame.document.scrollHeight > frame.document.clientHeight + 8 ? '（帧内可滚）' : '（帧内不可滚）'));
+    else lines.push('未取到');
+    lines.push('');
+    lines.push('【触点链样式（从里到外）】');
+    for (const item of gesture.chain || []) {
+        lines.push('· ' + item.node + '  overflow-y:' + item.overflowY + '  touch-action:' + item.touchAction
+            + '  overscroll-y:' + item.overscrollBehaviorY + '  ' + item.scrollHeight + '/' + item.clientHeight);
+    }
+    lines.push('');
+    lines.push('【环境】');
+    lines.push('帧数：' + report.frames + '（已应答 ' + report.answered + '）');
+    lines.push('当前卡：' + (report.card || '无'));
+    lines.push('宿主容器：' + report.host.node + '  ' + report.host.scrollHeight + '/' + report.host.clientHeight);
+    return lines.join('\n');
+}
+
+function showTavernTouchReport(text) {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'dsh-tavern-prompt';
+    dialog.setAttribute('aria-label', '滑动诊断结果');
+    const panel = document.createElement('div');
+    panel.className = 'dsh-tavern-prompt-panel';
+    panel.style.maxWidth = 'min(92vw, 560px)';
+    const title = document.createElement('div');
+    title.className = 'dsh-tavern-prompt-title';
+    title.textContent = '滑动诊断结果';
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.readOnly = true;
+    area.rows = 16;
+    area.style.width = '100%';
+    area.style.font = '12px/1.5 ui-monospace, monospace';
+    area.style.resize = 'vertical';
+    const actions = document.createElement('div');
+    actions.className = 'dsh-tavern-prompt-actions';
+    const copy = document.createElement('button');
+    copy.type = 'button'; copy.className = 'dsh-tavern-btn primary'; copy.textContent = '复制';
+    const close = document.createElement('button');
+    close.type = 'button'; close.className = 'dsh-tavern-btn'; close.textContent = '关闭';
+    copy.addEventListener('click', () => {
+        area.select();
+        let copied = false;
+        try { copied = document.execCommand('copy'); } catch (_) { copied = false; }
+        if (!copied && navigator.clipboard) navigator.clipboard.writeText(area.value).then(() => { copy.textContent = '已复制'; }, () => { copy.textContent = '请手动复制'; });
+        else copy.textContent = '已复制';
+    });
+    close.addEventListener('click', () => { dialog.close(); dialog.remove(); });
+    actions.append(copy, close);
+    panel.append(title, area, actions);
+    dialog.append(panel);
+    (document.querySelector('.dsh-tavern-dock') || document.body).append(dialog);
+    dialog.showModal();
+}
+
+async function runTavernTouchDiagnostics(host) {
+    const frames = Array.from(host.document.querySelectorAll('iframe')).filter(frame => frame.isConnected);
+    if (!frames.length) return { ok: false, message: '当前页面没有消息帧，请打开一局对话后再试。' };
+    const tokens = new Map();
+    for (const frame of frames) {
+        const token = 'probe-' + Math.random().toString(36).slice(2, 10);
+        tokens.set(frame, token);
+        try { frame.contentWindow.postMessage({ type: 'dsh-tavern-touch-probe-arm', probeToken: token }, '*'); } catch (_) { /* frame gone */ }
+    }
+    const answered = await new Promise(resolve => {
+        const ready = new Set();
+        const timer = host.setTimeout(() => resolve(ready), 400);
+        const listener = event => {
+            const data = event.data;
+            if (!data || data.type !== 'dsh-tavern-touch-probe-ready') return;
+            for (const [frame, token] of tokens) if (frame.contentWindow === event.source && token === data.probeToken) ready.add(frame);
+            if (ready.size >= frames.length) { host.clearTimeout(timer); resolve(ready); }
+        };
+        host.addEventListener('message', listener);
+        host.setTimeout(() => host.removeEventListener('message', listener), 3000);
+    });
+    const target = Array.from(answered)[0] || frames[0];
+    const token = tokens.get(target);
+    const scroller = tavernScrollableAncestor(target.parentElement, host) || host.document.scrollingElement;
+    const before = scroller ? scroller.scrollTop : 0;
+    const report = await new Promise(resolve => {
+        let settled = false;
+        const finish = value => { if (!settled) { settled = true; resolve(value); } };
+        const listener = event => {
+            const data = event.data;
+            if (!data || data.type !== 'dsh-tavern-touch-probe-report' || data.probeToken !== token) return;
+            finish({ frame: data, answered: answered.size });
+        };
+        host.addEventListener('message', listener);
+        // Give the user time to actually make the stroke.
+        host.setTimeout(() => finish({ frame: null, answered: answered.size }), 20000);
+    });
+    if (!report.frame) {
+        try { target.contentWindow.postMessage({ type: 'dsh-tavern-touch-probe-cancel', probeToken: token }, '*'); } catch (_) { /* gone */ }
+        return { ok: false, message: '没有等到手势。请在正文上按住往上拖一笔再松开，然后重试。' };
+    }
+    const drag = scroller ? scroller.scrollTop - before : 0;
+    const gesture = report.frame.gesture || {};
+    const frameMoved = (gesture.endScrollTop || 0) - (gesture.startScrollTop || 0);
+    const frameCanScroll = report.frame.document ? report.frame.document.scrollHeight > report.frame.document.clientHeight + 8 : false;
+    let verdict;
+    if (Math.abs(drag) > 8) verdict = '原生滚动生效：这一笔把会话容器滚了 ' + drag + 'px，浏览器链路正常。';
+    else if (Math.abs(frameMoved) > 8) verdict = '位移被帧内吃掉了 ' + frameMoved + 'px，没有传给会话容器（帧内可滚=' + frameCanScroll + '）。';
+    else if (gesture.cancelled > 0) verdict = '手势被 preventDefault 取消了 ' + gesture.cancelled + ' 次，页面脚本拦住了滚动。';
+    else verdict = '这一笔既没滚会话容器也没滚帧内：需要看下面触点链上的 touch-action / overscroll-behavior。';
+    const text = tavernTouchReportText({
+        at: Date.now(), verdict, frame: report.frame, answered: report.answered, frames: frames.length,
+        userAgent: host.navigator.userAgent, card: document.querySelector('[data-dsh-tavern-card-name]')?.getAttribute('data-dsh-tavern-card-name') || '',
+        host: { delta: drag, before, after: scroller ? scroller.scrollTop : 0,
+            node: scroller ? String(scroller.tagName || '').toLowerCase() + (scroller.id ? '#' + scroller.id : '') : '未找到',
+            scrollHeight: scroller ? scroller.scrollHeight : 0, clientHeight: scroller ? scroller.clientHeight : 0 },
+    });
+    showTavernTouchReport(text);
+    return { ok: true, text };
 }
 
 		function createTavernHelperTransport(options) {
@@ -16362,8 +16620,32 @@ function bindTavernFontZoom(node, win) {
                     h("span", { className: "dsh-tavern-settings-desc" }, notice)) : null);
         }
 
+        function TouchDiagnosticsSetting() {
+            const h = React.createElement;
+            const [busy, setBusy] = React.useState(false);
+            const [notice, setNotice] = React.useState("");
+            async function run() {
+                if (busy) return;
+                setBusy(true);
+                setNotice("已就绪：请在正文上按住往上拖一笔再松开，约 20 秒内出报告");
+                try {
+                    const result = await runTavernTouchDiagnostics(window);
+                    setNotice(result.ok ? "报告已生成" : String(result.message || "未取到数据"));
+                } catch (error) { setNotice("诊断失败：" + String(error.message || error)); }
+                finally { setBusy(false); }
+            }
+            return h("section", { className: "dsh-tavern-settings-group" },
+                h("div", { className: "dsh-tavern-settings-row" },
+                    h("div", { className: "dsh-tavern-settings-copy" },
+                        h("strong", { className: "dsh-tavern-settings-title" }, "移动端滑动诊断"),
+                        h("p", { className: "dsh-tavern-settings-desc" }, "在正文上拖一笔，采集这一笔里触点的样式链、帧内位移与会话容器位移，用于定位“正文划不动”。只读取，不改动任何设置。")),
+                    h("button", { type: "button", className: "dsh-tavern-btn", disabled: busy, onClick: run }, busy ? "采集中…" : "开始诊断")),
+                notice ? h("div", { className: "dsh-tavern-settings-row", role: "status" },
+                    h("span", { className: "dsh-tavern-settings-desc" }, notice)) : null);
+        }
+
         // Settings owns its initial snapshot; each editor saves only its own resource.
-        function createGlobalSettingsModule({ React, rpc, notifySettingsChanged, TavernDefaultModelSetting, TavernConversationWritingSkills, DisplayPreferencesSettings, CandidatePreferencesSettings, PromptTemplateSettingsEntry, ContextCompactionSettings, TavernSpeechSettings }) {
+        function createGlobalSettingsModule({ React, rpc, notifySettingsChanged, TavernDefaultModelSetting, TavernConversationWritingSkills, DisplayPreferencesSettings, CandidatePreferencesSettings, PromptTemplateSettingsEntry, ContextCompactionSettings, TavernSpeechSettings, TouchDiagnosticsSetting }) {
             function GlobalPlayDefaults({ settings }) {
                 const h = React.createElement;
                 const [data, setData] = React.useState(null), [busy, setBusy] = React.useState(false), [message, setMessage] = React.useState("");
@@ -16476,7 +16758,8 @@ function bindTavernFontZoom(node, win) {
                         state.settings ? h(SettingSwitch, { settings: state.settings, name: "storyToolCall", title: "正文走工具调用",
                             description: "让模型通过工具调用提交正文，可缓解 Gemini 等模型在正文中途截断或拒答。需要模型支持工具调用；正文生成完成后一次性显示。" }) : null,
                         h(PromptTemplateSettingsEntry),
-                        h(ContextCompactionSettings)),
+                        h(ContextCompactionSettings),
+                        h(TouchDiagnosticsSetting)),
                     state.error ? React.createElement("div", { className: "dsh-tavern-settings-error", role: "alert" }, "保存失败：" + state.error) : null
                 );
             }
@@ -16486,7 +16769,8 @@ function bindTavernFontZoom(node, win) {
         const { TavernSettingsSection } = createGlobalSettingsModule({
             React, rpc, notifySettingsChanged: () => window.dispatchEvent(new CustomEvent("dsh-tavern-settings-changed")),
             TavernDefaultModelSetting, TavernConversationWritingSkills, DisplayPreferencesSettings,
-            CandidatePreferencesSettings, PromptTemplateSettingsEntry, ContextCompactionSettings, TavernSpeechSettings
+            CandidatePreferencesSettings, PromptTemplateSettingsEntry, ContextCompactionSettings, TavernSpeechSettings,
+            TouchDiagnosticsSetting
         });
 
 		function UserPreferenceProfileTab(props) {
@@ -21396,6 +21680,7 @@ function bindTavernFontZoom(node, win) {
 		exports.TavernMvuLoadRecovery = TavernMvuLoadRecovery;
 		exports.findTavernQuoteRanges = findTavernQuoteRanges;
         exports.installTavernTextColors = installTavernTextColors;
+        exports.runTavernTouchDiagnostics = runTavernTouchDiagnostics;
         exports.TavernColoredMarkdown = TavernColoredMarkdown;
         exports.apply = apply;
 		exports.createTurnHistoryProjection = createTurnHistoryProjection;

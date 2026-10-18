@@ -89,6 +89,10 @@ function installTavernFrameTouch(token, scrollChain) {
         if (rest) queue(rest);
     }
     addEventListener('touchstart', event => {
+        // The touch probe measures the native path; its bypass must run before any of
+        // this module's bookkeeping, or the measurement includes the very code it is
+        // trying to rule out.
+        if (window.__dshTavernTouchProbeBypass) return;
         stop();
         sequence++;
         send('dsh-tavern-frame-touch-start');

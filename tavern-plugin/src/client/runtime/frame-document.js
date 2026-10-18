@@ -159,6 +159,7 @@
 		}
 
 		// @include modules/frame-touch-scroll.js
+		// @include modules/frame-touch-probe.js
 
 		// @include modules/frame-viewport-height.js
         // @include-domain frame-sizing.js
@@ -257,7 +258,7 @@
 				// Viewers without the execution lease still receive live variables. Legacy
 				// status panels read parent.Mvu; expose their Helper API below the executor.
 				+ (!preparationRuntime && input && input.helperContext && input.persistent === true && input.trustedCardMode === true ? '<script data-dsh-tavern-status-host>(function(){const release=(' + installTavernTrustedHostFacade.toString() + ')(window.parent,window,-0.5,["Mvu"]);window.addEventListener("pagehide",release,{once:true});window.addEventListener("unload",release,{once:true});})();<\/script>' : '')
-				+ '</head><body class="no-blur">' + (input && input.helperContext ? '<script data-dsh-tavern-legacy-composer>const createTavernFrameLifecycle=' + createTavernFrameLifecycle.toString() + ';(' + installLegacyTavernComposer.toString() + ')();<\/script>' : '') + (preparationRuntime ? preparationRuntime.body : '') + frameHtml + sizingRuntime + layoutNormalizer + (input && input.persistent ? "" : textColorRuntime) + reporter + '<script data-dsh-tavern-touch>(' + installTavernFrameTouch.toString() + ')(' + token + ',' + scrollTavernTouchChain.toString() + ');<\/script>' + readyReporter + '</body></html>';
+				+ '</head><body class="no-blur">' + (input && input.helperContext ? '<script data-dsh-tavern-legacy-composer>const createTavernFrameLifecycle=' + createTavernFrameLifecycle.toString() + ';(' + installLegacyTavernComposer.toString() + ')();<\/script>' : '') + (preparationRuntime ? preparationRuntime.body : '') + frameHtml + sizingRuntime + layoutNormalizer + (input && input.persistent ? "" : textColorRuntime) + reporter + '<script data-dsh-tavern-touch>(' + installTavernFrameTouch.toString() + ')(' + token + ',' + scrollTavernTouchChain.toString() + ');(' + installTavernTouchProbe.toString() + ')(' + token + ');<\/script>' + readyReporter + '</body></html>';
 		}
 
         function startTavernHelperLoader(source) {
