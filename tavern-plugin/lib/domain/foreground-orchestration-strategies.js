@@ -4,6 +4,7 @@ import { resolveRuntimePresetMacros } from './runtime-presets.js'
 import { createEphemeralCompatibilityRequest, isCompatibilityConversationRequest } from './compatibility-request.js'
 import { projectRuntimePresetRequest } from './runtime-preset-lifecycle.js'
 import { STORY_SUBMIT_PROMPT, STORY_SUBMIT_TOOL_NAME } from './story-tool-submission.js'
+import { projectHistoryAsToolCalls } from './history-tool-call.js'
 import { markRequestHandled, requestHandledBy } from './request-lineage.js'
 import { inputKind } from './session-turn-input.js'
 
@@ -320,7 +321,9 @@ export function createNativePlayOrchestrationStrategy(options) {
         turn: Math.max(0, Number(payload.turn) || 0),
         step: Math.max(1, Number(payload.step) || 1),
         scope: 'foreground',
-        snapshot: snapshot || null
+        snapshot: snapshot || null,
+        // Resolved here because the request projection below is synchronous.
+        historyToolCall: typeof options.historyToolCall === 'function' ? (await options.historyToolCall()) === true : false
       })
     }
     if (Number(payload.step) === 1) {
@@ -379,6 +382,13 @@ export function createNativePlayOrchestrationStrategy(options) {
     if (replayMessages !== request.messages) request = Object.assign({}, request, { messages: replayMessages })
     const passbackMessages = projectDeepSeekThinkingPassback(request.messages, request)
     if (passbackMessages !== request.messages) request = Object.assign({}, request, { messages: passbackMessages })
+    // Past bodies replayed as the submission tool's arguments instead of prose the
+    // model wrote. Runs last so the earlier passes see the shape the host built;
+    // the save, the view and every floor control keep the plain text.
+    if (staged.historyToolCall === true) {
+      const historyMessages = projectHistoryAsToolCalls(request.messages, { toolName: STORY_SUBMIT_TOOL_NAME })
+      if (historyMessages !== request.messages) request = Object.assign({}, request, { messages: historyMessages })
+    }
     // DSH's renderer returns '' for no sections; adapters otherwise serialize
     // it as an empty system message. Preserve any explicit non-empty prompt.
     if (request.system === '') {

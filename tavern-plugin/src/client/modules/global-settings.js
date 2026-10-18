@@ -111,6 +111,8 @@ function createGlobalSettingsModule({ React, rpc, notifySettingsChanged, TavernD
             group("高级", "",
                 state.settings ? h(SettingSwitch, { settings: state.settings, name: "storyToolCall", title: "正文走工具调用",
                     description: "让模型通过工具调用提交正文，可缓解 Gemini 等模型在正文中途截断或拒答。需要模型支持工具调用；正文生成完成后一次性显示。" }) : null,
+                state.settings ? h(SettingSwitch, { settings: state.settings, name: "storyHistoryToolCall", title: "历史正文也走工具调用",
+                    description: "把已保存的正文以工具参数的形式回放给模型，而不是当成模型自己说过的普通文字；实测能明显降低续写被拒答的概率。需要模型支持工具调用，只影响发送给模型的历史，存档和界面不变。" }) : null,
                 h(PromptTemplateSettingsEntry),
                 h(ContextCompactionSettings)),
             state.error ? React.createElement("div", { className: "dsh-tavern-settings-error", role: "alert" }, "保存失败：" + state.error) : null
