@@ -20,9 +20,13 @@ function installTavernTouchProbe(token) {
     }
     function chain(start) {
         const out = [];
-        for (let node = start; node && node.nodeType === 1 && out.length < 10; node = node.parentElement) out.push(styles(node));
-        const root = document.scrollingElement;
-        if (root) out.push(Object.assign(styles(root), { node: 'scrollingElement' }));
+        // No cap: a real device report stopped at 10 nodes and never reached body, which
+        // is exactly where the blocking touch-action lived.
+        for (let node = start; node && node.nodeType === 1 && out.length < 24; node = node.parentElement) out.push(styles(node));
+        const add = (node, name) => { if (node && out.length < 26 && !out.some(item => item.node === name)) out.push(Object.assign(styles(node), { node: name })); };
+        add(document.body, 'body');
+        add(document.documentElement, 'html');
+        add(document.scrollingElement, 'scrollingElement');
         return out;
     }
     function detach() {
@@ -56,6 +60,8 @@ function installTavernTouchProbe(token) {
             document: root ? { scrollHeight: root.scrollHeight, clientHeight: root.clientHeight } : null,
             viewport: { width: innerWidth, height: innerHeight },
             userAgent: navigator.userAgent,
+            // Values this build had to override to make panning possible again.
+            rootTouchAction: window.__dshTavernRootTouchAction || null,
         }, '*');
     }
     function onScroll() { if (session) session.scrollEvents += 1; }

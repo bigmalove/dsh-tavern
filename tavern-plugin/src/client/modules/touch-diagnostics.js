@@ -32,6 +32,9 @@ function tavernTouchReportText(report) {
     lines.push('存在选区：' + (gesture.selection ? '是' : '否'));
     lines.push('');
     lines.push('【帧文档】');
+    const root = frame.rootTouchAction;
+    if (root) lines.push('根元素手势限制：' + Object.entries(root).map(([name, value]) => name + ' 原为 touch-action:' + value + '（已自动改回 auto）').join('，'));
+    else lines.push('根元素手势限制：无');
     if (frame.document) lines.push('scrollHeight ' + frame.document.scrollHeight + ' / clientHeight ' + frame.document.clientHeight + (frame.document.scrollHeight > frame.document.clientHeight + 8 ? '（帧内可滚）' : '（帧内不可滚）'));
     else lines.push('未取到');
     lines.push('');
@@ -183,8 +186,9 @@ async function runTavernTouchDiagnostics(host, onStatus) {
     // otherwise read as zero.
     const drag = far - startTop;
     let verdict;
+    const fixedRoot = report.frame.rootTouchAction || null;
     if (!gesture.moves) verdict = '这一笔没有产生 touchmove（位移小于浏览器的滑动阈值，或触点落在不可滚动区域）。请拖得更长一些再测一次。';
-    else if (Math.abs(drag) > 8) verdict = '原生滚动生效：会话容器位移了 ' + drag + 'px，浏览器链路正常。';
+    else if (Math.abs(drag) > 8) verdict = '原生滚动生效：会话容器位移了 ' + drag + 'px，浏览器链路正常。' + (fixedRoot ? '（本次已自动修正根元素的 touch-action，见下方“帧文档”）' : '');
     else if (Math.abs(frameMoved) > 8) verdict = '位移被帧内吃掉了 ' + frameMoved + 'px，没有传给会话容器（帧内可滚=' + frameCanScroll + '）。';
     else if (gesture.cancelled > 0) verdict = '手势被 preventDefault 取消了 ' + gesture.cancelled + ' 次，页面脚本拦住了滚动。';
     else verdict = '这一笔既没滚会话容器也没滚帧内（touchmove ' + (gesture.moves || 0) + ' 次）：看下面触点链的 touch-action / overscroll-behavior。';

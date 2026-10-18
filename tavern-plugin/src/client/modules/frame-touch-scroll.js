@@ -43,6 +43,29 @@ function installTavernFrameTouch(token, scrollChain) {
         animation = 0;
     }
     function selected() { return Boolean(String(window.getSelection() || '')); }
+    // Measured on a phone (Android WebView 155, message frame sized to its content):
+    // touchmove fired 59 times, nothing scrolled anywhere, and the only blocking style
+    // in the chain was `body{touch-action:none}` — a card stylesheet/script. touch-action
+    // intersects up to the root, so that one declaration disables panning for the whole
+    // document: the frame cannot scroll (it has no scroll range) AND the browser refuses
+    // to chain the stroke to the conversation. Nothing is left to scroll.
+    //
+    // The message document never needs to block panning at its root; a card that wants a
+    // custom gesture does it on its own container, and blockedAxis() still relays those.
+    // So normalise the two root elements back to `auto`, keeping any other value.
+    const allowsVerticalPan = /^(auto|manipulation|pan-y|pan-up|pan-down)$/;
+    function unblockRootPanning() {
+        for (const node of [document.documentElement, document.body]) {
+            if (!node) continue;
+            const action = String(getComputedStyle(node).touchAction || 'auto');
+            if (allowsVerticalPan.test(action)) continue;
+            // Keep the original value: it is the only trace of who blocked panning,
+            // and the on-device diagnostic reports it back.
+            const seen = window.__dshTavernRootTouchAction || (window.__dshTavernRootTouchAction = {});
+            if (!seen[node === document.body ? 'body' : 'html']) seen[node === document.body ? 'body' : 'html'] = action;
+            node.style.setProperty('touch-action', 'auto', 'important');
+        }
+    }
     // touch-action is intersected up to the first scroll container. A blocked axis
     // means the browser will not pan this stroke at all, so it has to be relayed.
     function blockedAxis(start) {
@@ -54,20 +77,12 @@ function installTavernFrameTouch(token, scrollChain) {
         }
         return false;
     }
-    // Only a frame that can actually pan something takes the native path. A message
-    // document is sized to its content, so it sits within a few pixels of its own
-    // height — measured per gesture, never cached: the verdict depends on the touched
-    // node and on content height, which changes while a reply streams or an image loads.
-    function scrollsItself(start) {
-        for (let node = start; node && node.nodeType === 1; node = node.parentElement) {
-            const style = getComputedStyle(node);
-            if (!/^(auto|scroll)$/.test(style.overflowY)) continue;
-            if (String(style.touchAction || 'auto') === 'none') continue;
-            if (node.scrollHeight > node.clientHeight + 8) return true;
-        }
-        const root = document.scrollingElement;
-        return Boolean(root && root.scrollHeight > root.clientHeight + 8);
-    }
+    // A message document sized to its content has no scroll range of its own, and the
+    // browser chains such a stroke to the conversation natively (measured: 300px drag →
+    // 331px in the host scroller). So the native path is the default for every frame that
+    // can pan *or* chain, and the relay is only for a stroke the browser refuses to pan
+    // at all — i.e. a container that really declares touch-action:none.
+    // (Root-level blocks are normalised away in unblockRootPanning, not relayed.)
     // One message per animation frame. A fast flick delivers touchmove faster than the
     // host can scroll (and every host step is a layout), so posting per event built a
     // backlog the finger had already left — measured on a phone as "the text lags
@@ -93,6 +108,9 @@ function installTavernFrameTouch(token, scrollChain) {
         // this module's bookkeeping, or the measurement includes the very code it is
         // trying to rule out.
         if (window.__dshTavernTouchProbeBypass) return;
+        // Card stylesheets can arrive after this script (and a card script can set the
+        // value at any time), so re-check per gesture — it is two style reads.
+        unblockRootPanning();
         stop();
         sequence++;
         send('dsh-tavern-frame-touch-start');
@@ -101,7 +119,7 @@ function installTavernFrameTouch(token, scrollChain) {
         // Controls and authored drag surfaces keep their own gesture semantics.
         if (!target || target.nodeType !== 1 || target.closest('input,textarea,select,button,a,[contenteditable]:not([contenteditable="false"]),canvas,[draggable="true"],[role="slider"]')) return;
         const touch = event.touches[0], now = performance.now();
-        const relay = blockedAxis(target) || !scrollsItself(target);
+        const relay = blockedAxis(target);
         gesture = { target, id: touch.identifier, x: touch.screenX, y: touch.screenY,
             lastY: touch.screenY, started: now, lastTime: now, lastMove: now, peak: 0, active: false,
             relay, native: !relay, samples: [[now, touch.screenY]] };
@@ -168,6 +186,9 @@ function installTavernFrameTouch(token, scrollChain) {
     }, { passive: true });
     addEventListener('touchcancel', stop, { passive: true });
     addEventListener('pagehide', stop);
+    // Stylesheets are usually parsed by now; the per-gesture check catches late ones.
+    unblockRootPanning();
+    addEventListener('load', unblockRootPanning);
     addEventListener('message', event => {
         if (event.source === parent && event.data && event.data.token === token && event.data.type === 'dsh-tavern-frame-touch-stop' && event.data.sequence === sequence) stop();
     });
