@@ -69,19 +69,8 @@ export function registerTurnLifecycleHooks({
     })
     // A submit_story call and its receipt both carry the body; fold them into one
     // plain reply so context, regeneration and rollback see an ordinary round.
-    // The rewrite must never abort the stopping waterfall: a surface that no
-    // longer matches what this turn wrote (compaction, a parallel tool step, an
-    // edit from another tab) makes the replacement refuse, and throwing here
-    // leaves the turn unclosed so the view waits for a reply that never arrives.
-    try {
-      if (assistant.storyToolSubmission) replaceAssistantReply(session, assistant, saved.reply ? saved.reply.sessionText : assistant.content)
-      else if (saved.reply) replaceAssistantReply(session, assistant, saved.reply.sessionText)
-    } catch (error) {
-      console.error('dsh-tavern: 正文写入失败，保留原始工具回执 ' + JSON.stringify({
-        sessionId, turn: payload.turn, submission: assistant.storyToolSubmission === true,
-        message: String(error && error.message || error)
-      }))
-    }
+    if (assistant.storyToolSubmission) replaceAssistantReply(session, assistant, saved.reply ? saved.reply.sessionText : assistant.content)
+    else if (saved.reply) replaceAssistantReply(session, assistant, saved.reply.sessionText)
   })
 
   ctx.on('agent/error', function (payload) {

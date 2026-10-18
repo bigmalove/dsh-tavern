@@ -4006,7 +4006,6 @@ export async function apply(ctx) {
   const turnOrchestrator = createTurnOrchestrator({
     captureSceneWorldbook,
     storyToolCall: async () => (await readTavernSettings()).storyToolCall,
-    historyToolCall: async () => (await readTavernSettings()).storyHistoryToolCall,
     store: {
       chatForSession,
       storyContextForSession: sessionId => storyContext({ sessionId }),
@@ -5203,12 +5202,8 @@ export async function apply(ctx) {
   }
 
   function replaceAssistantReply(session, result, bodyText) {
-    if (result !== null && result.storyToolSubmission && foldStorySubmission(session, result, bodyText)) return
-    // A submission that could not be folded keeps its call message as the target,
-    // so the body still replaces something the player can see. Returning early
-    // here left the round without any text and the view waiting forever.
-    if (result === null) return
-    if (!result.storyToolSubmission && result.text === bodyText) return
+    if (result !== null && result.storyToolSubmission) return foldStorySubmission(session, result, bodyText)
+    if (result === null || result.text === bodyText) return
     const previous = result.event && result.event.data && result.event.data.message
     if (previous === null || typeof previous !== 'object') return
     replaceSessionSurface(session, 'assistant/message', {
@@ -5332,10 +5327,6 @@ export async function apply(ctx) {
       systemAppend: () => runtimePrompt('system-append'),
       stagedRequests: runtimePresetSnapshots,
       modeFor: async function (sessionId) { return await turnOrchestrator.modeFor(sessionId) },
-      // The request projection reads this switch; without it wired here the
-      // history switch never reaches a request at all. (`storyToolCall` needs no
-      // wiring: it changes the tool list, which `visibleTools` already decides.)
-      historyToolCall: async () => (await readTavernSettings()).storyHistoryToolCall,
       filterMessages: appendWritingSkillState,
       resolvePreset: resolveChatRuntimePreset,
       prepareTurn: async function (input) { return await foregroundHandoff.prepare(input) },

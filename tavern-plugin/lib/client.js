@@ -16850,8 +16850,6 @@ async function runTavernTouchDiagnostics(host, onStatus) {
                     group("高级", "",
                         state.settings ? h(SettingSwitch, { settings: state.settings, name: "storyToolCall", title: "正文走工具调用",
                             description: "让模型通过工具调用提交正文，可缓解 Gemini 等模型在正文中途截断或拒答。需要模型支持工具调用；正文生成完成后一次性显示。" }) : null,
-                        state.settings ? h(SettingSwitch, { settings: state.settings, name: "storyHistoryToolCall", title: "历史正文也走工具调用",
-                            description: "把已保存的正文以工具参数的形式回放给模型，而不是当成模型自己说过的普通文字；实测能明显降低续写被拒答的概率。需要模型支持工具调用，只影响发送给模型的历史，存档和界面不变。" }) : null,
                         h(PromptTemplateSettingsEntry),
                         h(ContextCompactionSettings),
                         h(TouchDiagnosticsSetting)),
@@ -21465,16 +21463,7 @@ async function runTavernTouchDiagnostics(host, onStatus) {
             function addField(key) {
                 if (!Object.hasOwn(request, key)) return;
                 const labels = { system: "系统提示词", tools: "工具定义", messages: "消息" };
-                // The tool list is the first thing to check when a turn ignores an
-                // instruction to call one: name them in the summary instead of making
-                // the reader scan the schema dump for a name.
-                const names = key === "tools" && Array.isArray(request.tools)
-                    ? request.tools.map(item => item && (item.name || item.function?.name)).filter(name => typeof name === "string" && name !== "")
-                    : null;
-                const title = names
-                    ? "tools · 工具定义（" + names.length + " 个：" + names.join("、") + "）"
-                    : key + " · " + labels[key];
-                sections.push({ title, value: request[key], toolNames: names });
+                sections.push({ title: key + " · " + labels[key], value: request[key] });
             }
             function addMessage(message, index) {
                 const labels = { "tavern:runtime-preset-front": "前段预设", "tavern:runtime-preset-middle": "中段预设", "tavern:runtime-preset-back": "末尾预设投影" };
@@ -21484,11 +21473,7 @@ async function runTavernTouchDiagnostics(host, onStatus) {
                     const plain = typeof block === "string" ? block : block?.type === "text" && Object.keys(block).every(key => key === "type" || key === "text") ? block.text : undefined;
                     if (typeof plain !== "string") {
                         const text = JSON.stringify(block, null, 2);
-                        // Name the block so a call is visible without reading its JSON.
-                        const label = block?.type === "tool-call" ? "工具调用 · " + String(block.name || "")
-                            : block?.type === "tool-result" ? "工具回执 · " + String(block.toolCallId || "")
-                            : undefined;
-                        if (text !== undefined) displayParts.push({ text, label });
+                        if (text !== undefined) displayParts.push({ text });
                         continue;
                     }
                     // Older host snapshots merge the catalog into user text and retain only
@@ -21600,8 +21585,6 @@ async function runTavernTouchDiagnostics(host, onStatus) {
                     h("button", { disabled: loading, onClick: () => setRefresh(value => value + 1) }, loading ? "读取中…" : "刷新")),
                 record ? h("div", { className: "dsh-context-meta" },
                     h("span", { className: "dsh-context-badge" }, "第 " + record.turn + " 轮 · 步骤 " + record.step),
-                    request && Array.isArray(request.tools) ? h("span", { className: "dsh-context-badge" },
-                        "工具 " + request.tools.length + " 个" + (request.tools.some(item => (item && (item.name || item.function?.name)) === "submit_story") ? " · 含 submit_story" : " · 无 submit_story")) : null,
                     h("span", null, request.model || ""),
                     h("time", null, new Date(record.createdAt).toLocaleString())) : null,
                 h("div", { className: "dsh-context-toolbar" },
