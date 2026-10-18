@@ -5476,7 +5476,8 @@ function tavernModelRefusalNotice(text) {
 		        if (queuedFrame) { cancelAnimationFrame(queuedFrame); queuedFrame = 0; flushQueue(); }
 		        if (animation) cancelAnimationFrame(animation);
 		        animation = 0;
-		    }    // A live selection only owns the stroke when the finger is on it (handle drag /
+		    }
+		    // A live selection only owns the stroke when the finger is on it (handle drag /
 		    // extend). Treating ANY selection as a blocker meant one accidental long-press
 		    // during a flick left a selection behind, and every later flick was ignored —
 		    // measured on a phone as "only the first of several quick flicks works".
