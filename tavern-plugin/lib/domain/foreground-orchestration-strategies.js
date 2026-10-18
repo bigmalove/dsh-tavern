@@ -317,13 +317,19 @@ export function createNativePlayOrchestrationStrategy(options) {
       }
       // Persist/migrate the fixed system snapshot before native request assembly.
       if (typeof options.ensureSessionPrefix === 'function') await options.ensureSessionPrefix(input)
+      // Both resolved here because the request projection below is synchronous.
+      // The history switch only means anything when the submission tool is in
+      // this request: a transcript that calls a tool the provider was never given
+      // is rejected outright by strict backends, so the pair is decided together.
+      const historyWanted = typeof options.historyToolCall === 'function' ? (await options.historyToolCall()) === true : false
+      const submitOffered = historyWanted && (typeof options.visibleTools !== 'function'
+        || (await options.visibleTools(sessionId)).includes(STORY_SUBMIT_TOOL_NAME))
       stagedRequests.set(sessionId, {
         turn: Math.max(0, Number(payload.turn) || 0),
         step: Math.max(1, Number(payload.step) || 1),
         scope: 'foreground',
         snapshot: snapshot || null,
-        // Resolved here because the request projection below is synchronous.
-        historyToolCall: typeof options.historyToolCall === 'function' ? (await options.historyToolCall()) === true : false
+        historyToolCall: submitOffered
       })
     }
     if (Number(payload.step) === 1) {
