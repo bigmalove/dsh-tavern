@@ -83,6 +83,7 @@ export function createChatHistoryImportService({ initialization, cards, worldBoo
     const identity = createHash('sha256').update(JSON.stringify([input.cardPath, parsed.digest, input.textOnly === true, input.userName || parsed.userName, input.rescue || null, writing])).digest('hex')
     const path = 'chat-imports/' + input.operationId + '.json'
     let journal = await store.readJson(path)
+    let built = false
     if (journal && (journal.identity !== identity || journal.sessionId !== input.sessionId)) throw new Error('同一导入操作不能更换人物卡、内容或 Session')
     const existing = await chats.resolve(input.sessionId)
     if (existing) {
@@ -145,10 +146,13 @@ export function createChatHistoryImportService({ initialization, cards, worldBoo
       const checkpointInputs = plan.chat.timeline.checkpoints.map(c => ({ id: c.id, messageCount: c.importMessageCount, before: c.importBefore }))
       journal = { version: 1, identity, sessionId: input.sessionId, status: 'writing', plan, checkpointInputs }
       await store.writeJson(path, journal)
+      built = true
     }
     if (journal.plan) {
       // A resumed import rebuilds frames from the journal; keep that plan reachable too.
-      drafts?.hold?.(input.sessionId, journal.plan.chat)
+      // A plan built just above was already released once its frames were done — holding
+      // it again would leave the template runtime bound while records are written.
+      if (!built) drafts?.hold?.(input.sessionId, journal.plan.chat)
       // Materialize ordinary Chat revisions for the native checkpoint mechanism.
       // Intermediate records are deliberately absent from the conversation registry.
       for (const checkpoint of journal.plan.chat.timeline.checkpoints) {
