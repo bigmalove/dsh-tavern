@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "revision": "594ef348006d3f0c57a4104114563a2bced6ddf6",
-  "releaseSequence": 673,
+  "revision": "9ee9b58a732cc70138df7201b66dfbce5318e3cb",
+  "releaseSequence": 674,
   "version": "2.7.0",
   "files": [
     {
@@ -461,8 +461,8 @@
     },
     {
       "path": "tavern-plugin/lib/client.js",
-      "sha256": "84c29f0c1d54167287ffda168c7bafd0c089636b734a0e019e6c0b97bfaffa21",
-      "size": 1831940
+      "sha256": "0e90aadd4d723e861a3c4d5d9a3bd7de6b5272ad039f15ab141b9b395fd82c78",
+      "size": 1834346
     },
     {
       "path": "tavern-plugin/lib/cordis-inspect.js",
@@ -531,8 +531,8 @@
     },
     {
       "path": "tavern-plugin/lib/domain/body-editor.js",
-      "sha256": "d126e4fb94a9450226befea8a27cd14f9318eb99e20a270ae6b19e3b9a950d41",
-      "size": 18340
+      "sha256": "e0c2c9e0baecc43f13b0c327a39bcfd7f9f5050d7cbf09436ec24cec18d765d0",
+      "size": 19863
     },
     {
       "path": "tavern-plugin/lib/domain/bounded-compaction.js",
@@ -796,8 +796,8 @@
     },
     {
       "path": "tavern-plugin/lib/domain/conversation-fork-targets.js",
-      "sha256": "b0be6e4ab8ef3a10aab3a4d66dc53b1535649ac56a0ca8cf3042910ac86555aa",
-      "size": 13306
+      "sha256": "ef38c1aa6bf00f508582edd64d0f52630f812fda4390615b1212ea136a280930",
+      "size": 14606
     },
     {
       "path": "tavern-plugin/lib/domain/conversation-fork.js",
@@ -856,8 +856,8 @@
     },
     {
       "path": "tavern-plugin/lib/domain/deleted-surface-nodes.js",
-      "sha256": "f4a195a7d085d85b9a0ceca1fdce9fdb97a399361042c358b53a0fa2d6e92cbc",
-      "size": 1476
+      "sha256": "62ab23e87f616092b9a233f0f6692a77dfd67ba79d8f2d1bffdb96f4333090ab",
+      "size": 3034
     },
     {
       "path": "tavern-plugin/lib/domain/display-runtime-coalescer.js",
@@ -1031,8 +1031,8 @@
     },
     {
       "path": "tavern-plugin/lib/domain/history-deletion.js",
-      "sha256": "8f51593d2d39826a1e1615fcc3ebec4538d419561aecbbb115e1f16b0e1c75bc",
-      "size": 17386
+      "sha256": "b9714968032694f4302b3e5e3dd0c4424f6d13d15cda0242a99b3a9f1c38e907",
+      "size": 18396
     },
     {
       "path": "tavern-plugin/lib/domain/history-mutation-guards.js",
@@ -1851,8 +1851,8 @@
     },
     {
       "path": "tavern-plugin/lib/domain/swipe-selection.js",
-      "sha256": "87ec270215bb5184c45846db51824c219e0bcd3cea452c1688ede9356043ff8c",
-      "size": 8418
+      "sha256": "49852ce7941d2275e85a5bb9a83a665d21f828dcdabcf048092ae273ad37c766",
+      "size": 9106
     },
     {
       "path": "tavern-plugin/lib/domain/swipe-versions.js",
@@ -2201,8 +2201,8 @@
     },
     {
       "path": "tavern-plugin/lib/index.js",
-      "sha256": "6f88461364c1e4ee7e436b40874511c020eb3a896bcb8332e6f22fd5d1629dbf",
-      "size": 352937
+      "sha256": "7e79e9d75e241ceb381b7a4e48ec45615c635d89a4401811958e44ec14b12025",
+      "size": 353513
     },
     {
       "path": "tavern-plugin/lib/plugin-api.js",
@@ -4691,8 +4691,8 @@
     },
     {
       "path": "tavern-plugin/src/client/features/assistant-renderer.js",
-      "sha256": "d8e1964c769c718fd9c76acc6e50ee9ebe0183d232734d28461bcc292b1edc91",
-      "size": 75700
+      "sha256": "edf048e1ec367eaf2bf0e9326107c042bff045d8b0632a0ee39f37bc9d08ea02",
+      "size": 75974
     },
     {
       "path": "tavern-plugin/src/client/features/card-library.js",
@@ -4726,8 +4726,8 @@
     },
     {
       "path": "tavern-plugin/src/client/features/play-controls.js",
-      "sha256": "f7e7451198d3bfd82c4734ce66c296526cb412fc0ec485e74959bd510f7e5dfc",
-      "size": 125639
+      "sha256": "7991537b398a5892b64af945be9bc1d5a53e8eb51093b49f5c1cd2d6740245e2",
+      "size": 127004
     },
     {
       "path": "tavern-plugin/src/client/features/plugin-extensions.js",
@@ -4786,8 +4786,8 @@
     },
     {
       "path": "tavern-plugin/src/client/features/turn-history.js",
-      "sha256": "8eb158c0fbea6b9a3bbeb254473c1679c386947b486f87b15f6b66cbcc54cf79",
-      "size": 18050
+      "sha256": "6438b276ac88f934191e789bf29ff5869d8f30546df425ad68d45a53ebfdff54",
+      "size": 18817
     },
     {
       "path": "tavern-plugin/src/client/features/user-profile.js",
