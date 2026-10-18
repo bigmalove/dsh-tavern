@@ -205,7 +205,9 @@ export function createHistoryDeletion({ chats, sessions, timeline, activity, pro
       // The marker replaces exactly this node; its id lets undo find it again
       // even after the surface was rebuilt for unrelated reasons.
       const markerId = 'tavern-message-delete:' + randomUUID()
-      const marker = { id: markerId, role: 'user', content: [], source: { kind: 'plugin', plugin: 'dsh-tavern-deletion' } }
+      // 删除标记用 v4 的生产者自有 kind（`plugin:<name>`）；旧存档里同名前缀的
+      // 旧形态标记由 deleted-surface-nodes.js 一并识别。
+      const marker = { id: markerId, role: 'user', content: [], source: { kind: 'plugin:dsh-tavern-deletion' } }
       const undo = {
         kind: 'message', index, turn, role, message: clone(message), state,
         nativeSeq: target.seq,

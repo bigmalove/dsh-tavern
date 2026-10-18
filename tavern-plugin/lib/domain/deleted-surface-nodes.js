@@ -4,7 +4,11 @@ import { sessionEvents } from './session-events.js'
 const DELETION_PLUGIN = 'dsh-tavern-deletion'
 
 function isDeletionMarker(event) {
-  return event?.type === 'user/message' && event.data?.source?.kind === 'plugin' && event.data.source.plugin === DELETION_PLUGIN
+  const source = event?.data?.source
+  if (event?.type !== 'user/message' || !source || typeof source !== 'object') return false
+  // v4 取消了裸 kind: 'plugin' + plugin 字段；旧存档里的标记仍是旧形态，两种都认。
+  return source.kind === 'plugin:' + DELETION_PLUGIN
+    || (source.kind === 'plugin' && source.plugin === DELETION_PLUGIN)
 }
 
 /**
