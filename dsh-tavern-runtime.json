@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "revision": "90d3deaa5df47f90853169a4029a181c7122dd1c",
-  "releaseSequence": 677,
+  "revision": "a5be47b0e936aa41d1502a1ab37d1ade098a05b1",
+  "releaseSequence": 678,
   "version": "2.7.0",
   "files": [
     {
@@ -461,8 +461,8 @@
     },
     {
       "path": "tavern-plugin/lib/client.js",
-      "sha256": "4a6aa5855bd5b05b11d4eb34165c86ee87b42035631342c0102a30d009b4c22a",
-      "size": 1834349
+      "sha256": "f6ed9ad378fad5e859413a2717346d8eac3cf524aaba2f6159f78285cbc1d97a",
+      "size": 1838572
     },
     {
       "path": "tavern-plugin/lib/cordis-inspect.js",
@@ -856,8 +856,8 @@
     },
     {
       "path": "tavern-plugin/lib/domain/deleted-surface-nodes.js",
-      "sha256": "62ab23e87f616092b9a233f0f6692a77dfd67ba79d8f2d1bffdb96f4333090ab",
-      "size": 3034
+      "sha256": "29de1485abddd4a6190e4289e95f5fb7cd62282bd2f6122de2404f4e6e30f7be",
+      "size": 4109
     },
     {
       "path": "tavern-plugin/lib/domain/display-runtime-coalescer.js",
@@ -2201,8 +2201,8 @@
     },
     {
       "path": "tavern-plugin/lib/index.js",
-      "sha256": "6123e0e26a5c6516edb93073ba08443d53156f5ec57d8d935dbae49434185276",
-      "size": 354086
+      "sha256": "4afd3f9ba82f9228fa6014f1afb15f75d5721c3918297d13aedd9f5565fe9ef4",
+      "size": 355007
     },
     {
       "path": "tavern-plugin/lib/plugin-api.js",
@@ -4691,8 +4691,8 @@
     },
     {
       "path": "tavern-plugin/src/client/features/assistant-renderer.js",
-      "sha256": "edf048e1ec367eaf2bf0e9326107c042bff045d8b0632a0ee39f37bc9d08ea02",
-      "size": 75974
+      "sha256": "5872bd6255d731025409545719af040e57cc4190c76be63df57f951af1c5cedc",
+      "size": 76499
     },
     {
       "path": "tavern-plugin/src/client/features/card-library.js",
@@ -4786,8 +4786,8 @@
     },
     {
       "path": "tavern-plugin/src/client/features/turn-history.js",
-      "sha256": "6438b276ac88f934191e789bf29ff5869d8f30546df425ad68d45a53ebfdff54",
-      "size": 18817
+      "sha256": "8c369a57da3301baafc17575545afd4e69a7edf7af0d17089f3854fb60522f54",
+      "size": 22515
     },
     {
       "path": "tavern-plugin/src/client/features/user-profile.js",
