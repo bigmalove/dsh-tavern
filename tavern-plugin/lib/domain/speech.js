@@ -60,6 +60,101 @@ async function request(fetchImpl, url, init, signal) {
 const OPENAI_VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer', 'verse']
 const MINIMAX_VOICES = ['female-shaonv', 'female-yujie', 'female-chengshu', 'female-tianmei', 'male-qn-qingse', 'male-qn-jingying', 'male-qn-badao', 'male-qn-daxuesheng',
   'presenter_male', 'presenter_female', 'audiobook_male_1', 'audiobook_female_1']
+// Speaker ids from the console's voice list; replicas (声音复刻) are prefixed with icl_.
+const VOLCENGINE_VOICES = ['zh_female_vv_uranus_bigtts', 'zh_female_xiaohe_uranus_bigtts', 'zh_male_m191_uranus_bigtts', 'zh_male_taocheng_uranus_bigtts',
+  'zh_female_cancan_uranus_bigtts', 'zh_female_gaolengyujie_uranus_bigtts', 'zh_female_sajiaoxuemei_uranus_bigtts', 'zh_female_wuzetian_uranus_bigtts',
+  'zh_female_sophie_uranus_bigtts', 'zh_female_wenroushunv_uranus_bigtts', 'zh_male_dayi_saturn_bigtts', 'zh_female_mizai_saturn_bigtts',
+  'zh_female_meilinvyou_saturn_bigtts', 'zh_male_ruyayichen_saturn_bigtts', 'zh_female_xueayi_saturn_bigtts',
+  'zh_female_cancan_mars_bigtts', 'zh_female_vv_mars_bigtts', 'zh_male_qingshuangnanda_mars_bigtts', 'zh_male_wenrouxiaoge_mars_bigtts',
+  'zh_female_tianmeixiaoyuan_moon_bigtts', 'zh_male_shaonianzixin_moon_bigtts', 'zh_female_meilinvyou_moon_bigtts', 'zh_male_aojiaobazong_moon_bigtts',
+  'zh_female_yuanqinvyou_moon_bigtts', 'zh_male_shenyeboke_moon_bigtts', 'zh_male_beijingxiaoye_moon_bigtts', 'zh_male_tangseng_mars_bigtts',
+  'zh_male_sunwukong_mars_bigtts', 'zh_male_xionger_mars_bigtts', 'multi_female_shuangkuaisisi_moon_bigtts', 'en_female_anna_mars_bigtts']
+
+// 火山的情感是固定枚举，而且只有部分音色认；映射不到就不传，让音色用默认语气。
+const VOLCENGINE_EMOTIONS = Object.freeze({
+  joy: 'happy', amusement: 'happy', excitement: 'excited', pride: 'happy', optimism: 'happy', approval: 'warm', gratitude: 'warm', admiration: 'warm',
+  love: 'lovey-dovey', desire: 'lovey-dovey', caring: 'comfort', relief: 'comfort',
+  sadness: 'sad', grief: 'sad', remorse: 'sad', disappointment: 'depressed',
+  anger: 'angry', annoyance: 'angry', disapproval: 'hate', disgust: 'hate',
+  fear: 'fear', nervousness: 'tension', surprise: 'surprised', realization: 'surprised',
+  embarrassment: 'shy'
+})
+
+/** Which resource a speaker belongs to: 2.0 voices, replicas, or the 1.0 catalog. */
+export function volcengineResource(voice, override) {
+  if (String(override || '').trim()) return String(override).trim()
+  const speaker = String(voice || '').trim().toLowerCase()
+  if (speaker.startsWith('icl_') || speaker.startsWith('s_')) return 'seed-icl-2.0'
+  if (speaker.includes('_uranus_') || speaker.includes('_saturn_')) return 'seed-tts-2.0'
+  return 'seed-tts-1.0'
+}
+
+/** The emotion code this voice understands, or '' to leave its default delivery alone. */
+export function volcengineEmotion(emotion, resourceId, voice) {
+  const code = VOLCENGINE_EMOTIONS[String(emotion || '')]
+  if (!code) return ''
+  if (resourceId === 'seed-tts-2.0') return code
+  if (resourceId === 'seed-tts-1.0' && /_emo(_v2)?_/i.test(String(voice || ''))) return code
+  return ''
+}
+
+// The V3 endpoint answers with one JSON object per line; each carries a base64 audio slice.
+function volcengineReason(text) {
+  const raw = String(text || '').replace(/\s+/g, ' ').trim()
+  try {
+    const body = JSON.parse(raw)
+    const reason = body?.message || body?.header?.message || body?.error?.message || body?.error
+    if (typeof reason === 'string' && reason) return reason
+  } catch {}
+  return raw.slice(0, 200)
+}
+
+async function volcengineAudio(fetchImpl, url, init, signal) {
+  const signals = [AbortSignal.timeout(TIMEOUT_MS), ...(signal ? [signal] : [])]
+  let response
+  try { response = await fetchImpl(url, { ...init, redirect: 'error', signal: AbortSignal.any(signals) }) }
+  catch (error) { throw new Error(error?.name === 'TimeoutError' ? '配音服务超过 60 秒未响应' : '无法连接配音服务：' + String(error?.message || error)) }
+  const logId = response.headers.get('x-tt-logid') || ''
+  if (!response.ok) {
+    const reason = volcengineReason(Buffer.from(await response.arrayBuffer()).toString('utf8'))
+    throw new Error('配音服务返回 HTTP ' + response.status + '：' + (reason || '没有说明') + (logId ? '（logid ' + logId + '）' : ''))
+  }
+  const reader = response.body?.getReader()
+  if (!reader) throw new Error('配音服务没有返回音频流')
+  const slices = []
+  let total = 0, failure = ''
+  const consume = line => {
+    const trimmed = line.trim()
+    if (!trimmed) return
+    let payload
+    try { payload = JSON.parse(trimmed) } catch { return }
+    if (typeof payload?.data === 'string' && payload.data) {
+      const bytes = Buffer.from(payload.data, 'base64')
+      total += bytes.length
+      if (total > MAX_AUDIO_BYTES) throw new Error('配音结果超过 20 MB')
+      slices.push(bytes)
+      return
+    }
+    const code = Number(payload?.code ?? payload?.header?.code)
+    if (Number.isFinite(code) && code !== 0 && code !== 20000000) failure = String(payload?.message || payload?.header?.message || code)
+  }
+  const decoder = new TextDecoder()
+  let buffer = ''
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) consume(line)
+    }
+    buffer += decoder.decode()
+    if (buffer) consume(buffer)
+  } finally { await reader.cancel().catch(() => {}) }
+  if (!slices.length) throw new Error('火山引擎没有返回音频' + (failure ? '：' + failure : logId ? '（logid ' + logId + '）' : ''))
+  return Buffer.concat(slices)
+}
 
 export const BUILTIN_SPEECH_PROVIDERS = Object.freeze([
   {
@@ -95,7 +190,7 @@ export const BUILTIN_SPEECH_PROVIDERS = Object.freeze([
     }
   },
   {
-    id: 'minimax', label: 'MiniMax 语音', key: true, voices: MINIMAX_VOICES, defaultVoice: 'female-shaonv',
+    id: 'minimax', label: 'MiniMax 语音', key: true, emotional: true, voices: MINIMAX_VOICES, defaultVoice: 'female-shaonv',
     description: 'MiniMax T2A v2 接口，按台词情绪选择语气。声音填系统音色或自己复刻的音色 ID。',
     fields: [{ name: 'baseUrl', label: 'API 根地址', default: 'https://api.minimaxi.com', required: true }, { name: 'model', label: '模型', default: 'speech-02-hd', required: true },
       { name: 'groupId', label: 'Group ID（选填）', default: '' }],
@@ -112,6 +207,25 @@ export const BUILTIN_SPEECH_PROVIDERS = Object.freeze([
       const audio = body?.data?.audio
       if (typeof audio !== 'string' || !/^[0-9a-f]+$/i.test(audio)) throw new Error('MiniMax 没有返回音频')
       return { data: Buffer.from(audio, 'hex'), mediaType: 'audio/mpeg' }
+    }
+  },
+  {
+    id: 'volcengine', label: '火山引擎语音', key: true, keyLabel: 'Access Token', emotional: true, voices: VOLCENGINE_VOICES, defaultVoice: 'zh_female_vv_uranus_bigtts',
+    description: '火山引擎（豆包）语音合成 V3：填控制台的 APP ID，Access Token 填在下面的 Key 里。声音写音色 ID，复刻音色以 icl_ 开头。2.0 音色按台词情绪选语气，其他音色用自己的默认语气。',
+    fields: [{ name: 'appId', label: 'APP ID', required: true },
+      { name: 'baseUrl', label: '服务地址', default: 'https://openspeech.bytedance.com', required: true },
+      { name: 'resourceId', label: '资源 ID（选填）', default: '' }],
+    async synthesize({ config, apiKey, text, voice, emotion, signal, fetchImpl }) {
+      const resourceId = volcengineResource(voice, config.resourceId)
+      const audio = { format: 'mp3', sample_rate: 24000, speech_rate: 0, loudness_rate: 0 }
+      const style = volcengineEmotion(emotion, resourceId, voice)
+      if (style) { audio.emotion = style; audio.emotion_scale = 4 }
+      const data = await volcengineAudio(fetchImpl, trimSlash(config.baseUrl) + '/api/v3/tts/unidirectional', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-app-id': config.appId, 'x-api-access-key': apiKey, 'x-api-resource-id': resourceId },
+        body: JSON.stringify({ user: { uid: 'dsh-tavern' }, req_params: { text, speaker: voice, audio_params: audio } })
+      }, signal)
+      return { data, mediaType: 'audio/mpeg' }
     }
   }
 ])
@@ -171,7 +285,7 @@ export function createSpeech({ store, credentials, plugins = () => [], fetchImpl
     for (const provider of providers()) {
       const config = settingsOf(provider, stored)
       list.push({ id: provider.id, label: provider.label, description: provider.description, owner: provider.owner || '', browser: provider.browser === true,
-        key: provider.key, hasKey: Boolean(await keyOf(provider)), voices: provider.voices.slice(0, 200),
+        key: provider.key, keyLabel: provider.keyLabel || 'API Key', hasKey: Boolean(await keyOf(provider)), voices: provider.voices.slice(0, 200),
         fields: provider.fields.map(field => ({ name: field.name, label: field.label, value: config[field.name], placeholder: field.default || '' })),
         voice: config.voice, narratorVoice: config.narratorVoice })
     }
@@ -250,7 +364,7 @@ export function createSpeech({ store, credentials, plugins = () => [], fetchImpl
     if (provider.browser) return { browser: true, voice: speaker, text }
     if (!speaker) throw invalid('请先为「' + provider.label + '」填写默认声音')
     const { voice: _voice, narratorVoice: _narrator, ...fields } = config
-    const usesEmotion = provider.plugin || provider.id === 'minimax' || (provider.id === 'openai' && /gpt-4o/.test(config.model))
+    const usesEmotion = provider.plugin || provider.emotional === true || (provider.id === 'openai' && /gpt-4o/.test(config.model))
     const digest = hash(JSON.stringify([provider.id, fields, speaker, usesEmotion ? emotion : '', text]))
     for (const extension of Object.keys(AUDIO_TYPES)) {
       if (await cached(CACHE_DIR + '/' + digest + '.' + extension)) return { id: digest + '.' + extension, mediaType: AUDIO_TYPES[extension] }

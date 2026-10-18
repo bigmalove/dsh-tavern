@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createSpeech, minimaxEmotion, speechText } from '../tavern-plugin/lib/domain/speech.js'
+import { createSpeech, minimaxEmotion, speechText, volcengineEmotion, volcengineResource } from '../tavern-plugin/lib/domain/speech.js'
 
 function harness({ responses = [] } = {}) {
   const files = new Map(), keys = new Map(), requests = []
@@ -27,7 +27,7 @@ test('配音设置：默认浏览器朗读；开启前要填齐地址与 Key，�
   const initial = await speech.present()
   assert.equal(initial.enabled, false)
   assert.equal(initial.provider, 'browser')
-  assert.deepEqual(initial.providers.map(item => item.id), ['browser', 'openai', 'gpt-sovits', 'minimax'])
+  assert.deepEqual(initial.providers.map(item => item.id), ['browser', 'openai', 'gpt-sovits', 'minimax', 'volcengine'])
   await assert.rejects(speech.save({ enabled: true, provider: 'openai' }), /还不能开启配音：请填写 API Key/)
   const saved = await speech.save({ enabled: true, provider: 'openai', config: { voice: 'nova' }, apiKey: 'sk-1' })
   assert.equal(saved.enabled, true)
@@ -89,6 +89,64 @@ test('配音合成：GPT-SoVITS 读参考音频与文字，MiniMax 解出十六�
   await assert.rejects(speech.synthesize({ provider: 'gpt-sovits', text: '再来一句', voice: '/data/x.wav' }), /HTTP 400：\{"error":"bad voice"\}/)
   assert.deepEqual(await speech.synthesize({ provider: 'browser', text: '*她笑了* <b>好</b>', voice: 'Tingting' }), { browser: true, voice: 'Tingting', text: '她笑了 好' })
   assert.equal(speechText('# 标题\n\n> 引用'), '标题 引用')
+})
+
+test('配音合成：火山引擎按音色选资源与情绪，把逐行 JSON 里的音频块拼成一句', async () => {
+  const ndjson = lines => ({ body: Buffer.from(lines.map(line => JSON.stringify(line)).join('\n') + '\n'), type: 'application/x-ndjson' })
+  const { speech, requests } = harness({ responses: [
+    ndjson([{ code: 0, message: '', data: Buffer.from('ID3a').toString('base64') },
+      { code: 0, message: '', data: Buffer.from('b').toString('base64') },
+      { code: 20000000, message: 'OK' }]),
+    ndjson([{ code: 20000000, message: 'OK', data: Buffer.from('ID3c').toString('base64') }]),
+    ndjson([{ code: 20000000, message: 'OK', data: Buffer.from('ID3d').toString('base64') }]),
+    ndjson([{ code: 20000000, message: 'OK', data: Buffer.from('ID3e').toString('base64') }]),
+    ndjson([{ code: 45000001, message: 'invalid speaker' }]),
+    { body: JSON.stringify({ header: { code: 45000010, message: 'load grant: requested grant not found in SaaS storage' } }), status: 401, type: 'application/json' }
+  ] })
+  const saved = await speech.save({ enabled: true, provider: 'volcengine', config: { appId: 'app-1', voice: 'zh_female_vv_uranus_bigtts' }, apiKey: 'token-1' })
+  assert.equal(saved.provider, 'volcengine')
+  const volc = saved.providers.find(item => item.id === 'volcengine')
+  assert.equal(volc.keyLabel, 'Access Token')
+  assert.equal(volc.hasKey, true)
+  assert.equal(volc.fields.find(field => field.name === 'appId').value, 'app-1')
+  assert.equal(volc.fields.find(field => field.name === 'baseUrl').value, 'https://openspeech.bytedance.com')
+
+  const audio = await speech.synthesize({ text: '“你回来了。”', emotion: 'joy' })
+  assert.match(audio.id, /\.mp3$/)
+  assert.equal(requests[0].url, 'https://openspeech.bytedance.com/api/v3/tts/unidirectional')
+  assert.equal(requests[0].init.headers['x-api-app-id'], 'app-1')
+  assert.equal(requests[0].init.headers['x-api-access-key'], 'token-1')
+  assert.equal(requests[0].init.headers['x-api-resource-id'], 'seed-tts-2.0')
+  assert.equal(requests[0].body.req_params.text, '“你回来了。”')
+  assert.equal(requests[0].body.req_params.speaker, 'zh_female_vv_uranus_bigtts')
+  assert.equal(requests[0].body.req_params.audio_params.format, 'mp3')
+  assert.equal(requests[0].body.req_params.audio_params.emotion, 'happy', '开心映射成火山的情感枚举')
+  assert.equal(requests[0].body.req_params.audio_params.emotion_scale, 4)
+  assert.equal((await speech.readAudio(audio.id)).bytes.toString(), 'ID3ab', '多行音频块按顺序拼起来')
+
+  // 1.0 的普通音色不认情绪参数；复刻音色走 ICL 资源；显式资源 ID 优先。
+  const plain = await speech.synthesize({ provider: 'volcengine', text: '别过来！', emotion: 'fear', voice: 'zh_male_qingshuangnanda_mars_bigtts' })
+  assert.match(plain.id, /\.mp3$/)
+  assert.equal(requests[1].init.headers['x-api-resource-id'], 'seed-tts-1.0')
+  assert.equal(Object.hasOwn(requests[1].body.req_params.audio_params, 'emotion'), false)
+  await speech.synthesize({ provider: 'volcengine', text: '我回来了。', voice: 'icl_abc123' })
+  assert.equal(requests[2].init.headers['x-api-resource-id'], 'seed-icl-2.0')
+  await speech.save({ provider: 'volcengine', config: { resourceId: 'seed-tts-2.0' } })
+  await speech.synthesize({ provider: 'volcengine', text: '换一个资源。', voice: 'icl_abc123' })
+  assert.equal(requests[3].init.headers['x-api-resource-id'], 'seed-tts-2.0')
+
+  assert.equal(volcengineResource('zh_female_vv_uranus_bigtts'), 'seed-tts-2.0')
+  assert.equal(volcengineResource('zh_male_dayi_saturn_bigtts'), 'seed-tts-2.0')
+  assert.equal(volcengineResource('zh_female_cancan_mars_bigtts'), 'seed-tts-1.0')
+  assert.equal(volcengineResource('icl_replica', 'seed-icl-2.0'), 'seed-icl-2.0')
+  assert.equal(volcengineEmotion('joy', 'seed-tts-2.0', 'zh_female_vv_uranus_bigtts'), 'happy')
+  assert.equal(volcengineEmotion('joy', 'seed-tts-1.0', 'zh_female_cancan_mars_bigtts'), '')
+  assert.equal(volcengineEmotion('joy', 'seed-tts-1.0', 'zh_female_shuangkuaisisi_emo_v2_mars_bigtts'), 'happy')
+  assert.equal(volcengineEmotion('confusion', 'seed-tts-2.0', 'zh_female_vv_uranus_bigtts'), '')
+
+  await assert.rejects(speech.synthesize({ provider: 'volcengine', text: '没人理我。', voice: 'zh_male_m191_uranus_bigtts' }), /火山引擎没有返回音频：invalid speaker/)
+  await assert.rejects(speech.synthesize({ provider: 'volcengine', text: '再试一次。', voice: 'zh_male_taocheng_uranus_bigtts' }),
+    /HTTP 401：load grant: requested grant not found in SaaS storage/, '鉴权失败时带上服务的说明')
 })
 
 test('插件配音渠道：出现在设置里，合成交给插件，结果同样缓存', async () => {
