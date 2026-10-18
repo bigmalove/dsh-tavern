@@ -42,11 +42,6 @@ document.querySelector('#run').onclick=async()=>{
  const blockedBody=blockedFrame.contentWindow.document.body;
  const blockedAction=blockedFrame.contentWindow.getComputedStyle(blockedBody).touchAction;
  if(blockedAction!=='auto')throw Error('root touch-action not restored: '+blockedAction);
- // 同一笔手势改成由正文触发，确认接力仍然只按触点上真实的 none 判定（根元素不再是 none）。
- const plainNode=blockedFrame.contentWindow.document.querySelector('#plain');
- const plainGesture=(type,y)=>{const point=new blockedFrame.contentWindow.Touch({identifier:3,target:plainNode,screenX:100,screenY:y,clientX:100,clientY:y});plainNode.dispatchEvent(new blockedFrame.contentWindow.TouchEvent(type,{bubbles:true,cancelable:true,touches:type==='touchend'?[]:[point],changedTouches:[point]}))};
- outer.scrollTo({top:0,behavior:'instant'});
- plainGesture('touchstart',200);plainGesture('touchmove',190);plainGesture('touchcancel',190);
  blockedRelease();release();
  out.textContent='PASS: inner 10px + outer 90px; smooth CSS bypassed; native pan untouched; new gesture survives old cancellation; body touch-action restored to '+blockedAction+'; lifecycle disposed';
  }catch(error){out.textContent='FAIL: '+error.stack+' '+JSON.stringify(trace)}

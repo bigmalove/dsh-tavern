@@ -43,18 +43,11 @@ function installTavernFrameTouch(token, scrollChain) {
     // custom gesture declares it on its own container, which nativeVertical() already
     // handles — so normalise the two root elements back to `auto`. Any value that already
     // allows vertical panning is left untouched.
-    const allowsVerticalPan = /^(auto|manipulation|pan-y|pan-up|pan-down)$/;
+    // Same rule as nativeVertical(): none, or pan-* without a vertical component, blocks.
+    const blocksVerticalPan = action => action === 'none' || (/pan-|pinch-zoom/.test(action) && !/pan-y|pan-up|pan-down/.test(action));
     function unblockRootPanning() {
         for (const node of [document.documentElement, document.body]) {
-            if (!node) continue;
-            const action = String(getComputedStyle(node).touchAction || 'auto');
-            if (allowsVerticalPan.test(action)) continue;
-            // Keep the original value: it is the only remaining trace of who blocked
-            // panning, and it is what a bug report needs.
-            const seen = window.__dshTavernRootTouchAction || (window.__dshTavernRootTouchAction = {});
-            const key = node === document.body ? 'body' : 'html';
-            if (!seen[key]) seen[key] = action;
-            node.style.setProperty('touch-action', 'auto', 'important');
+            if (node && blocksVerticalPan(String(getComputedStyle(node).touchAction || 'auto'))) node.style.setProperty('touch-action', 'auto', 'important');
         }
     }
     function nativeVertical(start) {
@@ -62,7 +55,7 @@ function installTavernFrameTouch(token, scrollChain) {
         for (let node = start; node && node.nodeType === 1; node = node.parentElement) {
             const style = getComputedStyle(node);
             const action = String(style.touchAction || 'auto');
-            if (action === 'none' || (/pan-/.test(action) && !/pan-y|pan-up|pan-down/.test(action))) return false;
+            if (blocksVerticalPan(action)) return false;
             if (node === document.scrollingElement || /^(auto|scroll)$/.test(style.overflowY)) break;
         }
         return true;
@@ -72,8 +65,8 @@ function installTavernFrameTouch(token, scrollChain) {
         if (rest) send('dsh-tavern-frame-scroll', { dy: rest });
     }
     addEventListener('touchstart', event => {
-        // Card stylesheets can be appended after this script, and a card script can set
-        // the value at any time, so re-check per gesture (two computed-style reads).
+        // A card script may set it later. The browser fixes a stroke's touch-action at
+        // touch-down, so this repairs the next stroke, not the current one.
         unblockRootPanning();
         stop();
         sequence++;
