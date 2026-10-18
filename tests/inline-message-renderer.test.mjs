@@ -27,8 +27,9 @@ test('消息 iframe 将可信远程资源转入持久缓存，同时保留不透
   assert.match(document, /data-dsh-sillytavern-css-compat="1\.18\.0"/)
   assert.match(document, /public%2Fcss%2Fsolid\.min\.css/)
   assert.match(document, /HTMLImageElement/)
-  assert.match(document, /default-src https: http: data: blob:/)
-  assert.match(document, /connect-src https: http: wss: data: blob:/)
+  // The official desktop also serves Tavern's resources over dsh-app:// (official-desktop-frame-csp.test.mjs).
+  assert.match(document, /default-src (dsh-app:\/\/app\/api\/dsh-tavern\/ )?https: http: data: blob:/)
+  assert.match(document, /connect-src (dsh-app:\/\/app\/api\/dsh-tavern\/ )?https: http: wss: data: blob:/)
   assert.match(document, /frame-src https: http: data: blob:/)
   assert.match(document, /object-src 'none'/)
   assert.match(document, /form-action 'none'/)

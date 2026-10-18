@@ -44,7 +44,9 @@ export function minimaxEmotion(emotion) {
 
 function trimSlash(value) { return String(value || '').trim().replace(/\/+$/, '') }
 
-async function request(fetchImpl, url, init, signal) {
+const rawReason = text => text.replace(/\s+/g, ' ').slice(0, 200)
+
+async function request(fetchImpl, url, init, signal, reason = rawReason) {
   const signals = [AbortSignal.timeout(TIMEOUT_MS), ...(signal ? [signal] : [])]
   let response
   try { response = await fetchImpl(url, { ...init, redirect: 'error', signal: AbortSignal.any(signals) }) }
@@ -53,7 +55,7 @@ async function request(fetchImpl, url, init, signal) {
   if (length > MAX_AUDIO_BYTES) throw new Error('配音结果超过 20 MB')
   const bytes = Buffer.from(await response.arrayBuffer())
   if (bytes.length > MAX_AUDIO_BYTES) throw new Error('配音结果超过 20 MB')
-  if (!response.ok) throw new Error('配音服务返回 HTTP ' + response.status + '：' + bytes.toString('utf8').replace(/\s+/g, ' ').slice(0, 200))
+  if (!response.ok) throw Object.assign(new Error('配音服务返回 HTTP ' + response.status + '：' + (reason(bytes.toString('utf8')) || '没有说明')), { status: response.status })
   return { bytes, mediaType: response.headers.get('content-type') || '' }
 }
 
@@ -99,7 +101,6 @@ export function volcengineEmotion(emotion, resourceId, voice) {
   return ''
 }
 
-// The V3 endpoint answers with one JSON object per line; each carries a base64 audio slice.
 function volcengineReason(text) {
   const raw = String(text || '').replace(/\s+/g, ' ').trim()
   try {
@@ -110,50 +111,19 @@ function volcengineReason(text) {
   return raw.slice(0, 200)
 }
 
+// The V3 endpoint answers with one JSON object per line; each carries a base64 audio slice.
 async function volcengineAudio(fetchImpl, url, init, signal) {
-  const signals = [AbortSignal.timeout(TIMEOUT_MS), ...(signal ? [signal] : [])]
-  let response
-  try { response = await fetchImpl(url, { ...init, redirect: 'error', signal: AbortSignal.any(signals) }) }
-  catch (error) { throw new Error(error?.name === 'TimeoutError' ? '配音服务超过 60 秒未响应' : '无法连接配音服务：' + String(error?.message || error)) }
-  const logId = response.headers.get('x-tt-logid') || ''
-  if (!response.ok) {
-    const reason = volcengineReason(Buffer.from(await response.arrayBuffer()).toString('utf8'))
-    throw new Error('配音服务返回 HTTP ' + response.status + '：' + (reason || '没有说明') + (logId ? '（logid ' + logId + '）' : ''))
-  }
-  const reader = response.body?.getReader()
-  if (!reader) throw new Error('配音服务没有返回音频流')
+  const { bytes } = await request(fetchImpl, url, init, signal, volcengineReason)
   const slices = []
-  let total = 0, failure = ''
-  const consume = line => {
-    const trimmed = line.trim()
-    if (!trimmed) return
+  let failure = ''
+  for (const line of bytes.toString('utf8').split('\n')) {
     let payload
-    try { payload = JSON.parse(trimmed) } catch { return }
-    if (typeof payload?.data === 'string' && payload.data) {
-      const bytes = Buffer.from(payload.data, 'base64')
-      total += bytes.length
-      if (total > MAX_AUDIO_BYTES) throw new Error('配音结果超过 20 MB')
-      slices.push(bytes)
-      return
-    }
+    try { payload = JSON.parse(line) } catch { continue }
+    if (typeof payload?.data === 'string' && payload.data) { slices.push(Buffer.from(payload.data, 'base64')); continue }
     const code = Number(payload?.code ?? payload?.header?.code)
     if (Number.isFinite(code) && code !== 0 && code !== 20000000) failure = String(payload?.message || payload?.header?.message || code)
   }
-  const decoder = new TextDecoder()
-  let buffer = ''
-  try {
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-      for (const line of lines) consume(line)
-    }
-    buffer += decoder.decode()
-    if (buffer) consume(buffer)
-  } finally { await reader.cancel().catch(() => {}) }
-  if (!slices.length) throw new Error('火山引擎没有返回音频' + (failure ? '：' + failure : logId ? '（logid ' + logId + '）' : ''))
+  if (!slices.length) throw new Error('火山引擎没有返回音频' + (failure ? '：' + failure : ''))
   return Buffer.concat(slices)
 }
 
@@ -219,14 +189,20 @@ export const BUILTIN_SPEECH_PROVIDERS = Object.freeze([
     async synthesize({ config, apiKey, text, voice, emotion, signal, fetchImpl }) {
       const resourceId = volcengineResource(voice, config.resourceId)
       const audio = { format: 'mp3', sample_rate: 24000, speech_rate: 0, loudness_rate: 0 }
-      const style = volcengineEmotion(emotion, resourceId, voice)
-      if (style) { audio.emotion = style; audio.emotion_scale = 4 }
-      const data = await volcengineAudio(fetchImpl, trimSlash(config.baseUrl) + '/api/v3/tts/unidirectional', {
+      const say = audioParams => volcengineAudio(fetchImpl, trimSlash(config.baseUrl) + '/api/v3/tts/unidirectional', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-api-app-id': config.appId, 'x-api-access-key': apiKey, 'x-api-resource-id': resourceId },
-        body: JSON.stringify({ user: { uid: 'dsh-tavern' }, req_params: { text, speaker: voice, audio_params: audio } })
+        body: JSON.stringify({ user: { uid: 'dsh-tavern' }, req_params: { text, speaker: voice, audio_params: audioParams } })
       }, signal)
-      return { data, mediaType: 'audio/mpeg' }
+      const style = volcengineEmotion(emotion, resourceId, voice)
+      if (!style) return { data: await say(audio), mediaType: 'audio/mpeg' }
+      try { return { data: await say({ ...audio, emotion: style, emotion_scale: 4 }), mediaType: 'audio/mpeg' } }
+      catch (error) {
+        // Which voice takes which emotion isn't listed anywhere we can read; a refused emotion
+        // shouldn't cost the line, so say it once more in the voice's own manner.
+        if (signal?.aborted || [401, 403, 429].includes(error?.status) || /^(无法连接|配音服务超过)/.test(error?.message)) throw error
+        return { data: await say(audio), mediaType: 'audio/mpeg' }
+      }
     }
   }
 ])
@@ -276,7 +252,7 @@ export function createSpeech({ store, credentials, plugins = () => [], fetchImpl
   function missing(provider, config, apiKey) {
     const field = provider.fields.find(item => item.required && !config[item.name])
     if (field) return '请填写' + field.label
-    if (provider.key && !apiKey) return '请填写 API Key'
+    if (provider.key && !apiKey) return '请填写 ' + (provider.keyLabel || 'API Key')
     return ''
   }
 
@@ -315,7 +291,7 @@ export function createSpeech({ store, credentials, plugins = () => [], fetchImpl
     const supplied = provider.key && typeof apiKey === 'string' ? apiKey.trim() : ''
     const savedKey = await keyOf(provider)
     // A key belongs to the address it was saved with; never send it to a new one.
-    if (provider.key && savedKey && !supplied && trimSlash(next.baseUrl) !== trimSlash(previous.baseUrl)) throw invalid('地址已修改，请重新填写 API Key；旧密钥不会发送到新地址')
+    if (provider.key && savedKey && !supplied && trimSlash(next.baseUrl) !== trimSlash(previous.baseUrl)) throw invalid('地址已修改，请重新填写 ' + (provider.keyLabel || 'API Key') + '；旧密钥不会发送到新地址')
     const turnOn = enabled === undefined ? stored.enabled : enabled === true
     if (turnOn) {
       const reason = missing(provider, next, supplied || savedKey)
@@ -366,7 +342,7 @@ export function createSpeech({ store, credentials, plugins = () => [], fetchImpl
     if (provider.browser) return { browser: true, voice: speaker, text }
     if (!speaker) throw invalid('请先为「' + provider.label + '」填写默认声音')
     const { voice: _voice, narratorVoice: _narrator, ...fields } = config
-    const usesEmotion = provider.plugin || provider.emotional === true || provider.id === 'minimax' || (provider.id === 'openai' && /gpt-4o/.test(config.model))
+    const usesEmotion = provider.plugin || provider.emotional === true || (provider.id === 'openai' && /gpt-4o/.test(config.model))
     // A plugin channel also hears who speaks and may voice them differently; its version marks changed synthesis.
     const line = { gameId: typeof gameId === 'string' ? gameId : '', speaker: typeof character === 'string' ? character.trim() : '', narration: narration === true }
     const digest = hash(JSON.stringify(provider.plugin ? [provider.id, fields, speaker, emotion, text, provider.plugin.version || '', line.speaker, line.narration]

@@ -10,6 +10,16 @@ import { SESSION_PATCH_VERSION } from '../tavern-plugin/lib/domain/host-session-
 import { installHostSubprocessPatch } from '../tavern-plugin/lib/domain/host-subprocess-patch.js'
 
 const native = { skip: !process.env.DSH_BOOT_MODULE }
+
+async function restorePristineFontLimit(directory) {
+  for (const name of ['index.js', 'client.js']) {
+    const file = path.join(directory, 'lib', name)
+    const code = await readFile(file, 'utf8')
+    await writeFile(file, code
+      .replace('const FONT_SIZE_MAX = 32;', 'const FONT_SIZE_MAX = 22;')
+      .replace(/(variable: "--dsh-content-font-size",\s+min: 10,\s+max: )32,/, '$122,'))
+  }
+}
 test('目标宿主与会话补丁版本保持一致', () => {
   assert.equal(SESSION_PATCH_VERSION, adaptedDshVersion)
 })
@@ -20,6 +30,8 @@ test('目标宿主字号补丁只扩大正文字号，重复安装幂等且漂�
   const directory = await mkdtemp(path.join(tmpdir(), 'tavern-theme-native-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   await cp(source, directory, { recursive: true })
+  // A host installed through Tavern is already patched; start every run from the pristine anchors.
+  await restorePristineFontLimit(directory)
   assert.equal(patchThemeFontLimit(directory), true)
   assert.equal(patchThemeFontLimit(directory), false)
   for (const name of ['index.js', 'client.js']) {
@@ -29,6 +41,7 @@ test('目标宿主字号补丁只扩大正文字号，重复安装幂等且漂�
     assert.match(code, /variable: "--dsh-terminal-font-size",\s+min: 10,\s+max: 20,/)
   }
   await cp(source, directory, { recursive: true })
+  await restorePristineFontLimit(directory)
   const client = path.join(directory, 'lib/client.js')
   const host = path.join(directory, 'lib/index.js')
   const originalHost = await readFile(host, 'utf8')

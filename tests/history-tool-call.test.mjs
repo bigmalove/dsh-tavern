@@ -16,16 +16,19 @@ test('历史正文改成提交调用并紧跟一条回执，正文只出现一�
   ]
   const projected = projectHistoryAsToolCalls(messages, { toolName: TOOL })
   assert.equal(projected.length, 4)
-  assert.deepEqual(projected.map(message => message.role), ['user', 'assistant', 'user', 'user'])
+  assert.deepEqual(projected.map(message => message.role), ['user', 'assistant', 'tool', 'user'])
   const call = projected[1]
   assert.equal(call.id, 'message-1')
   assert.deepEqual(call.content.map(block => block.type), ['tool-call'])
   assert.equal(call.content[0].name, TOOL)
   assert.deepEqual(JSON.parse(call.content[0].arguments), { content: '第一轮正文' })
   const receipt = projected[2]
-  assert.equal(receipt.role, 'user')
+  // DSH 0.2 (session v4) sends a tool result as a first-class tool message.
+  assert.equal(receipt.role, 'tool')
   assert.deepEqual(receipt.source, { kind: 'tool', callId: call.content[0].id })
-  assert.deepEqual(receipt.content, [{ type: 'tool-result', toolCallId: call.content[0].id, content: [{ type: 'text', text: HISTORY_RECEIPT_TEXT }] }])
+  assert.equal(receipt.toolCallId, call.content[0].id)
+  assert.equal(receipt.isError, false)
+  assert.deepEqual(receipt.content, [{ type: 'text', text: HISTORY_RECEIPT_TEXT }])
   // The body characters live in the arguments only.
   assert.equal(JSON.stringify(projected).split('第一轮正文').length - 1, 1)
   // The original array is untouched.
@@ -73,5 +76,5 @@ test('没有工具名或没有消息时原样返回', () => {
 test('回执文本可覆盖，未提供时用默认值', () => {
   const [call, receipt] = projectHistoryAsToolCalls([body('message-6', '正文')], { toolName: TOOL, receipt: '已保存' })
   assert.equal(call.content[0].type, 'tool-call')
-  assert.deepEqual(receipt.content[0].content, [{ type: 'text', text: '已保存' }])
+  assert.deepEqual(receipt.content, [{ type: 'text', text: '已保存' }])
 })

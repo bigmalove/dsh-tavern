@@ -20,6 +20,7 @@ import { LEDGER_SUBMIT_TOOL, LEDGER_RULES, ledgerContext, createLedgerSubmission
 import { POSTURE_SUBMIT_TOOL, POSTURE_SUBMIT_TOOL_NAME, lastSubmittedPosture, normalizePostureSubmission } from '../tavern-plugin/lib/domain/posture-submission.js'
 import { CHARACTER_DESIGN_READ_TOOL, CHARACTER_DESIGN_SAVE_TOOL } from '../tavern-plugin/lib/domain/character-design-document.js'
 import { createPostureItem, plainSettlementPlan, runPipelineStages } from '../tavern-plugin/lib/domain/background-pipeline.js'
+import { producerSource } from '../tavern-plugin/lib/domain/message-source.js'
 
 const server = await readFile(new URL('../tavern-plugin/lib/index.js', import.meta.url), 'utf8')
 function section(start, end) {
@@ -52,6 +53,7 @@ async function harness({ beginRunning = true, mvu = true } = {}) {
     taskStateReader: { forSession: async () => projectChatSessionState(await store.readChat()) },
     collectMvuHelperContext, normalizeBackgroundTasks, pendingMvuSettlementState, structuredClone, Date, AbortController, console: { log() {}, error() {} },
     str: value => value == null ? '' : String(value),
+    producerSource,
     backgroundTasks: tasks, storyTimeline: timeline,
     readChat: store.readChat, chatForSession: store.readChat, writeChat: store.writeChat,
     patchChat: async (_id,revision,changes)=>{
@@ -77,7 +79,7 @@ async function harness({ beginRunning = true, mvu = true } = {}) {
     LEDGER_SUBMIT_TOOL, LEDGER_RULES, ledgerContext, createLedgerSubmission,
     conversationRegistry: { list: async () => [] }, ctx: { effect() {} },
     mvuSettlement: { settleVariables: async () => ({ receipt: { version: 1, status: 'unchanged', changes: [] } }) },
-    pluginApi: { replaceSettlement: async () => null }
+    pluginApi: { replaceSettlement: async () => null, checkVersions: async () => {} }
   })
   sandbox.postureItem = createPostureItem({ prompt: () => sandbox.runtimePrompt('posture-settlement'), tool: POSTURE_SUBMIT_TOOL })
   sandbox.plainSettlementPlan = plainSettlementPlan
@@ -426,7 +428,8 @@ test('插件结算任务：结算前的在结算待办时运行，结算后的�
   }
   const jobs = createSettlementJobs({ run: (...args) => h.sandbox.runSettlementCycle(...args), onSettled: () => {} })
   await jobs.start('chat')
-  assert.deepEqual(seen, ['before:session:settlement:pending', 'tavern', 'after:session:settlement:idle', 'inside:plugin-task:true'])
+  // Parallel tasks start together with Tavern's own settlement (they run alongside it).
+  assert.deepEqual(seen, ['before:session:settlement:pending', 'parallel:session:settlement:pending', 'tavern', 'after:session:settlement:idle', 'inside:plugin-task:true'])
   assert.equal(h.get().settleStatus, 'done')
   assert.equal(h.tasks.activity(h.get()).busy, false, 'the plugin-task operation is closed afterwards')
   jobs.dispose()
@@ -528,6 +531,6 @@ test('管线护栏：一轮的阶段顺序是前置任务、主结算、后置�
   h.sandbox.pluginApi.runSettlementTasks = async ({ phase, around }) => { seen.push(phase); if (around) await around(async () => {}) }
   const jobs = createSettlementJobs({ run: (...args) => h.sandbox.runSettlementCycle(...args), onSettled: () => seen.push('settled') })
   await jobs.start('chat')
-  assert.deepEqual(seen, ['before', 'settle', 'after', 'settled'])
+  assert.deepEqual(seen, ['before', 'parallel', 'settle', 'after', 'settled'])
   jobs.dispose()
 })

@@ -38,7 +38,7 @@ test('配音设置：选渠道、填 Key 后打开开关，开关跟着保存结
 
 test('配音设置：火山引擎的密钥格标成 Access Token，APP ID 跟着设置一起保存', async t => {
   let state = { enabled: false, provider: 'browser', providers: providers() }
-  const { page, calls } = await openTavernSettings(t, { sceneImages: false, respond(method, args) {
+  const { page, calls } = await openTavernSettings(t, { sceneImages: false, section: 'dsh-tavern: speech settings section', respond(method, args) {
     if (method === 'getTavernSettings') return { settings: { castPresentation: true, defaultPlaySettings: { playerName: '你', backgroundTasks: {} } }, modelCatalog: [], releaseCapabilities: { sceneImages: false } }
     if (method === 'getSpeechSettings') return state
     if (method === 'updateSpeechSettings') {

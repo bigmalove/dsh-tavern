@@ -239,10 +239,10 @@ test('历史正文走工具调用：开关打开时请求里的旧正文变成�
   assert.equal(off, null, '开关关闭时不改请求')
 
   const on = await requestWith(true)
-  assert.deepEqual(on.messages.map(message => message.role), ['user', 'assistant', 'user', 'user'])
+  assert.deepEqual(on.messages.map(message => message.role), ['user', 'assistant', 'tool', 'user'])
   assert.deepEqual(on.messages[1].content.map(block => block.type), ['tool-call'])
   assert.equal(on.messages[1].content[0].name, 'submit_story')
   assert.deepEqual(JSON.parse(on.messages[1].content[0].arguments), { content: '上一轮正文' })
-  assert.deepEqual(on.messages[2].content.map(block => block.type), ['tool-result'])
+  assert.equal(on.messages[2].toolCallId, on.messages[1].content[0].id, 'DSH 0.2 的回执是对应这次调用的 tool 消息')
   assert.equal(on.messages[3].content[0].text, '第二次', '本轮玩家输入保持原样')
 })

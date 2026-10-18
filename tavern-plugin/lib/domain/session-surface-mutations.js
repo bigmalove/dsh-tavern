@@ -19,6 +19,17 @@ export function replaceSessionSurface(session, type, data, { start, end, sourceE
 export function createSessionSurfaceMutator(session, events = sessionEvents(session)) {
   const bySeq = new Map()
   const replacements = new Map()
+  // Which turn and step are open, kept up to date from this batch's own appends, so a
+  // replacement never copies the whole log again (restoring n messages stays O(n)).
+  // A dedicated edit step (withSurfaceEditStep) opens and closes again inside one write.
+  let open = openTurnStep(events)
+  let anyTurn = events.some(event => event.type === 'turn/start')
+  function track(event) {
+    if (event.type === 'turn/start') { open = { turn: event.data?.turn ?? null, step: null }; anyTurn = true }
+    else if (event.type === 'turn/end') open = { turn: null, step: null }
+    else if (event.type === 'step/start') open = { ...open, step: event.data?.step ?? null }
+    else if (event.type === 'step/end') open = { ...open, step: null }
+  }
   function remember(event) {
     if (!event) return
     bySeq.set(event.seq, event)
@@ -32,7 +43,9 @@ export function createSessionSurfaceMutator(session, events = sessionEvents(sess
   events.forEach(remember)
   function append(type, data, intent) {
     const event = appendSessionEvent(session, type, data, intent)
-    remember(typeof event === 'number' ? (session.eventAt?.(event) ?? session.events?.[event]) : event)
+    const stored = typeof event === 'number' ? (session.eventAt?.(event) ?? session.events?.[event]) : event
+    remember(stored)
+    if (stored) track(stored)
     return event
   }
   // Released V4 requires assistant/tool surface events to sit inside the open
@@ -45,10 +58,8 @@ export function createSessionSurfaceMutator(session, events = sessionEvents(sess
   function replace(type, data, { start, end, sourceEventSeqs }) {
     const id = type === 'assistant/message' || type === 'tool/result' ? data.message?.id : data.id
     const normalized = sessionEventData(session, type, data)
-    const events = sessionEvents(session)
-    const open = openTurnStep(events)
     const adoptsStep = (type === 'assistant/message' || type === 'tool/result')
-      && events.some(event => event.type === 'turn/start')
+      && anyTurn
       && (open.turn === null || open.step === null || data.turn !== open.turn || data.step !== open.step)
     if (id) {
       const prior = (replacements.get(type)?.get(id) || []).find(event => isDeepStrictEqual(event.sourceEventSeqs, sourceEventSeqs))

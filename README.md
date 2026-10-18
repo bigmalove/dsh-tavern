@@ -115,76 +115,60 @@
 
 ## 快速开始
 
-DSH Tavern 装在你自己的 DSH 上。当前版本适配 **DSH 0.2.1-rc.2**：
-
-| 宿主 | 版本 |
-| --- | --- |
-| 官方 DeepSeek Harness 桌面版 | **0.2.1-rc.2**（[官网下载](https://deepseek.com/harness/)），社区版 [DSH NEXT](https://github.com/anywhere-labs/dsh-desktop/releases) 同样可用 |
-| 手机 DSHA | **[v0.2.0-rc2](https://github.com/DSH-APP/DSHA/releases/tag/v0.2.0-rc2)**（内置 DSH 0.2.0-rc.2） |
-| 命令行版（浏览器使用） | 自带 DSH，不受宿主版本限制，需要 Node.js 22.19+ 和 pnpm |
-
-其他宿主版本安装器会停止，不会改动你的数据。还在用 DSH 0.1.5（DSH Desktop 2.0.13、一键安装包）的，请看下面的[稳定版](#稳定版dsh-015)。
-
-安装前先备份 `.dsh` 目录，并完整退出桌面版和旧酒馆。
+当前版本适配 **DSH 0.2.1**。还在用 DSH 0.1.5（DSH Desktop 2.0.13、旧一键安装包）的，请用[稳定版](#稳定版dsh-015)。安装前建议备份 `.dsh` 目录。
 
 ### Windows
 
-**桌面版**：安装 DeepSeek Harness 0.2.1-rc.2，启动一次后从托盘退出，然后任选其一：
+1. 安装 [DeepSeek Harness 0.2.1-rc.2](https://deepseek.com/harness/)（或社区版 [DSH NEXT](https://github.com/anywhere-labs/dsh-desktop/releases)），打开一次后从托盘退出。
+2. 安装酒馆，以下两种方式**任选其一**：
+   - **方式 A：双击安装**。[下载安装程序](https://github.com/flizzywine/dsh-tavern/releases/download/v3.0/dsh-tavern-install.cmd)，双击运行（安全提示点「更多信息 → 仍要运行」）。
+   - **方式 B：命令安装**。打开 PowerShell，粘贴：
 
-- **双击安装**：[下载安装程序](https://github.com/flizzywine/dsh-tavern/releases/download/v2.7.0-dsh0.2.1-test.2/dsh-tavern-testing-install.cmd)，双击运行。弹出安全提示时点「运行」（或「更多信息 → 仍要运行」）。
-- **命令安装**：打开 PowerShell，粘贴执行：
+     ```powershell
+     $env:DSH_TAVERN_HOST='desktop'; $tavernInstaller=[Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://raw.githubusercontent.com/flizzywine/dsh-tavern/main/install.ps1')); Invoke-Expression $tavernInstaller
+     ```
 
-  ```powershell
-  $env:DSH_TAVERN_HOST='desktop'; $tavernInstaller=[Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://raw.githubusercontent.com/flizzywine/dsh-tavern/main/install.ps1')); Invoke-Expression $tavernInstaller
-  ```
+3. 重新打开 DeepSeek Harness，即进入酒馆。
 
-完成后重新打开 DeepSeek Harness，即进入酒馆。DSH NEXT 用同一条命令，两者共用 `.dsh` 数据目录。
+### Android
 
-**命令行版**：打开 PowerShell，粘贴执行：
+1. 安装 [DSHA v0.2.0-rc2](https://github.com/DSH-APP/DSHA/releases/tag/v0.2.0-rc2)，打开一次。
+2. 打开底部 **终端**，粘贴：
+
+   ```sh
+   curl -fsSL 'https://raw.githubusercontent.com/flizzywine/dsh-tavern/main/android/setup.sh' -o /tmp/dsh-tavern-setup.sh && bash /tmp/dsh-tavern-setup.sh
+   ```
+
+3. 看到 **全部完成** 后重启 DSHA，点 **启动** → **进入** → **酒馆工作台**。
+
+### macOS
+
+1. 安装 [DeepSeek Harness 0.2.1-rc.2](https://deepseek.com/harness/)，打开一次后退出（⌘Q）。
+2. 在「终端」里粘贴：
+
+   ```sh
+   curl -fsSL 'https://raw.githubusercontent.com/flizzywine/dsh-tavern/main/install.sh' -o /tmp/dsh-tavern-install.sh && DSH_TAVERN_HOST=desktop sh /tmp/dsh-tavern-install.sh
+   ```
+
+3. 重新打开 DeepSeek Harness，即进入酒馆。
+
+### 命令行版（Windows / macOS / Linux，用浏览器玩）
+
+不需要桌面版。命令行版自带一套独立的 DSH，和程序、游戏数据一起装在自己的目录里（默认 `~/.dsh-tavern`），**不会改动、也不会和你已经装好的 DSH 冲突**：桌面版、全局的 `dsh` 命令照常使用，两边互不影响，可以同时运行。需要 [Node.js 22.19+](https://nodejs.org/) 和 pnpm。
+
+Windows（PowerShell）：
 
 ```powershell
 $env:DSH_TAVERN_HOST='cli'; $tavernInstaller=[Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://raw.githubusercontent.com/flizzywine/dsh-tavern/main/install.ps1')); Invoke-Expression $tavernInstaller
 ```
 
-### macOS
-
-**桌面版**：安装 DeepSeek Harness 0.2.1-rc.2，启动一次后退出（⌘Q），打开「终端」粘贴执行，完成后重新打开 DeepSeek Harness：
-
-```sh
-curl -fsSL 'https://raw.githubusercontent.com/flizzywine/dsh-tavern/main/install.sh' -o /tmp/dsh-tavern-install.sh && DSH_TAVERN_HOST=desktop sh /tmp/dsh-tavern-install.sh
-```
-
-**命令行版**：
+macOS / Linux：
 
 ```sh
 curl -fsSL 'https://raw.githubusercontent.com/flizzywine/dsh-tavern/main/install.sh' -o /tmp/dsh-tavern-install.sh && DSH_TAVERN_HOST=cli sh /tmp/dsh-tavern-install.sh
 ```
 
-### Linux
-
-官方桌面没有 Linux 版，使用命令行版：
-
-```sh
-curl -fsSL 'https://raw.githubusercontent.com/flizzywine/dsh-tavern/main/install.sh' -o /tmp/dsh-tavern-install.sh && DSH_TAVERN_HOST=cli sh /tmp/dsh-tavern-install.sh
-```
-
-### Android（DSHA）
-
-安装 [DSHA v0.2.0-rc2](https://github.com/DSH-APP/DSHA/releases/tag/v0.2.0-rc2) 并启动一次，打开底部 **终端** 粘贴执行；看到 **全部完成** 后重启 DSHA，点击 **启动** → **进入** → **酒馆工作台**：
-
-```sh
-curl -fsSL 'https://raw.githubusercontent.com/flizzywine/dsh-tavern/main/android/setup.sh' -o /tmp/dsh-tavern-setup.sh && bash /tmp/dsh-tavern-setup.sh
-```
-
-### 命令行版：启动与管理
-
-| 命令 | 作用 |
-| --- | --- |
-| `dsh-tavern start` | 启动，按输出的地址在浏览器打开 |
-| `dsh-tavern stop` / `restart` / `status` | 停止 / 重启 / 查看状态 |
-| `dsh-tavern update` | 更新 |
-
-首次安装会询问安装目录（默认 `~/.dsh-tavern`），程序、运行时和游戏数据都放在里面。命令行版自带锁定的 DSH 0.2.1-rc.2，不修改全局 DSH。找不到 `dsh-tavern` 命令时，进入安装目录下的 `apps/dsh-tavern`，改用 `node bin/dsh-tavern.mjs start`。
+装好后用 `dsh-tavern start` 启动，按显示的地址在浏览器打开；`dsh-tavern stop` / `status` / `update` 停止、查看、更新。
 
 ### 手机远程访问
 

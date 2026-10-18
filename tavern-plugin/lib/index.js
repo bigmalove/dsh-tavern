@@ -507,8 +507,8 @@ export async function apply(ctx) {
     return !(chat?.disabledWritingSkills || []).map(canonicalTavernSkillName).includes(skill.name)
   }
   let invalidateTavernSkills = () => {}
-  // 0.2.0-rc.2 适配：宿主已移除 sessionSkillCatalog 服务（全 asar 零命中），dsh-skill 也没有
-  // scopeFor 方法，因此这个注入在 0.2.0 永不触发、shim 不会安装（静默降级，不报错）。
+  // 0.2.x 适配：官方桌面的宿主没有 sessionSkillCatalog 服务；DSH NEXT 有，但它的 scopeFor 改成
+  // scopeFor(agentPreset) 返回可释放的 lease，installSkillCatalogSessionScope 认出后不安装（静默降级）。
   // tavern 的 Skill 来源仍由下方 host `skills` registry 的 registerProvider 提供；冷菜单查询
   // 在这个宿主上拿不到 session 身份，按角色过滤（enabledFor）只对活会话生效。
   // 若宿主后续给出等价接缝，改挂到那个服务上；在此之前保留注入与模块，避免留下孤儿模块。
@@ -5546,6 +5546,7 @@ export async function apply(ctx) {
       projectMessages: compatibilityMessages
     },
     nativePlay: {
+      historyToolCall: async () => (await readTavernSettings()).storyHistoryToolCall,
       systemAppend: () => runtimePrompt('system-append'),
       stagedRequests: runtimePresetSnapshots,
       modeFor: async function (sessionId) { return await turnOrchestrator.modeFor(sessionId) },

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { sessionEvents } from './session-events.js'
 import { createSessionSurfaceMutator } from './session-surface-mutations.js'
+import { toolResultsOf } from './tool-result-message.js'
 
 export const STORY_SUBMIT_TOOL_NAME = 'submit_story'
 export const STORY_SUBMIT_PROMPT = [
@@ -45,8 +46,8 @@ export function storySubmissionForTurn(session, turn) {
       if (model && model.block.arguments === data.arguments) calls.set(data.callId, model)
     }
     if (event.type !== 'tool/result' || data.error || (visible && !visible.has(Number(event.seq ?? index)))) continue
-    for (const block of data.message?.content || []) {
-      if (block?.type !== 'tool-result' || block.isError === true) continue
+    for (const block of toolResultsOf(data.message)) {
+      if (block.isError) continue
       const model = calls.get(block.toolCallId)
       if (!model) continue
       let content

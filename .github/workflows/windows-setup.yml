@@ -4,20 +4,8 @@ name: Windows Setup
 # launcher that installs the plugin. Inputs are pinned by SHA-256; build.ps1
 # injects the resulting payload hash into the launcher.
 on:
+  # v3.0 offers no one-click package; build one by hand when it is needed (stable keeps its own trigger).
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - packaging/windows/**
-      - install.ps1
-      - bin/download.cjs
-      - .github/workflows/windows-setup.yml
-  pull_request:
-    paths:
-      - packaging/windows/**
-      - install.ps1
-      - bin/download.cjs
-      - .github/workflows/windows-setup.yml
 
 env:
   DESKTOP_SETUP_URL: https://download.deepseek.com/dsh-desk/bin/win-x64/deepseek-harness-0.2.1-rc.2-win-x64.exe

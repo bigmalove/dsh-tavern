@@ -5,7 +5,8 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  dsh-pocket@2.12.0: 4948ff0852c69976b3a439b49f9c0144f97236fa65e8d6e74a02fe513d2622b2
+  dsh-better-sidebar@0.28.0: 4f54fe004a0c388c920fb4827618d7795673580b54a583675b959a2b3fa7fac6
+  dsh-pocket@2.12.0: 1b0fac9bc15853908a97cd3cd9cea13aa17484e649ce423b5f9bcbecd61ef42e
   dsh-web-mobile@3.1.0: b151174b09138f5a19067f2593383b1cd6586547748ab6848e3e3e061d0a270b
 
 importers:
@@ -51,13 +52,13 @@ importers:
     devDependencies:
       dsh-better-sidebar:
         specifier: 0.28.0
-        version: 0.28.0(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
+        version: 0.28.0(patch_hash=4f54fe004a0c388c920fb4827618d7795673580b54a583675b959a2b3fa7fac6)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
       dsh-dream-skin:
         specifier: link:./tavern-plugin/packages/dsh-dream-skin
         version: link:tavern-plugin/packages/dsh-dream-skin
       dsh-pocket:
         specifier: 2.12.0
-        version: 2.12.0(patch_hash=4948ff0852c69976b3a439b49f9c0144f97236fa65e8d6e74a02fe513d2622b2)
+        version: 2.12.0(patch_hash=1b0fac9bc15853908a97cd3cd9cea13aa17484e649ce423b5f9bcbecd61ef42e)
       dsh-tavern-plugin:
         specifier: link:./tavern-plugin
         version: link:tavern-plugin
@@ -1964,7 +1965,7 @@ snapshots:
     optionalDependencies:
       '@types/trusted-types': 2.0.7
 
-  dsh-better-sidebar@0.28.0(react-dom@19.2.0(react@19.2.0))(react@19.2.0):
+  dsh-better-sidebar@0.28.0(patch_hash=4f54fe004a0c388c920fb4827618d7795673580b54a583675b959a2b3fa7fac6)(react-dom@19.2.0(react@19.2.0))(react@19.2.0):
     dependencies:
       '@codemirror/commands': 6.11.0
       '@codemirror/lang-cpp': 6.0.3
@@ -2110,7 +2111,7 @@ snapshots:
       yaml: 2.9.0
       zod: 4.6.5
 
-  dsh-pocket@2.12.0(patch_hash=4948ff0852c69976b3a439b49f9c0144f97236fa65e8d6e74a02fe513d2622b2):
+  dsh-pocket@2.12.0(patch_hash=1b0fac9bc15853908a97cd3cd9cea13aa17484e649ce423b5f9bcbecd61ef42e):
     dependencies:
       qrcode: 1.5.4
       qrcode-terminal: 0.12.0

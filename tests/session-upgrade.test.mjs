@@ -12,7 +12,9 @@ import { encodeCurrentGeneration, encodeMigratedSessionLog, parseSessionLog } fr
 import { migrateSessionDirectory, prepareSessionUpgrade, restoreSessionLog } from '../tavern-plugin/lib/domain/session-upgrade.js'
 import { compactedLegacySession } from './fixtures/compacted-legacy-session.mjs'
 
-const runtime = process.env.TAVERN_DSH_RUNTIME || path.resolve('config/cli-runtime')
+// A DSH install with node_modules: TAVERN_DSH_RUNTIME, else the one DSH_BOOT_MODULE lives in.
+const bootRoot = process.env.DSH_BOOT_MODULE ? process.env.DSH_BOOT_MODULE.split(path.sep + 'node_modules' + path.sep)[0] : ''
+const runtime = process.env.TAVERN_DSH_RUNTIME || bootRoot || path.resolve('config/cli-runtime')
 const patch = await prepareExpandedPatch(runtime)
 const migration = patch.migration
 const catalog = migration.sessionFormatCatalog

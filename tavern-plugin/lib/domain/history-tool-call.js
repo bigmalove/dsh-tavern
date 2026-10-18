@@ -62,11 +62,14 @@ export function projectHistoryAsToolCalls(messages, options = {}) {
     })
     // The receipt is what makes the pair legal for providers that require every
     // call to be answered; it carries no body so the text appears exactly once.
+    // DSH 0.2 (session v4) sends tool results as first-class tool messages.
     projected.push({
       id: callId + ':receipt',
-      role: 'user',
+      role: 'tool',
       source: { kind: 'tool', callId },
-      content: [{ type: 'tool-result', toolCallId: callId, content: [{ type: 'text', text: receiptText }] }]
+      toolCallId: callId,
+      content: [{ type: 'text', text: receiptText }],
+      isError: false
     })
     changed = true
   }

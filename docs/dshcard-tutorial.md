@@ -1,6 +1,6 @@
 # DSH 人物卡开发实例：大肥鱼
 
-> 需要当前版本的 DSH Tavern（适配 DSH 0.2.1）才能导入 DSH 人物卡，稳定版（DSH 0.1.5）不支持。本文的代码都摘自大肥鱼样板卡的实际文件，源码在 [examples/dafeiyu-card](https://github.com/flizzywine/dsh-tavern/tree/main/examples/dafeiyu-card)。
+> 需要 DSH Tavern v3.0 或更高版本（适配 DSH 0.2.1）才能导入 DSH 人物卡，稳定版（DSH 0.1.5）不支持。本文的代码都摘自大肥鱼样板卡的实际文件，源码在 [examples/dafeiyu-card](https://github.com/flizzywine/dsh-tavern/tree/main/examples/dafeiyu-card)。
 
 [DSH 人物卡制作](dshcard-guide.md)讲格式：每个文件、每个字段是什么。这一篇拿[大肥鱼样板卡](https://github.com/flizzywine/dsh-tavern/releases/tag/dafeiyu-card-v1)从头走一遍：一张带 Galgame 式舞台的卡是怎么搭起来的，按动手的顺序讲。
 
