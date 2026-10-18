@@ -6,7 +6,7 @@ import { readFile } from 'node:fs/promises'
 const client = await readFile(new URL('../../tavern-plugin/lib/client.js', import.meta.url))
 const page = `<!doctype html><meta charset="utf-8"><title>Issue 44 touch relay regression</title>
 <style>#conversation{height:400px;overflow:auto;scroll-behavior:smooth}iframe{height:320px;width:95%;border:1px solid}#spacer{height:2000px}</style>
-<h1>Issue 44 — browser layout regression</h1><button id="run">运行滚动接力测试</button><pre id="result">等待测试</pre><div id="conversation"><div id="mount"></div><div id="spacer"></div></div>
+<h1>Issue 44 — browser layout regression</h1><button id="run">运行滚动接力测试</button><pre id="result">等待测试</pre><div id="conversation"><div id="mount"></div><div id="mount2"></div><div id="spacer"></div></div>
 <script>window.__ModuleLoader__={load(value){window.client=value.factory(()=>({}))}};</script><script src="/client.js"></script>
 <script>
 const trace=[];addEventListener('message',e=>{if(e.data?.type?.includes('frame-touch')||e.data?.type==='dsh-tavern-frame-scroll')trace.push(e.data)});
@@ -14,6 +14,11 @@ const content='<div id="inner" style="height:100px;overflow-y:auto;touch-action:
 const life=client.createTavernMessageFrameLifecycle({content,eager:true,runtimeReporting:false},{window});
 const release=life.start(()=>{}), doc=life.snapshot().visibleDocument, frame=document.createElement('iframe');
 frame.srcdoc=doc.html;document.querySelector('#mount').append(frame);doc.ref(frame);
+// 正文（帧内没有可滚区域）：消息文档高度等于内容高度，帧内滚不动，位移必须接力到会话区。
+const plain='<div id="plain">正文段落：这一帧没有可滚区域，拖动应当交给外层会话区。</div>';
+const plainLife=client.createTavernMessageFrameLifecycle({content:plain,eager:true,runtimeReporting:false},{window});
+const plainRelease=plainLife.start(()=>{}), plainDoc=plainLife.snapshot().visibleDocument, plainFrame=document.createElement('iframe');
+plainFrame.srcdoc=plainDoc.html;document.querySelector('#mount2').append(plainFrame);plainDoc.ref(plainFrame);
 const pause=()=>new Promise(resolve=>setTimeout(resolve,30));
 document.querySelector('#run').onclick=async()=>{
  const out=document.querySelector('#result'),outer=document.querySelector('#conversation'),w=frame.contentWindow,inner=w.document.querySelector('#inner');
@@ -28,8 +33,15 @@ document.querySelector('#run').onclick=async()=>{
  if(outer.scrollTop!==0)throw Error('native pan received synthetic scroll');
  inner.style.touchAction='none';gesture('touchstart',200);gesture('touchmove',160);await pause();gesture('touchstart',160);gesture('touchmove',140);await pause();gesture('touchmove',120);await pause();
  if(outer.scrollTop!==80)throw Error('fresh gesture cancelled by stale stop: '+outer.scrollTop);
- gesture('touchcancel',120);release();
- out.textContent='PASS: inner 10px + outer 90px; smooth CSS bypassed; native pan untouched; new gesture survives old cancellation; lifecycle disposed';
+ gesture('touchcancel',120);
+ // 正文帧（帧内无可滚区域）必须把位移交给会话区；原生路径不能重复应用同一笔。
+ const pw=plainFrame.contentWindow,plainNode=pw.document.querySelector('#plain');
+ const plainGesture=(type,y)=>{const point=new pw.Touch({identifier:2,target:plainNode,screenX:100,screenY:y,clientX:100,clientY:y});plainNode.dispatchEvent(new pw.TouchEvent(type,{bubbles:true,cancelable:true,touches:type==='touchend'?[]:[point],changedTouches:[point]}))};
+ outer.scrollTo({top:0,behavior:'instant'});
+ plainGesture('touchstart',200);plainGesture('touchmove',80);await pause();
+ if(Math.round(outer.scrollTop)!==120)throw Error('content-sized frame did not relay: '+outer.scrollTop);
+ plainGesture('touchcancel',80);plainRelease();release();
+ out.textContent='PASS: inner 10px + outer 90px; smooth CSS bypassed; native pan untouched; new gesture survives old cancellation; content-sized frame relays 120px; lifecycle disposed';
  }catch(error){out.textContent='FAIL: '+error.stack+' '+JSON.stringify(trace)}
 };
 </script>`
