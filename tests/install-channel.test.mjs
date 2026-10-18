@@ -37,3 +37,13 @@ test('Windows 双击安装文件与 README 的桌面版命令一致：CRLF、% �
   const command = /-Command "(.*)"$/.exec(line)[1].replaceAll('%%', '%')
   assert.ok(readFileSync(new URL('README.md', root), 'utf8').includes(command), 'README 中找不到同一条桌面版命令')
 })
+
+test('安装脚本内嵌自己的版本号，jsDelivr 下载不接受比它旧的运行清单', () => {
+  const version = JSON.parse(readFileSync(new URL('package.json', root), 'utf8')).version
+  const sh = readFileSync(new URL('install.sh', root), 'utf8')
+  const ps1 = readFileSync(new URL('install.ps1', root), 'utf8')
+  assert.ok(sh.includes(`INSTALLER_VERSION='${version}'`), 'install.sh 的版本号与 package.json 一致（node bin/build-installer-scripts.mjs）')
+  assert.ok(ps1.includes(`$InstallerVersion = '${version}'`), 'install.ps1 的版本号与 package.json 一致')
+  assert.match(sh, /download\.cjs" runtime [^\n]*--min-version "\$\{INSTALLER_VERSION\}"/)
+  assert.match(ps1, /'runtime', [^\n]*'--min-version', \$InstallerVersion\)/)
+})

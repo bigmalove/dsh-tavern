@@ -3,28 +3,42 @@
 // blocks. Older logs, and request messages Tavern builds itself, keep a
 // `tool-result` block inside the message content. Both shapes carry the same call
 // id, error flag and text, so readers go through here instead of matching one.
+//
+// The block list is exposed under both `content` (the name the request/session
+// schema uses, and what upstream readers expect) and `parts` (the name this fork
+// used first). They are the same array, so either reader works unchanged.
 
 function partsOf(value) {
   return (Array.isArray(value) ? value : []).filter(part => part !== null && typeof part === 'object')
 }
 
-/** @returns every tool result carried by one `tool/result` message, in order. */
+function resultOf(toolCallId, isError, blocks) {
+  const parts = partsOf(blocks)
+  return { toolCallId: toolCallId, isError: isError, content: parts, parts: parts }
+}
+
+/**
+ * The tool results a session or request message carries, in either shape.
+ * @returns [{ toolCallId, isError, content, parts }]
+ */
 export function toolResultsOf(message) {
   if (message === null || typeof message !== 'object') return []
-  if (message.role === 'tool' && typeof message.toolCallId === 'string') {
-    return [{ toolCallId: message.toolCallId, isError: message.isError === true, parts: partsOf(message.content) }]
+  if (message.role === 'tool') {
+    const toolCallId = String(message.toolCallId ?? '')
+    if (toolCallId === '') return []
+    return [resultOf(toolCallId, message.isError === true, message.content)]
   }
   const results = []
   for (const block of partsOf(message.content)) {
     if (block.type !== 'tool-result' || typeof block.toolCallId !== 'string') continue
-    results.push({ toolCallId: block.toolCallId, isError: block.isError === true, parts: partsOf(block.content) })
+    results.push(resultOf(block.toolCallId, block.isError === true, block.content))
   }
   return results
 }
 
 /** The text a tool returned, without depending on which shape it arrived in. */
 export function toolResultText(result) {
-  return partsOf(result && result.parts)
+  return partsOf(result && (result.content || result.parts))
     .filter(part => part.type === 'text' && typeof part.text === 'string')
     .map(part => part.text)
     .join('')

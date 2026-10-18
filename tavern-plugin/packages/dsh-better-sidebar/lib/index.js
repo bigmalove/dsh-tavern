@@ -5921,10 +5921,14 @@ function inheritedPendingIds(events, inheritedEventCount) {
 function effectiveModelSelection(events) {
 	return parentModelSelection(events);
 }
-/** The events a thread produced itself: everything after the LAST
-*  `session/end-seed` marker (the fork-seed boundary). A log with no marker
-*  (a thread created before seeding existed) is returned whole. */
+/** The events a thread produced itself: everything after the fork-seed boundary.
+*  DSH 0.2 marks that boundary `{ inherited: true }` and appends a plain
+*  `session/end-seed` on every resume; cutting at the last marker would drop the
+*  thread's history from before the resume. Older logs without the flag keep the
+*  LAST marker rule. A log with no marker (a thread created before seeding
+*  existed) is returned whole. (dsh-tavern patch) */
 function threadOwnLogEvents(events) {
+	for (let index = events.length - 1; index >= 0; index--) if (events[index]?.type === "session/end-seed" && events[index].data?.inherited === true) return events.slice(index + 1).filter((event) => event?.type !== "session/end-seed");
 	for (let index = events.length - 1; index >= 0; index--) if (events[index]?.type === "session/end-seed") return events.slice(index + 1);
 	return [...events];
 }

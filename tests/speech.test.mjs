@@ -150,6 +150,22 @@ test('配音合成：火山引擎按音色选资源与情绪，把逐行 JSON �
     /HTTP 401：load grant: requested grant not found in SaaS storage/, '鉴权失败时带上服务的说明')
 })
 
+test('配音合成：火山引擎不认这句的情绪时，去掉情绪再念一次；鉴权失败不重试', async () => {
+  const line = data => ({ body: JSON.stringify(data) + '\n', type: 'application/x-ndjson' })
+  const { speech, requests } = harness({ responses: [
+    line({ code: 45000001, message: 'unsupported emotion' }),
+    line({ code: 20000000, message: 'OK', data: Buffer.from('ID3plain').toString('base64') }),
+    { body: JSON.stringify({ header: { code: 45000010, message: 'grant not found' } }), status: 401, type: 'application/json' }
+  ] })
+  await speech.save({ enabled: true, provider: 'volcengine', config: { appId: 'app-1', voice: 'zh_female_vv_uranus_bigtts' }, apiKey: 'token-1' })
+  const audio = await speech.synthesize({ text: '“太好了！”', emotion: 'joy' })
+  assert.equal(requests[0].body.req_params.audio_params.emotion, 'happy')
+  assert.equal(Object.hasOwn(requests[1].body.req_params.audio_params, 'emotion'), false, '第二次不带情绪')
+  assert.equal((await speech.readAudio(audio.id)).bytes.toString(), 'ID3plain')
+  await assert.rejects(speech.synthesize({ text: '“再来。”', emotion: 'joy' }), /HTTP 401：grant not found/)
+  assert.equal(requests.length, 3, '401 不重试')
+})
+
 test('插件配音渠道：出现在设置里，合成交给插件，结果同样缓存', async () => {
   const { speech, plugins } = harness()
   const calls = []

@@ -2,7 +2,7 @@ name: Card memory portability
 on:
   workflow_dispatch:
   push:
-    branches: [main, codex/card-memory-mnemon]
+    branches: [main]
     paths:
       - tavern-plugin/packages/dsh-tavern-card-memory/**
       - tests/card-memory.test.mjs

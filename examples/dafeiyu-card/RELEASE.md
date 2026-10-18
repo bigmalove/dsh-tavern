@@ -2,11 +2,11 @@
 
 大肥鱼是 DSH 人物卡（`.dshcard`）的样板卡：**一个文件导入就能玩**，不用另装插件、不用手动配素材。它用来展示新卡格式能装下什么，不追求复刻原项目的全部演出。
 
-> **仅测试版可用。** 这张卡需要 [DSH Tavern 测试版](https://github.com/flizzywine/dsh-tavern/releases/tag/v2.7.0-dsh0.2.1-test.2)（官方 DeepSeek Harness 0.2.1，测试分支 `0.2.1版本`）。稳定版 v2.7 还不支持 DSH 人物卡，导入会失败。已装测试版的，先在酒馆里检查更新到最新。
+> **需要 DSH Tavern v3.0 或更高版本**（适配 DSH 0.2.1，安装见 [README 快速开始](https://github.com/flizzywine/dsh-tavern#快速开始)）。稳定版（DSH 0.1.5）不支持 DSH 人物卡，导入会失败。已安装的，先在酒馆里检查更新到最新。
 
 ## 怎么玩
 
-1. 安装或更新到 DSH Tavern 测试版（见上）。
+1. 安装或更新到 DSH Tavern v3.0 或更高版本（见上）。
 2. 人物卡库 → 导入人物卡 → 选 `大肥鱼.dshcard`，导入后刷新页面。
 3. 用大肥鱼开一局。舞台在右侧「酒馆状态」顶部，「全屏」进入全屏舞台。
 

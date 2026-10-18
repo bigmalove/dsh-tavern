@@ -14,15 +14,13 @@ jobs:
   cross-platform:
     strategy:
       fail-fast: false
+      # One run per platform; together they still cover the oldest supported Node (22.19)
+      # and the newer one desktop hosts bundle (24).
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
-        node: [22.19.0, 24.18.1]
-        # Hosted macOS runners are scarce and jobs can queue until cancelled.
-        # Node-version differences are covered on Linux and Windows; macOS
-        # only needs one run for its platform paths, on the oldest supported Node.
-        exclude:
-          - os: macos-latest
-            node: 24.18.1
+        include:
+          - { os: ubuntu-latest, node: 22.19.0 }
+          - { os: macos-latest, node: 22.19.0 }
+          - { os: windows-latest, node: 24.18.1 }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -62,6 +60,8 @@ jobs:
     env:
       DSH_TAVERN_ARCHIVE_URL: https://github.com/${{ github.repository }}/archive/${{ github.sha }}.zip
       DSH_TAVERN_NO_OPEN: 1
+      # The installers default to the desktop host (DeepSeek Harness / DSH NEXT), absent on runners.
+      DSH_TAVERN_HOST: cli
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -112,6 +112,7 @@ jobs:
     env:
       DSH_TAVERN_ARCHIVE_URL: https://github.com/${{ github.repository }}/archive/${{ github.sha }}.tar.gz
       DSH_TAVERN_NO_OPEN: 1
+      DSH_TAVERN_HOST: cli
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

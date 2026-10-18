@@ -23,7 +23,8 @@ test('real DSH: manual story compaction commits the summary with the latest roun
     if (request.purpose === 'compaction') summarized.push(JSON.stringify(request.messages))
     return next()
   })
-  const result = await new BasicCompactionEngine(h.ctx, { auto: false }).compactNow(agent, new AbortController().signal)
+  // DSH 0.2 reserves 64k output tokens by default, more than this fixture model's whole window.
+  const result = await new BasicCompactionEngine(h.ctx, { auto: false, maxTokens: 4096 }).compactNow(agent, new AbortController().signal)
   assert.ok(result)
   assert.equal(summarized.length, 1)
   assert.ok(summarized[0].includes('第3轮行动') && !summarized[0].includes('第4轮行动'), 'the summarizer sees only older rounds')
