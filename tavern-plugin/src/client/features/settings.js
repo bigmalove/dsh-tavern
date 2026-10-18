@@ -243,9 +243,11 @@
             async function run() {
                 if (busy) return;
                 setBusy(true);
-                setNotice("已就绪：请在正文上按住往上拖一笔再松开，约 20 秒内出报告");
+                setNotice("正在连接消息帧…");
                 try {
-                    const result = await runTavernTouchDiagnostics(window);
+                    // The probe reports how many frames it reached, so a stroke on any
+                    // message is counted — not only on the first frame that answered.
+                    const result = await runTavernTouchDiagnostics(window, text => setNotice(text));
                     setNotice(result.ok ? "报告已生成" : String(result.message || "未取到数据"));
                 } catch (error) { setNotice("诊断失败：" + String(error.message || error)); }
                 finally { setBusy(false); }
@@ -254,7 +256,7 @@
                 h("div", { className: "dsh-tavern-settings-row" },
                     h("div", { className: "dsh-tavern-settings-copy" },
                         h("strong", { className: "dsh-tavern-settings-title" }, "移动端滑动诊断"),
-                        h("p", { className: "dsh-tavern-settings-desc" }, "在正文上拖一笔，采集这一笔里触点的样式链、帧内位移与会话容器位移，用于定位“正文划不动”。只读取，不改动任何设置。")),
+                        h("p", { className: "dsh-tavern-settings-desc" }, "点开始后，任意一条消息的正文上拖一笔即可（不必是第一帧）。采集触点样式链、帧内位移与会话容器位移，用于定位“正文划不动”。只读取，不改动任何设置。")),
                     h("button", { type: "button", className: "dsh-tavern-btn", disabled: busy, onClick: run }, busy ? "采集中…" : "开始诊断")),
                 notice ? h("div", { className: "dsh-tavern-settings-row", role: "status" },
                     h("span", { className: "dsh-tavern-settings-desc" }, notice)) : null);

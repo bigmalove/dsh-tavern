@@ -6198,7 +6198,7 @@ function tavernTouchReportText(report) {
     }
     lines.push('');
     lines.push('【环境】');
-    lines.push('帧数：' + report.frames + '（已应答 ' + report.answered + '）');
+    lines.push('已连接消息帧：' + report.frames + '（应答 ' + report.answered + '），本次手势来自第 ' + report.frameIndex + ' 帧');
     lines.push('当前卡：' + (report.card || '无'));
     lines.push('宿主容器：' + report.host.node + '  ' + report.host.scrollHeight + '/' + report.host.clientHeight);
     return lines.join('\n');
@@ -6242,60 +6242,113 @@ function showTavernTouchReport(text) {
     dialog.showModal();
 }
 
-async function runTavernTouchDiagnostics(host) {
-    const frames = Array.from(host.document.querySelectorAll('iframe')).filter(frame => frame.isConnected);
+async function runTavernTouchDiagnostics(host, onStatus) {
+    const status = typeof onStatus === 'function' ? onStatus : () => {};
+    function messageFrames() {
+        const marked = Array.from(host.document.querySelectorAll('iframe.dsh-tavern-message-frame'));
+        // Older builds and the browser fixtures do not set the class; fall back to every
+        // frame so the diagnostic still works, just with more noise.
+        return (marked.length ? marked : Array.from(host.document.querySelectorAll('iframe')))
+            .filter(frame => frame.isConnected);
+    }
+    let frames = messageFrames();
     if (!frames.length) return { ok: false, message: '当前页面没有消息帧，请打开一局对话后再试。' };
+
+    // Every armed frame gets its own token, and EVERY report is accepted: the user may
+    // drag any message, not the first frame that happened to answer. Waiting on one
+    // chosen frame was why a slow drag on one message produced nothing while a fast
+    // repeated drag (crossing the chosen frame) eventually did.
     const tokens = new Map();
-    for (const frame of frames) {
+    const byToken = new Map();
+    function arm(frame) {
+        if (tokens.has(frame)) return;
         const token = 'probe-' + Math.random().toString(36).slice(2, 10);
         tokens.set(frame, token);
+        byToken.set(token, frame);
         try { frame.contentWindow.postMessage({ type: 'dsh-tavern-touch-probe-arm', probeToken: token }, '*'); } catch (_) { /* frame gone */ }
     }
-    const answered = await new Promise(resolve => {
-        const ready = new Set();
-        const timer = host.setTimeout(() => resolve(ready), 400);
-        const listener = event => {
-            const data = event.data;
-            if (!data || data.type !== 'dsh-tavern-touch-probe-ready') return;
-            for (const [frame, token] of tokens) if (frame.contentWindow === event.source && token === data.probeToken) ready.add(frame);
-            if (ready.size >= frames.length) { host.clearTimeout(timer); resolve(ready); }
-        };
-        host.addEventListener('message', listener);
-        host.setTimeout(() => host.removeEventListener('message', listener), 3000);
-    });
-    const target = Array.from(answered)[0] || frames[0];
-    const token = tokens.get(target);
-    const scroller = tavernScrollableAncestor(target.parentElement, host) || host.document.scrollingElement;
-    const before = scroller ? scroller.scrollTop : 0;
+    for (const frame of frames) arm(frame);
+
+    const ready = new Set();
+    const readyListener = event => {
+        const data = event.data;
+        if (!data || data.type !== 'dsh-tavern-touch-probe-ready') return;
+        const frame = byToken.get(data.probeToken);
+        if (frame) ready.add(frame);
+    };
+    host.addEventListener('message', readyListener);
+    let collecting = true;
+    const readyTimer = host.setInterval(() => {
+        if (!collecting) return;
+        // Frames that lazy-load while the user is scrolling still need arming, and an
+        // arm posted before a frame's document parsed is silently dropped — re-arm until
+        // that frame answers.
+        for (const frame of messageFrames()) if (!tokens.has(frame) || !ready.has(frame)) { tokens.delete(frame); arm(frame); }
+    }, 1500);
+
+    // The conversation scroller is shared by every message, so one lookup is enough and
+    // it must happen before the stroke: after it, the start position is gone.
+    const anchor = frames[0];
+    const scroller = tavernScrollableAncestor(anchor.parentElement, host) || host.document.scrollingElement;
+    const startTop = scroller ? scroller.scrollTop : 0;
+    let far = startTop, last = startTop;
+    const sampler = host.setInterval(() => {
+        if (!scroller) return;
+        last = scroller.scrollTop;
+        if (Math.abs(last - startTop) > Math.abs(far - startTop)) far = last;
+    }, 16);
+
+    await new Promise(resolve => host.setTimeout(resolve, 300));
+    status(ready.size
+        ? '已连接 ' + ready.size + ' 条消息，请在那条划不动的正文上拖一笔'
+        : '正在连接消息帧，请稍候再拖');
+
     const report = await new Promise(resolve => {
         let settled = false;
-        const finish = value => { if (!settled) { settled = true; resolve(value); } };
+        const finish = value => { if (settled) return; settled = true; resolve(value); };
         const listener = event => {
             const data = event.data;
-            if (!data || data.type !== 'dsh-tavern-touch-probe-report' || data.probeToken !== token) return;
-            finish({ frame: data, answered: answered.size });
+            if (!data || data.type !== 'dsh-tavern-touch-probe-report') return;
+            const frame = byToken.get(data.probeToken);
+            if (!frame) return;
+            // Give the momentum a moment to land before reading the final position.
+            host.setTimeout(() => finish({ frame: data, frameElement: frame, index: frames.indexOf(frame) }), 350);
         };
         host.addEventListener('message', listener);
-        // Give the user time to actually make the stroke.
-        host.setTimeout(() => finish({ frame: null, answered: answered.size }), 20000);
+        // Long enough for a deliberate, slow stroke; the old 20s window expired while the
+        // user was still reading the "drag now" hint.
+        host.setTimeout(() => finish({ frame: null, frameElement: null, index: -1 }), 60000);
+        host.setTimeout(() => host.removeEventListener('message', listener), 61000);
     });
+    collecting = false;
+    host.clearInterval(readyTimer);
+    host.clearInterval(sampler);
+    host.removeEventListener('message', readyListener);
     if (!report.frame) {
-        try { target.contentWindow.postMessage({ type: 'dsh-tavern-touch-probe-cancel', probeToken: token }, '*'); } catch (_) { /* gone */ }
-        return { ok: false, message: '没有等到手势。请在正文上按住往上拖一笔再松开，然后重试。' };
+        for (const [frame, token] of tokens) {
+            try { frame.contentWindow.postMessage({ type: 'dsh-tavern-touch-probe-cancel', probeToken: token }, '*'); } catch (_) { /* gone */ }
+        }
+        return { ok: false, message: '60 秒内没有等到手势。请确认已打开对话，并直接在那条划不动的正文上拖一笔（不是侧栏）。' };
     }
-    const drag = scroller ? scroller.scrollTop - before : 0;
+
+    const after = scroller ? scroller.scrollTop : 0;
     const gesture = report.frame.gesture || {};
     const frameMoved = (gesture.endScrollTop || 0) - (gesture.startScrollTop || 0);
     const frameCanScroll = report.frame.document ? report.frame.document.scrollHeight > report.frame.document.clientHeight + 8 : false;
+    // Peak displacement, not the end position: a slow drag that springs back would
+    // otherwise read as zero.
+    const drag = far - startTop;
     let verdict;
-    if (Math.abs(drag) > 8) verdict = '原生滚动生效：这一笔把会话容器滚了 ' + drag + 'px，浏览器链路正常。';
+    if (!gesture.moves) verdict = '这一笔没有产生 touchmove（位移小于浏览器的滑动阈值，或触点落在不可滚动区域）。请拖得更长一些再测一次。';
+    else if (Math.abs(drag) > 8) verdict = '原生滚动生效：会话容器位移了 ' + drag + 'px，浏览器链路正常。';
     else if (Math.abs(frameMoved) > 8) verdict = '位移被帧内吃掉了 ' + frameMoved + 'px，没有传给会话容器（帧内可滚=' + frameCanScroll + '）。';
     else if (gesture.cancelled > 0) verdict = '手势被 preventDefault 取消了 ' + gesture.cancelled + ' 次，页面脚本拦住了滚动。';
-    else verdict = '这一笔既没滚会话容器也没滚帧内：需要看下面触点链上的 touch-action / overscroll-behavior。';
+    else verdict = '这一笔既没滚会话容器也没滚帧内（touchmove ' + (gesture.moves || 0) + ' 次）：看下面触点链的 touch-action / overscroll-behavior。';
     const text = tavernTouchReportText({
-        at: Date.now(), verdict, frame: report.frame, answered: report.answered, frames: frames.length,
+        at: Date.now(), verdict, frame: report.frame,
+        answered: ready.size, frames: tokens.size, frameIndex: report.index + 1,
         userAgent: host.navigator.userAgent, card: document.querySelector('[data-dsh-tavern-card-name]')?.getAttribute('data-dsh-tavern-card-name') || '',
-        host: { delta: drag, before, after: scroller ? scroller.scrollTop : 0,
+        host: { delta: drag, before: startTop, after,
             node: scroller ? String(scroller.tagName || '').toLowerCase() + (scroller.id ? '#' + scroller.id : '') : '未找到',
             scrollHeight: scroller ? scroller.scrollHeight : 0, clientHeight: scroller ? scroller.clientHeight : 0 },
     });
@@ -16627,9 +16680,11 @@ async function runTavernTouchDiagnostics(host) {
             async function run() {
                 if (busy) return;
                 setBusy(true);
-                setNotice("已就绪：请在正文上按住往上拖一笔再松开，约 20 秒内出报告");
+                setNotice("正在连接消息帧…");
                 try {
-                    const result = await runTavernTouchDiagnostics(window);
+                    // The probe reports how many frames it reached, so a stroke on any
+                    // message is counted — not only on the first frame that answered.
+                    const result = await runTavernTouchDiagnostics(window, text => setNotice(text));
                     setNotice(result.ok ? "报告已生成" : String(result.message || "未取到数据"));
                 } catch (error) { setNotice("诊断失败：" + String(error.message || error)); }
                 finally { setBusy(false); }
@@ -16638,7 +16693,7 @@ async function runTavernTouchDiagnostics(host) {
                 h("div", { className: "dsh-tavern-settings-row" },
                     h("div", { className: "dsh-tavern-settings-copy" },
                         h("strong", { className: "dsh-tavern-settings-title" }, "移动端滑动诊断"),
-                        h("p", { className: "dsh-tavern-settings-desc" }, "在正文上拖一笔，采集这一笔里触点的样式链、帧内位移与会话容器位移，用于定位“正文划不动”。只读取，不改动任何设置。")),
+                        h("p", { className: "dsh-tavern-settings-desc" }, "点开始后，任意一条消息的正文上拖一笔即可（不必是第一帧）。采集触点样式链、帧内位移与会话容器位移，用于定位“正文划不动”。只读取，不改动任何设置。")),
                     h("button", { type: "button", className: "dsh-tavern-btn", disabled: busy, onClick: run }, busy ? "采集中…" : "开始诊断")),
                 notice ? h("div", { className: "dsh-tavern-settings-row", role: "status" },
                     h("span", { className: "dsh-tavern-settings-desc" }, notice)) : null);
