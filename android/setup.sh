@@ -184,7 +184,7 @@ update_source() {
           git -C "${APP_DIR}" reset --hard origin/main
           return
         fi
-        fail "项目目录包含本地提交或已经分叉，无法自动安全更新。"
+        fail "项目目录包含本地提交或已经分叉，无法自动安全更新。确认没有手工改动后，可执行 git -C ${APP_DIR} reset --hard origin/main 再重试（data/ 等未跟踪文件不受影响）。"
       fi
       git -C "${APP_DIR}" merge --ff-only origin/main
       return
