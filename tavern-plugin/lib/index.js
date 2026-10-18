@@ -1826,7 +1826,7 @@ export async function apply(ctx) {
   }
   // A history import builds its frames before the draft Chat is published, so the
   // template runtime cannot find that Session on disk yet. The import service holds
-  // the draft here for its own lifetime and releases it on success or failure.
+  // the draft here while frames are built and releases it on success or failure.
   const importDrafts = new Map()
   const tavernScriptHostAdapter = createTavernScriptHostAdapter({
     recordResourceSave: (sessionId, summary) => apiDiagnostics.recordResourceSave(sessionId, summary),
@@ -2456,7 +2456,8 @@ export async function apply(ctx) {
     projectForegroundWorldbook,
     drafts: {
       hold: function (sessionId, chat) { importDrafts.set(str(sessionId), chat) },
-      clear: function (sessionId) { importDrafts.delete(str(sessionId)) }
+      // The worker was initialized from the draft; the published Chat starts a fresh one.
+      clear: function (sessionId) { importDrafts.delete(str(sessionId)); fullTemplateRuntime.cancel(str(sessionId)) }
     },
     planner: contextPlanner,
     initialization: conversationInitialization,

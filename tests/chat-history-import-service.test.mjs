@@ -68,14 +68,16 @@ function foregroundContexts(session) {
  return [...rounds.values()]
 }
 
-test('导入草稿在发布前就能被模板会话解析，导入结束立即撤销',async()=>{
- const h=fixture(), drafts=new Map(), resolved=[]
+test('导入草稿在构帧期间能被模板会话解析，写入任何记录前撤销',async()=>{
+ const h=fixture(), drafts=new Map(), resolved=[], heldAtWrite=[]
  h.options.drafts={hold:(id,chat)=>drafts.set(id,chat),clear:id=>drafts.delete(id)}
+ const write=h.chats.write;h.chats.write=async chat=>{heldAtWrite.push(drafts.size);return write(chat)}
  // The world book projection resolves its Session the same way the template runtime does.
  h.options.projectForegroundWorldbook=async({chat})=>{resolved.push(drafts.get(chat.sessionId)?.id);return {context:''}}
  await createChatHistoryImportService(h.options).import(input)
  assert.deepEqual(resolved,['chat','chat'],'每一轮构帧时草稿都可解析')
  assert.equal(drafts.size,0,'导入完成后不再持有草稿')
+ assert.ok(heldAtWrite.length&&heldAtWrite.every(size=>size===0),'checkpoint 与发布写入时草稿已撤销')
 })
 
 test('导入失败时同样撤销草稿引用，不泄漏到后续请求',async()=>{

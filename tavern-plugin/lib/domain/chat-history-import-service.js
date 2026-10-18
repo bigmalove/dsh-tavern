@@ -62,12 +62,6 @@ export function createChatHistoryImportService({ initialization, cards, worldBoo
         ...(!result.parsed.hasMvu ? ['未找到 MVU 快照；如人物卡有初始变量，将使用初始值'] : [])] }
   }
   async function perform(input) {
-    // Frames are built before the draft Chat is published under its Session, so the
-    // template runtime cannot resolve it by session id yet. The host keeps that draft
-    // reachable for the duration of the import and drops it on success or failure.
-    try { return await runImport(input) } finally { drafts?.clear?.(input.sessionId) }
-  }
-  async function runImport(input) {
     if (!/^[a-zA-Z0-9-]{8,100}$/.test(input.operationId || '') || !input.sessionId) throw new Error('导入操作或 Session 标识无效')
     const { parsed, card, worldBook, initialVariables, initialError, incompatible } = await inspect(input)
     if (incompatible && !input.textOnly) throw new Error('变量结构与人物卡不兼容，请换卡或选择仅导入正文')
@@ -82,7 +76,9 @@ export function createChatHistoryImportService({ initialization, cards, worldBoo
     }
     if (!journal) {
       const chat = await initialization.prepareImport({ cardPath: input.cardPath, sessionId: input.sessionId, userName: input.userName || parsed.userName })
-      // Bound before the first frame: world book templates resolve this Session.
+      // Frames are built before this draft is published under its Session, so world book
+      // templates cannot resolve it by session id yet. The host holds it only while frames
+      // are built and releases it, with its template runtime, before anything is written.
       drafts?.hold?.(input.sessionId, chat)
       if (input.rescue) {
         chat.mvu = input.rescue.mvuSnapshot ? { ...chat.mvu, enabled: true, owner: 'official', runtime: 'magvarupdate' } : { enabled: false }
@@ -124,7 +120,7 @@ export function createChatHistoryImportService({ initialization, cards, worldBoo
             nativeTurn: turn, scriptReference: null,
             worldBookContext: [recalled.context, templates?.context].filter(Boolean).join('\n\n') })
         }
-      })
+            }).finally(() => drafts?.clear?.(input.sessionId))
       if (input.rescue) {
         plan.chat.timeline.checkpoints = []
         plan.chat.importHistory.rescue = input.rescue
@@ -135,8 +131,6 @@ export function createChatHistoryImportService({ initialization, cards, worldBoo
       await store.writeJson(path, journal)
     }
     if (journal.plan) {
-      // A resumed import rebuilds frames from the journal; keep that plan reachable too.
-      drafts?.hold?.(input.sessionId, journal.plan.chat)
       // Materialize ordinary Chat revisions for the native checkpoint mechanism.
       // Intermediate records are deliberately absent from the conversation registry.
       for (const checkpoint of journal.plan.chat.timeline.checkpoints) {
