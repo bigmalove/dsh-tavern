@@ -282,12 +282,21 @@
 		function createTavernAssistantRendererFeatureModule() {
 			function TavernUserNodeView(props) {
 				const data = props.node.data;
+				// 模型专用的种子契约不属于玩家可见历史；Session 历史与请求仍然保留它们。
+				if (data && data.source && data.source.form === "synthetic-trajectory") return null;
 				const location = props.node.location;
 				const turnRef = location && (location.kind === "turn" || location.kind === "step") ? location.turn : null;
 				const turn = turnRef ? Number(turnRef.turn) : 0;
 				const liveState = useScopedLiveTavernView(props.sessionId, String(data.time || ""), [["inputSources", String(turn)], ["inputTemplateDisplays", String(turn)]]);
+				// 宿主只渲染 append 来源的原文节点，正文编辑写的是替换副本：编辑过的楼层
+				// 由楼层表带回当前文字，否则改完页面上永远是原文。
+				const floorState = useScopedLiveTavernView(props.sessionId, "user-floor:" + String(data.seq), [["floorsBySeq", String(data.seq)]]);
+				const editedFloor = floorState.view && floorState.view.floorsBySeq ? floorState.view.floorsBySeq[String(data.seq)] : null;
+				// 删除写的也是替换副本，宿主照样渲染原节点：删掉的消息由服务端列出，这里藏起来。
+				const deletedState = useScopedLiveTavernView(props.sessionId, "user-deleted:" + String(data.seq), [["deletedSeqs", String(data.seq)]]);
+				const deleted = Boolean(deletedState.view && deletedState.view.deletedSeqs && deletedState.view.deletedSeqs[String(data.seq)]);
 				const parts = userContentParts(data.content);
-				const text = tavernUserTextForTurn(liveState.view, turn, data.content);
+				const text = editedFloor && typeof editedFloor.text === "string" ? editedFloor.text : tavernUserTextForTurn(liveState.view, turn, data.content);
 				const [copied, setCopied] = React.useState(false);
 				const copyTimer = React.useRef(null);
 				React.useEffect(function () { return function () { if (copyTimer.current !== null) window.clearTimeout(copyTimer.current); }; }, []);
@@ -304,9 +313,10 @@
 					return React.createElement("div", { key: index, className: "dsh-tavern-user-extra" }, React.createElement(DshUi.JsonBlock, { label: typeof props.t === "function" ? props.t("message.extraBlock") : "附加内容", payload: block, truncatedLabel: function (total) { return "内容过长（共 " + String(total) + " 项）"; } }));
 				});
 				const time = Number.isFinite(Number(data.time)) ? new Date(Number(data.time)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+				if (deleted) return null;
 				return React.createElement("div", { className: "dsh-tavern-user-row" },
 					React.createElement("div", { className: "dsh-tavern-user-stack" }, renderedImages, (text !== "" || extras.length > 0) ? React.createElement("div", { className: "dsh-tavern-user-bubble" }, liveState.view?.inputTemplateDisplays?.[turn] ? React.createElement(TavernMessageFrame, {content:liveState.view.inputTemplateDisplays[turn],sessionId:props.sessionId,turn:turn,partIndex:"user-template",frameOwner:props.frameOwner,eager:true}) : React.createElement("div", { style: { whiteSpace: "pre-wrap" } }, text), extras) : null),
-					React.createElement("div", { className: "dsh-tavern-user-actions" }, time ? React.createElement("span", null, time) : null, React.createElement(DshUi.Tooltip, { label: copied ? "已复制" : "复制", side: "bottom" }, React.createElement("button", { type: "button", className: "dsh-tavern-user-copy", "aria-label": copied ? "已复制" : "复制", onClick: copy }, React.createElement(copied ? DshUi.IconCheckOutline16 : DshUi.IconCopyOutline16, null))))
+					React.createElement("div", { className: "dsh-tavern-user-actions" }, time ? React.createElement("span", null, time) : null, React.createElement(TavernFloorEditButton, { sessionId: props.sessionId, seq: data.seq, variant: "user" }), React.createElement(TavernDeleteMessageAction, { sessionId: props.sessionId, seq: data.seq, variant: "user" }), React.createElement(DshUi.Tooltip, { label: copied ? "已复制" : "复制", side: "bottom" }, React.createElement("button", { type: "button", className: "dsh-tavern-user-copy", "aria-label": copied ? "已复制" : "复制", onClick: copy }, React.createElement(copied ? DshUi.IconCheckOutline16 : DshUi.IconCopyOutline16, null))))
 				);
 			}
 			// While a picture is being made: a placeholder frame where it will appear
@@ -596,6 +606,10 @@
 				const settled = data.status !== "running";
 				const revision = String(data.status || "") + ":" + String(data.finalNode && data.finalNode.seq || "");
 				const mapping = useLiveTavernView(props.sessionId, revision, [["$storyHostTurn", String(turn)]]);
+				// 删除写的是替换副本，宿主仍渲染原节点：服务端列出被删的 seq，这一楼藏起来。
+				const finalSeq = data.finalNode && data.finalNode.seq;
+				const deletedState = useScopedLiveTavernView(props.sessionId, "assistant-deleted:" + String(finalSeq || ""), [["deletedSeqs", String(finalSeq || "")]]);
+				const deleted = Boolean(finalSeq && deletedState.view && deletedState.view.deletedSeqs && deletedState.view.deletedSeqs[String(finalSeq)]);
 				const storyTurn = tavernStoryTurnForDshTurn(mapping.view, turn);
 				const currentView = liveTavernView.getSnapshot(props.sessionId).view;
                 const liveState = useLiveTavernView(props.sessionId, revision, tavernAssistantViewPaths(storyTurn, storyTurn > 0 && storyTurn === tavernLatestProjectionTurn(currentView)));
@@ -652,6 +666,12 @@
 				const sceneAnchors = (illustration && sceneAnchor ? [{ id: "scene-illustration", anchor: sceneAnchor, render: function () { return illustration; } }] : [])
 					.concat(extraPictures.filter(function (picture) { return picture.anchor; }).map(function (picture) { return { id: picture.id, anchor: picture.anchor, render: function () { return picture.node; } }; }));
 				const pluginText = playView ? createTavernPluginTextContext({ items: pluginMedia.items, extras: sceneAnchors, sessionId: props.sessionId, turn: storyTurn, streaming: data.status === "running" }) : null;
+				// 重新生成期间，被重做的这一楼只留宿主的"生成中"占位：旧正文还挂在
+				// 页面上会让玩家以为没有在生成、只是把新内容叠了上去。压制列表记的是
+				// native turn，这里要 native 与 story turn 都比一遍（重生成过的回合两者不同）。
+				const regenerating = liveState.view && liveState.view.regenInProgress === true
+					&& Array.isArray(liveState.view.suppressedDshTurns)
+					&& liveState.view.suppressedDshTurns.some(function (value) { return Number(value) === Number(turn) || Number(value) === Number(storyTurn); });
                 const rendered = sessionTransitioning ? [React.createElement("div", { key: "switching", className: "dsh-tavern-session-switching", role: "status" }, "正在完成游戏初始化…")] : waitingForHistory ? [React.createElement("div", {key:"history",role:"status"}, "正在读取历史内容…")] : renderTavernAssistantBlocks({
 					blocks: data.blocks,
 					streaming: data.status === "running",
@@ -679,6 +699,13 @@
 					t: props.t
 				});
 				const distantHeight = useTavernDistantFloor(historyNode, settled && !sessionTransitioning && storyTurn > 0 && latestProjectionTurn - storyTurn >= TAVERN_LIVE_FLOORS);
+				// 提前 return 必须在所有 hook 之后：放在 hook 前面，生成开始/结束时 hook 数量会变，React 直接报错。
+				// 已删除时不能只返回 null：宿主那一回合的尾行（复制/分支/用时/时间）是另一个
+				// 节点，正文消失后它在 DOM 里没有任何可识别的痕迹，只能靠回合编号去猜——
+				// 而页面上的编号与存档的编号在重新生成过之后并不相同。留一个不可见的标记，
+				// 尾行就能按 DOM 邻接直接认出「这一回合的正文已经删了」。
+				if (deleted) return React.createElement("span", { "data-tavern-deleted-floor": "1", hidden: true });
+				if (regenerating) return null;
 				if (!(data.status === "running" || data.status === "interrupted" || rendered.length > 0)) return null;
 				if (distantHeight > 0) return React.createElement("div", { ref:historyNode, className: "dsh-tavern-assistant", "data-distant-floor": true, style: { height: distantHeight + "px" } });
 				const mvuReceiptNode = settled && ownsTurn ? React.createElement(TavernTurnMvuReceipt, { sessionId: props.sessionId, turn: storyTurn }) : null;
@@ -731,10 +758,160 @@
 				const liveState = useScopedLiveTavernView(props.sessionId, String(props.messageId || ""), [["mode"], ["releaseCapabilities"], ["forkTurnsByMessageId", String(props.messageId || "")]]);
 				const view = liveState.view;
 				const turn = Number(view && view.forkTurnsByMessageId && view.forkTurnsByMessageId[String(props.messageId || "")]) || 0;
+				// 正文模式（含写作）都可以为这一轮生成插图；能否启用由本局开关与生图渠道决定。
 				const shown = Boolean(view && isPlayMode(view.mode) && view.releaseCapabilities && view.releaseCapabilities.sceneImages && turn > 0);
 				return shown ? React.createElement(SceneImageAction, { key: props.sessionId + ":" + turn, sessionId: props.sessionId, turn: turn }) : null;
 			}
-			function register(input) {
+			// 任意未被压缩的楼层都能改文字：助手正文、开场白与玩家输入。
+			// 只改这一楼的文字，不重跑模型、不重算结算。
+			// 助手楼层用 messageId 定位；玩家消息的 node.data 只有 {kind, seq, time,
+			// content, source}，没有 id，所以按 seq 查同一份楼层表。
+			function floorOf(view, messageId, seq) {
+				if (!view) return null;
+				if (seq !== undefined && seq !== null && view.floorsBySeq) {
+					const bySeq = view.floorsBySeq[String(seq)];
+					if (bySeq) return bySeq;
+				}
+				if (messageId === undefined || messageId === null || messageId === "") return null;
+				return view.floorsByMessageId ? (view.floorsByMessageId[String(messageId)] || null) : null;
+			}
+			function TavernFloorEditButton(props) {
+				const key = String(props.messageId || props.seq || "");
+				const liveState = useScopedLiveTavernView(props.sessionId, key, [
+					["mode"], ["floorsByMessageId", String(props.messageId || "")], ["floorsBySeq", String(props.seq || "")], ["deletedSeqs"], ["activity", "busy"]
+				]);
+				const view = liveState.view;
+				const floor = floorOf(view, props.messageId, props.seq);
+				const [busy, setBusy] = React.useState(false);
+				// 已删除的楼层不再提供编辑：宿主仍会渲染这一格操作栏。
+				const deleted = Boolean(floor && view && view.deletedSeqs && view.deletedSeqs[String(floor.seq)]);
+				if (!floor || deleted || !isPlayMode(view && view.mode)) return null;
+				// 不可编辑（后台结算、上下文已压缩、救援导入）时保留按钮但禁用：
+				// 隐藏会让整排操作在结算期间凭空消失，玩家以为功能没了。
+				const blocked = floor.editable !== true;
+				async function open() {
+					if (busy) return;
+					setBusy(true);
+					try {
+						// 带上节点身份：删掉别的楼层后 index 会前移，服务端按 id/seq 才能改对。
+						const result = await rpc("getBodyEdit", { index: floor.index, turn: floor.turn, role: floor.role, messageId: props.messageId || "", seq: floor.seq }, props.sessionId);
+						const edit = result.edit;
+						setTavernBodyEditPanel({ sessionId: props.sessionId, edit: edit, messageId: props.messageId || "", seq: floor.seq, texts: edit.parts.filter(function (part) { return part.kind === "text"; }).map(function (part) { return part.text; }), busy: false, error: "" });
+					} catch (error) { tavernErrorHub.report("编辑正文", error); }
+					finally { setBusy(false); }
+				}
+				const label = floor.greeting === true ? "编辑开场白" : floor.role === "user" ? "编辑这条输入" : "编辑这段正文";
+				const className = props.variant === "user" ? "dsh-tavern-user-copy dsh-tavern-message-edit" : "dsh-tavern-message-edit";
+				return React.createElement(DshUi.Tooltip, { label: blocked && floor.reason ? floor.reason : label, side: "bottom" },
+					React.createElement("button", { type: "button", className: className, "aria-label": label, disabled: busy || blocked, onClick: open },
+						React.createElement("svg", { width: 15, height: 15, viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: 1.4, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true },
+							React.createElement("path", { d: "M11.2 2.6l2.2 2.2-8.2 8.2-2.9.7.7-2.9z" }),
+							React.createElement("path", { d: "M9.7 4.1l2.2 2.2" }))));
+			}
+			// 删除单条消息：只移除这一条，玩家输入与相邻楼层都不动。
+			function TavernDeleteMessageAction(props) {
+				const askConfirm = useTavernConfirm(props.sessionId);
+				const key = String(props.messageId || props.seq || "");
+				const liveState = useScopedLiveTavernView(props.sessionId, key, [
+					["mode"], ["floorsByMessageId", String(props.messageId || "")], ["floorsBySeq", String(props.seq || "")], ["deletedSeqs"], ["activity", "busy"]
+				]);
+				const view = liveState.view;
+				const floor = floorOf(view, props.messageId, props.seq);
+				const [busy, setBusy] = React.useState(false);
+				// 删掉的那一楼，宿主仍然渲染它的操作栏（正文已被 deletedSeqs 藏起来）：
+				// 这里按同一个标记把自己也藏掉，否则页面上会留一个删不掉的按钮，
+				// 点下去还带着删除前的 index，只能得到「消息已变化」。
+				const deleted = Boolean(floor && view && view.deletedSeqs && view.deletedSeqs[String(floor.seq)]);
+				if (!floor || deleted || !isPlayMode(view && view.mode)) return null;
+				const blocked = floor.editable !== true;
+				async function remove() {
+					if (busy) return;
+					const ok = await askConfirm("删除这条消息？只会移除这一条，玩家输入与其它楼层都保留，之后可以用「撤销删除」恢复。");
+					if (!ok) return;
+					setBusy(true);
+					try {
+						// 带上节点身份：删掉前面一条后 index 会前移，服务端按 id/seq 才能删对。
+						const result = await rpc("deleteFloorMessage", { index: floor.index, turn: floor.turn, role: floor.role, messageId: props.messageId || "", seq: floor.seq }, props.sessionId);
+						applyTavernResultView(props.sessionId, result.view);
+						notifyTavernDataChanged(["sessions"], "play-controls");
+						tavernCoordination.invalidate(props.sessionId);
+					} catch (error) { tavernErrorHub.report("删除消息", error); }
+					finally { setBusy(false); liveTavernView.invalidate(props.sessionId); }
+				}
+				const label = floor.greeting === true ? "删除开场白" : floor.role === "user" ? "删除这条输入" : "删除这条回复";
+				const className = props.variant === "user" ? "dsh-tavern-user-copy dsh-tavern-message-edit" : "dsh-tavern-message-edit";
+				return React.createElement(DshUi.Tooltip, { label: blocked && floor.reason ? floor.reason : label, side: "bottom" },
+					React.createElement("button", { type: "button", className: className, "aria-label": label, disabled: busy || blocked, onClick: remove },
+						React.createElement(DshUi.IconTrashOutline16, null)));
+			}
+			function TavernSwipeControl(props) {
+			const askConfirm = useTavernConfirm(props.sessionId);
+			const liveState = useScopedLiveTavernView(props.sessionId, String(props.messageId || ""), [
+				["mode"], ["floorsByMessageId", String(props.messageId || "")], ["deletedSeqs"], ["activity", "busy"], ["regenInProgress"]
+			]);
+			const view = liveState.view;
+			const floor = view && view.floorsByMessageId ? view.floorsByMessageId[String(props.messageId || "")] : null;
+			const [busy, setBusy] = React.useState(false);
+			// 已删除的楼层不再提供版本切换：宿主仍会渲染这一格操作栏。
+			const deleted = Boolean(floor && view && view.deletedSeqs && view.deletedSeqs[String(floor.seq)]);
+			if (!floor || deleted || !isPlayMode(view && view.mode) || floor.role !== "assistant") return null;
+			const count = Math.max(1, Number(floor.swipeCount) || 1);
+			const latest = floor.latest === true;
+			// 只有一个版本又不是最新楼层时无从可切；开场白的 › 不生成新开场白。
+			if (count <= 1 && !latest) return null;
+			const blocked = Boolean((view && view.activity && view.activity.busy) || (view && view.regenInProgress));
+			const disabled = busy || blocked || floor.editable !== true;
+			const title = floor.reason || (blocked ? "请等待当前生成或后台处理完成后再操作" : "");
+			const current = Math.max(0, Number(floor.swipeId) || 0);
+			async function select(swipeId) {
+				if (busy || disabled) return;
+				setBusy(true);
+				try {
+					await rpc("selectSwipe", { sessionId: props.sessionId, index: floor.index, turn: floor.turn, swipeId: swipeId, token: floor.token, messageId: props.messageId || "" }, props.sessionId);
+					liveTavernView.invalidate(props.sessionId);
+				} catch (error) { tavernErrorHub.report("切换正文版本", error); }
+				finally { setBusy(false); liveTavernView.invalidate(props.sessionId); }
+			}
+			// 最后一个版本且是最新楼层：直接重新生成一个新版本（不带意见）。
+			async function regenerate() {
+				if (busy || disabled) return;
+				setBusy(true);
+				try {
+					const res = await rpc("regenBody", { guidance: "" }, props.sessionId);
+					applyBodyRegenerationResult({ liveTavernView: liveTavernView, historyProjection: tavernHistoryProjection, sessionId: props.sessionId, view: res.view, tail: null });
+				} catch (error) { tavernErrorHub.report("重新生成正文", error); }
+				finally { setBusy(false); liveTavernView.invalidate(props.sessionId); tavernCoordination.invalidate(props.sessionId); }
+			}
+			function prev(event) { if (current > 0) select(current - 1); }
+			function next(event) {
+				if (current + 1 < count) { select(current + 1); return; }
+				if (latest && floor.greeting !== true) regenerate();
+			}
+			// 删除当前版本：只剩一个版本时改用整轮删除。
+			async function removeVersion() {
+				if (busy || disabled || count <= 1) return;
+				const ok = await askConfirm("删除当前这个版本？其余版本会保留，之后可以用「撤销删除」恢复。");
+				if (!ok) return;
+				setBusy(true);
+				try {
+					const result = await rpc("deleteFloorVersion", { index: floor.index, turn: floor.turn, swipeId: current, token: floor.token, messageId: props.messageId || "" }, props.sessionId);
+					applyTavernResultView(props.sessionId, result.view);
+					notifyTavernDataChanged(["sessions"], "play-controls");
+					tavernCoordination.invalidate(props.sessionId);
+				} catch (error) { tavernErrorHub.report("删除正文版本", error); }
+				finally { setBusy(false); liveTavernView.invalidate(props.sessionId); }
+			}
+			const label = "第 " + String(current + 1) + " / " + String(count) + " 个版本";
+			return React.createElement(React.Fragment, null,
+				React.createElement(DshUi.Tooltip, { label: disabled && title ? title : "上一个版本", side: "bottom" },
+					React.createElement("button", { type: "button", className: "dsh-tavern-message-swipe", "aria-label": "上一个版本", disabled: disabled || current <= 0, onClick: prev }, "‹")),
+				React.createElement("span", { className: "dsh-tavern-message-swipe-count", title: label }, String(current + 1) + "/" + String(count)),
+				React.createElement(DshUi.Tooltip, { label: disabled && title ? title : (current + 1 < count ? "下一个版本" : latest && floor.greeting !== true ? "重新生成一个新版本" : "没有更多版本"), side: "bottom" },
+					React.createElement("button", { type: "button", className: "dsh-tavern-message-swipe", "aria-label": "下一个版本", disabled: disabled || (current + 1 >= count && !(latest && floor.greeting !== true)), onClick: next }, "›")),
+				count > 1 ? React.createElement(DshUi.Tooltip, { label: disabled && title ? title : "删除当前版本", side: "bottom" },
+					React.createElement("button", { type: "button", className: "dsh-tavern-message-swipe dsh-tavern-message-swipe-delete", "aria-label": "删除当前版本", disabled: disabled, onClick: removeVersion }, "×")) : null);
+		}
+		function register(input) {
 				const scriptOwner = createTavernScriptSessionOwner({ sessions: input.ctx.sessions, executeSlash: createTavernFrameSlashExecutor(input.ctx) });
 				const executeSlash = createTavernFrameSlashExecutor(input.ctx);
 				input.ctx.effect(function () {
@@ -753,7 +930,7 @@
 						priority: -1
 					}, function (props) {
 						// Hide only our model-facing seed; keep it in Session history and requests.
-						if (props.node.data.finalNode && /^tavern-seed-trajectory:v1:.+:2$/.test(String(props.node.data.finalNode.messageId || ""))) return null;
+						if (props.node.data.finalNode && /^tavern-seed-trajectory:v\d+:.+:2$/.test(String(props.node.data.finalNode.messageId || ""))) return null;
 						return React.createElement(TavernAssistantNodeView, Object.assign({}, props, { executeSlash: executeSlash }));
 					}); });
 				}, "dsh-tavern: inline assistant renderer");
@@ -764,12 +941,30 @@
 						priority: -1
 					}, TavernUserNodeView); });
 				}, "dsh-tavern: raw user message renderer");
-				input.ctx.effect(function () {
-					return input.slots.inject("conversation.chat.assistant-actions", function () { return input.slots.register({
-						name: "conversation.chat.assistant-actions", id: "dsh-tavern-fork", order: 20,
-						inject: function (sessionId) { return { sessionId: sessionId }; }
-					}, TavernForkAssistantAction); });
-				}, "dsh-tavern: conversation fork action");
+			input.ctx.effect(function () {
+				return input.slots.inject("conversation.chat.assistant-actions", function () { return input.slots.register({
+					name: "conversation.chat.assistant-actions", id: "dsh-tavern-floor-delete", order: 8,
+					inject: function (sessionId) { return { sessionId: sessionId }; }
+				}, TavernDeleteMessageAction); });
+			}, "dsh-tavern: message delete action");
+			input.ctx.effect(function () {
+				return input.slots.inject("conversation.chat.assistant-actions", function () { return input.slots.register({
+					name: "conversation.chat.assistant-actions", id: "dsh-tavern-floor-edit", order: 9,
+					inject: function (sessionId) { return { sessionId: sessionId }; }
+				}, TavernFloorEditButton); });
+			}, "dsh-tavern: floor text edit action");
+			input.ctx.effect(function () {
+				return input.slots.inject("conversation.chat.assistant-actions", function () { return input.slots.register({
+					name: "conversation.chat.assistant-actions", id: "dsh-tavern-swipe", order: 10,
+					inject: function (sessionId) { return { sessionId: sessionId }; }
+				}, TavernSwipeControl); });
+			}, "dsh-tavern: reply version switch action");
+			input.ctx.effect(function () {
+				return input.slots.inject("conversation.chat.assistant-actions", function () { return input.slots.register({
+					name: "conversation.chat.assistant-actions", id: "dsh-tavern-fork", order: 20,
+					inject: function (sessionId) { return { sessionId: sessionId }; }
+				}, TavernForkAssistantAction); });
+			}, "dsh-tavern: conversation fork action");
 				input.ctx.effect(function () {
 					return input.slots.inject("conversation.chat.assistant-actions", function () { return input.slots.register({
 						name: "conversation.chat.assistant-actions", id: "dsh-tavern-illustrate", order: 21,

@@ -1,5 +1,6 @@
 		function createPlayControlsFeatureModule() {
-			const historyProjection = createTurnHistoryProjection();
+			// 与楼层按钮共用同一份投影实例（定义在 main.js 的模块作用域）。
+			const historyProjection = tavernHistoryProjection;
 			function TavernConversationExportAction(props) {
                 // The header only needs session membership. Building a complete
                 // Tavern view here delays the button behind templates and history.
@@ -301,6 +302,9 @@
 				)
 			);
 			if (view.mode === "card") return null;
+			// 写作会话没有人物卡：与卡绑定的区块（人物卡应用、卡更新、交给卡片 Agent 调试）不显示，
+			// 世界书、姿势结算、Guide、后台任务等与游玩一致照常工作。
+			const writing = isWritingMode(view.mode);
 			const statusText = view.settleStatus === "running" ? "正在执行后台结算" : (view.settleStatus === "error" ? "后台结算失败" : "后台结算已完成");
 			const cardUpdateNotice = !view.cardUpdate ? "" : view.cardUpdate.error ? "检查更新失败：" + view.cardUpdate.error
 				: view.cardUpdate.worldbookSyncRequired || view.cardUpdate.legacy ? "旧存档需同步"
@@ -309,12 +313,12 @@
 				: view.cardUpdate.worldbookChanged ? "世界书有变化" : "";
 			return h("aside", { className: "dsh-tavern-status dsh-tavern-status-dashboard" },
 				h("div", { className: "dsh-tavern-status-head" },
-					h("div", { className: "dsh-tavern-status-role" }, view.card.name),
-                    h("nav", { className: "dsh-tavern-status-resource-links", "aria-label": "本局资料" },
+					h("div", { className: "dsh-tavern-status-role" }, writing ? "写作" : view.card.name),
+                    writing ? null : h("nav", { className: "dsh-tavern-status-resource-links", "aria-label": "本局资料" },
                         h("button", { type: "button", disabled: !view.card.path, onClick: () => props.openStyleTab("dsh-tavern:cards", { cardPath: view.card.path }) }, "打开人物卡 ↗"),
                         h("button", { type: "button", disabled: !view.card.path || resourceLinkBusy || !currentResourceBinding || noWorldBook || unavailableWorldBook, title: "打开本局人物卡绑定的世界书；多本绑定时打开主世界书", onClick: openWorldBookDetail }, resourceLinkBusy ? "正在打开…" : !currentResourceBinding ? "正在读取世界书…" : noWorldBook ? "未绑定世界书" : unavailableWorldBook ? "世界书不可用" : "打开世界书 ↗")),
                     resourceLinkError ? h("div", { className: "dsh-card-error", role: "status" }, resourceLinkError) : null,
-					(view.card.tags || []).length ? h("div", { className: "dsh-tavern-status-tags" }, (view.card.tags || []).slice(0, 8).map(function (tag) { return h("span", { key: tag, className: "dsh-tavern-status-tag" }, tag); })) : null,
+					(view.card.tags || []).length && !writing ? h("div", { className: "dsh-tavern-status-tags" }, (view.card.tags || []).slice(0, 8).map(function (tag) { return h("span", { key: tag, className: "dsh-tavern-status-tag" }, tag); })) : null,
 					h("div", { className: "dsh-tavern-status-settle" }, h("span", { className: "dsh-tavern-status-dot " + (view.settleStatus || "idle") }), statusText)
 				),
 					h("div", { className: "dsh-tavern-status-body" },
@@ -327,7 +331,7 @@
 						),
 						cardUpdateError ? h("p", { className: "dsh-card-error", role: "alert" }, "未应用更新：" + cardUpdateError) : null
 					) : null,
-					h(TavernCardAppDock, { sessionId: props.sessionId }),
+					writing ? null : h(TavernCardAppDock, { sessionId: props.sessionId }),
 					view.settleStatus === "error" ? h("div", { className: "dsh-card-error" },
 						h("div", null, view.settleError || "后台结算失败，请重试。"),
 						h("button", { className: "dsh-tavern-btn", disabled: settlementRetryBusy, onClick: retrySettlement }, settlementRetryBusy ? "重试中…" : "重试后台结算")
@@ -339,7 +343,7 @@
 					(view.presentationWarnings || []).map(function (warning, index) {
 						return h("div", { className: "dsh-card-error", key: "presentation-warning-" + index }, warning);
 					}),
-					h("details", { className: "dsh-tavern-status-section dsh-tavern-status-support" },
+					writing ? null : h("details", { className: "dsh-tavern-status-section dsh-tavern-status-support" },
                         h("summary", null, "遇到显示或生成问题？"),
                         h("p", { className: "dsh-tavern-settings-desc" }, "正则加载、前端美化或内容生成异常，可交给卡片 Agent 排查。"),
 						h("div", { className: "dsh-tavern-debug-panel" },
@@ -375,7 +379,7 @@
 						),
 						guideError ? h("div", { className: "dsh-card-error" }, guideError) : null
 					),
-					h("section", { className: "dsh-tavern-status-section" },
+					writing ? null : h("section", { className: "dsh-tavern-status-section" },
 						h("div", { className: "dsh-tavern-character-design-head" },
                             h("div", { className: "dsh-tavern-status-label" }, "人物设计档案（" + ((view.characterDesigns && view.characterDesigns.characters || []).length) + "）"),
                             h("button", { className: "dsh-tavern-btn", disabled: running || view.activity?.busy || view.characterDesignTask?.status === "running", onClick: () => designCharacter(view.characterDesignTask?.status === "failed" ? view.characterDesignTask.guidance : "") }, view.characterDesignTask?.status === "running" ? "设计中…" : view.characterDesignTask?.status === "failed" ? "重试设计" : "设计人物")),
@@ -746,16 +750,38 @@
                 title: "恢复第 " + turn + " 轮正文和状态；新的操作会使此恢复点失效" }, busy ? "恢复中…" : "撤销回退（恢复第 " + turn + " 轮）");
         }
 
-		const bodyEditPanel = { value: null, listeners: new Set() };
-		function setBodyEditPanel(value) {
-			bodyEditPanel.value = value;
-			bodyEditPanel.listeners.forEach(function (listener) { listener(value); });
-		}
-		function useBodyEditPanel() {
-			const [value, setValue] = React.useState(bodyEditPanel.value);
-			React.useEffect(function () { bodyEditPanel.listeners.add(setValue); return function () { bodyEditPanel.listeners.delete(setValue); }; }, []);
-			return value;
-		}
+        // 撤销上一次删除（一个版本或一条消息）；新的回合开始时失效。
+        function TavernUndoDeletionAction(props) {
+            const [busy, setBusy] = React.useState(false);
+            const running = props.useSession(function (state) { return state.running === true; });
+            const live = useLiveTavernView(props.sessionId, "undo-delete:" + String(running));
+            const view = live.view;
+            if (!view || !view.canUndoDeletion || view.deletionUndoable === false) return null;
+            const kind = view.deletionUndoKind === "message" ? "消息" : "版本";
+            async function undo() {
+                if (busy || running) return;
+                setBusy(true);
+                try {
+                    const result = await rpc("undoFloorDeletion", {}, props.sessionId);
+                    applyTavernResultView(props.sessionId, result && result.view);
+                    notifyTavernDataChanged(["sessions"], "play-controls");
+                } catch (error) { tavernErrorHub.report("撤销删除", error); }
+                finally { setBusy(false); liveTavernView.invalidate(props.sessionId); tavernCoordination.invalidate(props.sessionId); }
+            }
+            // 菜单项之外还要能在输入区直接看到：删完那一楼的尾行会整条藏掉，
+            // 藏进「更多 ▾」里的入口跟着一起没了，玩家就找不到撤销。
+            if (props.inDock) {
+                return React.createElement("button", { type: "button", className: "dsh-tavern-choice-trigger dsh-tavern-undo-deletion",
+                    disabled: busy || running, title: "把刚刚删除的" + kind + "放回去；新的操作会使此恢复点失效", onClick: undo },
+                    busy ? "恢复中…" : "撤销删除（" + kind + "）");
+            }
+            return React.createElement("button", { role: "menuitem", disabled: busy || running, onClick: undo,
+                title: "把刚刚删除的" + kind + "放回去；新的操作会使此恢复点失效" }, busy ? "恢复中…" : "撤销删除（" + kind + "）");
+        }
+
+		// 面板状态定义在客户端模块作用域（main.js）：楼层按钮在另一个闭包里打开它。
+		const setBodyEditPanel = setTavernBodyEditPanel;
+		const useBodyEditPanel = useTavernBodyEditPanel;
 		function TavernEditBodyAction(props) {
 			const [busy, setBusy] = React.useState(false);
 			const running = props.useSession(function (snapshot) { return snapshot.running === true; });
@@ -783,16 +809,18 @@
 			async function save() {
 				setBodyEditPanel(Object.assign({}, panel, { busy: true, error: "" }));
 				try {
-					const result = await rpc("saveBodyEdit", { token: panel.edit.token, texts: panel.texts }, props.sessionId);
-					liveTavernView.setView(props.sessionId, result.view);
+					// 保存也带节点身份：面板打开后可能又删了别的楼层，index 已经前移。
+					const result = await rpc("saveBodyEdit", { token: panel.edit.token, index: panel.edit.index, turn: panel.edit.turn, role: panel.edit.role, latest: panel.edit.latest === true, messageId: panel.messageId || "", seq: panel.seq, texts: panel.texts }, props.sessionId);
+					applyTavernResultView(props.sessionId, result.view);
 					notifyTavernDataChanged(["sessions"], "play-controls");
 					tavernCoordination.invalidate(props.sessionId);
 					setBodyEditPanel(null);
 				} catch (error) { setBodyEditPanel(Object.assign({}, panel, { busy: false, error: String(error.message || error) })); }
 			}
 			let textIndex = 0;
-			return h("div", { className: "dsh-tavern-question", role: "region", "aria-label": "编辑正文" },
-				h("div", { className: "dsh-tavern-question-head" }, h("span", null, "编辑正文")),
+			const label = panel.edit.greeting === true ? "编辑开场白" : panel.edit.role === "user" ? "编辑这条输入" : "编辑正文";
+			return h("div", { className: "dsh-tavern-question", role: "region", "aria-label": label },
+				h("div", { className: "dsh-tavern-question-head" }, h("span", null, label)),
 				panel.error ? h("div", { className: "dsh-tavern-choice-error", role: "alert" }, panel.error) : null,
 				h("div", { style: { maxHeight: "50vh", overflowY: "auto" } }, panel.edit.parts.map(function (part, index) {
 					if (part.kind === "html") return h("div", { key: index, className: "dsh-tavern-question-sub" }, "HTML 内容保持原样");
@@ -990,13 +1018,15 @@
             const h = React.createElement;
             const owner = props.sessions.subagentAddress(props.sessionId)?.parentSessionId || props.sessionId;
             const mode = useTavernSessionMode(owner);
+            // 写作会话没有人物卡；其余本局设置与游玩一致（预设、长期偏好、后台模型、写作 Skill、插件）。
+            const writing = isWritingMode(mode);
             return h("aside", { className: "dsh-tavern-status dsh-local-settings", "aria-label": "本局设置" },
                 h("div", { className: "dsh-tavern-status-head" }, h("strong", null, "本局设置")),
                 h("div", { className: "dsh-tavern-status-body" }, isPlayMode(mode) ? h(React.Fragment, null,
-                    h("p", { className: "dsh-local-intro" }, "仅影响本局，修改后自动保存，已有对话和变量会保留。"),
+                    h("p", { className: "dsh-local-intro" }, writing ? "仅影响本局，修改后自动保存。写作会话不需要人物卡和开场白，世界书只使用标记为全局生效的独立世界书。" : "仅影响本局，修改后自动保存，已有对话和变量会保留。"),
                     h("p", { className: "dsh-local-warning dsh-local-intro" }, "切换预设、长期偏好、模型、结算或联网搜索后，下一次请求要重建缓存，耗时和费用会增加。"),
-                    h("section", { className: "dsh-local-section" }, h("h3", null, "游玩"),
-                        h(TavernLocalPlayerName, { key: owner + ":name", sessionId: owner }),
+                    h("section", { className: "dsh-local-section" }, h("h3", null, writing ? "基本信息" : "游玩"),
+                        writing ? null : h(TavernLocalPlayerName, { key: owner + ":name", sessionId: owner }),
                         h(TavernConversationPreset, { key: owner + ":preset", sessionId: owner }),
                         h(UserPreferenceProfileTab, { key: owner + ":profile", scope: { sessionId: owner }, conversationOnly: true }),
                         h(TavernStatusBarSetting, { key: owner + ":status", sessionId: owner })),
@@ -1148,6 +1178,7 @@
 					React.createElement(TavernEditBodyAction, props),
 					React.createElement(TavernRollbackAction, props),
                     React.createElement(TavernUndoRollbackAction, props),
+                    React.createElement(TavernUndoDeletionAction, props),
 					React.createElement(TavernCompactionAction, Object.assign({}, props, { inMenu: true })))
 			);
 		}
@@ -1162,12 +1193,15 @@
 			const imageTurn = Number(live.view && live.view.latestAssistantTurn) || 0;
 			const h = React.createElement;
 			if (!sessionMode) return null;
+			// 生图等正文类子会话（写作也一样）共用这一套停后台/撤销入口。
 			if (address) return isPlayMode(sessionMode) ? h("div", { className: "dsh-tavern-dock-actions" },
 				h(TavernStopBackgroundAction, { sessionId: ownerSessionId }),
 				h(TavernImageAgentUndoAction, { parentSessionId: ownerSessionId, agentSessionId: props.sessionId, running })) : null;
 			return h("div", { className: "dsh-tavern-dock-actions" },
 				isPlayMode(sessionMode) && latestMessageId ? React.createElement(CandidateAction, Object.assign({}, props, { messageId: latestMessageId })) : null,
 				isPlayMode(sessionMode) && live.view && !live.view.canClearIncompleteReply ? React.createElement(TavernPluginComposerActions, { sessionId: props.sessionId, turn: imageTurn, running: running }) : null,
+				// 撤销删除放在这里：消息那行的尾行会被整条藏掉，不能只留在「更多」里。
+				isPlayMode(sessionMode) ? React.createElement(TavernUndoDeletionAction, Object.assign({}, props, { inDock: true })) : null,
 				isPlayMode(sessionMode) ? React.createElement(TavernMoreActions, props) : React.createElement(TavernCompactionAction, props),
                 live.view && live.view.contextCompaction && live.view.contextCompaction.operation && live.view.contextCompaction.operation.status === "running" ? h("span", { role: "status", className: "dsh-tavern-settings-desc" }, "正在压缩前后台上下文…")
                     : live.view && live.view.contextCompaction && live.view.contextCompaction.warning ? h("span", { role: "status", className: "dsh-tavern-settings-desc" }, live.view.contextCompaction.warning,
@@ -1237,7 +1271,7 @@
                     sessionId: props.sessionId, storage: window.localStorage, hiddenTurns: hiddenTurns, replayTurn: replayTurn,
                     onToggle: !Array.isArray(hiddenTurns) ? undefined : async function (turn, hidden) {
                         const result = await rpc("setFailedErrorVisibility", { sessionId: props.sessionId, turn: turn, hidden: hidden });
-                        liveTavernView.setView(props.sessionId, result.view);
+                        applyTavernResultView(props.sessionId, result.view);
                     },
                     onReplay: replayTurn === null ? undefined : async function () {
                         try { await submitFailedTurnReplay(props.sessionId); }
@@ -1320,11 +1354,14 @@
 			const suppressedDshTurnsRevision = suppressedDshTurns.join(",");
 			const regeneratedDshTurns = suppressionState.view && suppressionState.view.regeneratedDshTurns || {};
 			const regeneratedDshTurnsRevision = JSON.stringify(regeneratedDshTurns);
+			// 单条删除后要藏掉宿主那条尾行（复制/分支/用时/时间）。
+			const deletedReplyTurns = suppressionState.view && Array.isArray(suppressionState.view.deletedReplyTurns) ? suppressionState.view.deletedReplyTurns : [];
+			const deletedReplyTurnsRevision = deletedReplyTurns.join(",");
 			React.useEffect(function () {
 				let frame = null;
 				function applyProjectionState() {
 					frame = null;
-					historyProjection.apply(props.sessionId, suppressedDshTurns, regeneratedDshTurns);
+					historyProjection.apply(props.sessionId, suppressedDshTurns, regeneratedDshTurns, deletedReplyTurns);
 				}
 				function scheduleProjection() {
 					if (frame === null) frame = window.requestAnimationFrame(applyProjectionState);
@@ -1343,7 +1380,7 @@
 				});
 				observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-chat-flow-kind", "data-chat-turn", "data-turn-tail"] });
 				return function () { observer.disconnect(); if (frame !== null) window.cancelAnimationFrame(frame); };
-			}, [props.sessionId, latestMessageId, running, suppressedDshTurnsRevision, regeneratedDshTurnsRevision]);
+			}, [props.sessionId, latestMessageId, running, suppressedDshTurnsRevision, regeneratedDshTurnsRevision, deletedReplyTurnsRevision]);
 			return null;
 		}
 		function CandidateQuestion(props) {

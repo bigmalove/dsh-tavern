@@ -281,5 +281,15 @@ export function createLiveCardUpdate({readGlobals = async () => ({})} = {}) {
     const cleaned = projectPersistentStatusView(chat.messages, display.projections, {...options,allowStaticStatus:true})
     return {...display,...projectPersistentStatusView(chat.messages, cleaned.projections, {...options,regexScripts:rendered,allowStaticStatus:true})}
   }
-  return {prepare,project,dispose:()=>runtime.dispose()}
+  // A version switch on the greeting needs that opening's own starting state:
+  // the [initvar] block and the initvar worldbook entries belong to one opening,
+  // never to the scene the chat has already played through.
+  async function openingVariables(chat, card, swipeId) {
+    const messages = chat.messages.map(message => message?.greeting === true ? { ...message, swipeId } : message)
+    const stat_data = await initialDefaults({ ...chat, messages }, card)
+    const schema = generateSchema(clone(stat_data))
+    cleanUpMetadata(stat_data)
+    return { stat_data, schema, initialized_lorebooks: {} }
+  }
+  return {prepare,project,openingVariables,dispose:()=>runtime.dispose()}
 }

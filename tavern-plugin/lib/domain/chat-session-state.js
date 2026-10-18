@@ -30,7 +30,12 @@ export function projectChatSessionState(chat, options = {}) {
   for (const key of ['id', 'sessionId', '_storageRevision', 'mode', 'cardPath', 'cardContextRevision',
     'backgroundConfigVersion', 'conversationFeaturesVersion', 'disabledWritingSkills', 'contextCompaction', 'updatedAt', 'timeline', 'candidateAgent',
     'cardName', 'requestMode', 'statusBarPlacement', 'statusSections', 'webSearchEnabled', 'candidates', 'taskMailbox', 'regenInProgress',
-    'settleError', 'scriptState', 'hiddenDshErrorTurns', 'suppressedDshTurns', 'regeneratedDshTurns', 'tavernHelperLifecycleRevision']) {
+    'settleError', 'scriptState', 'hiddenDshErrorTurns', 'suppressedDshTurns', 'regeneratedDshTurns', 'tavernHelperLifecycleRevision',
+    // The undo point for a deleted floor lives in the header only. Cached reads
+    // build their view from this trimmed projection, so a field missing here is
+    // silently always-false in the view — deletion would work, and the undo
+    // button would never appear.
+    'deletionUndo']) {
     if (Object.hasOwn(chat, key)) selected[key] = chat[key]
   }
   if (chat.importHistory) selected.importHistory = {
@@ -117,7 +122,9 @@ export function createSessionStateView({ activity: activityOf, evidence: evidenc
       && previous.events.deref() === events && previous.key === key
       && (previous.revision === chat._storageRevision || previous.revision === changes.baseRevision)) {
       previous.revision = chat._storageRevision
-      return {...copyRollback(previous.value),undoRollbackTurn:canUndoRollback(chat,session) ? chat.rollbackUndo.turn : null}
+      return {...copyRollback(previous.value),undoRollbackTurn:canUndoRollback(chat,session) ? chat.rollbackUndo.turn : null,
+        canUndoDeletion: Boolean(chat.deletionUndo), deletionUndoKind: chat.deletionUndo ? String(chat.deletionUndo.kind || '') : '',
+        deletionUndoable: Boolean(chat.deletionUndo) && chat.deletionUndo.undoable !== false}
     }
     const rollbackState = Array.isArray(nodes) ? rollbackAvailability(chat, { events: evidence.events, nodes }) : {
       canRollback: false, canClearIncompleteReply: false,
@@ -142,6 +149,10 @@ export function createSessionStateView({ activity: activityOf, evidence: evidenc
       canRollback: rollbackState.canRollback || hasRound,
       canClearIncompleteReply: rollbackState.canClearIncompleteReply,
       undoRollbackTurn: canUndoRollback(chat, evidence.session) ? chat.rollbackUndo.turn : null,
+      // The single-message deletion undo point, read straight off the header.
+      canUndoDeletion: Boolean(chat.deletionUndo),
+      deletionUndoKind: chat.deletionUndo ? String(chat.deletionUndo.kind || '') : '',
+      deletionUndoable: Boolean(chat.deletionUndo) && chat.deletionUndo.undoable !== false,
       rollbackUnavailableReason: rollbackState.canRollback || hasRound ? '' : rollbackState.reason
     }
     if (native && chat.id && Number.isSafeInteger(chat._storageRevision)

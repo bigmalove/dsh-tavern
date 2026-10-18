@@ -768,6 +768,33 @@ window.__ModuleLoader__.load({
 
 // @include ui/message-frame.js
 
+		// 正文编辑面板的跨模块状态：楼层按钮（assistant-renderer）打开它，
+		// 输入区面板（play-controls）渲染它——两个 feature 不在同一闭包里。
+		const tavernBodyEditPanel = { value: null, listeners: new Set() };
+		function setTavernBodyEditPanel(value) {
+			tavernBodyEditPanel.value = value;
+			tavernBodyEditPanel.listeners.forEach(function (listener) { listener(value); });
+		}
+		function useTavernBodyEditPanel() {
+			const [value, setValue] = React.useState(tavernBodyEditPanel.value);
+			React.useEffect(function () { tavernBodyEditPanel.listeners.add(setValue); return function () { tavernBodyEditPanel.listeners.delete(setValue); }; }, []);
+			return value;
+		}
+
+		// 回合历史投影持有"哪些原生回合行被隐藏"的 DOM 状态，必须全客户端只有一份：
+		// 楼层按钮（assistant-renderer）触发重新生成后要立刻对账，面板侧（play-controls）
+		// 的观察者也要用同一份，否则两边各藏一份、互相对不上。
+		const tavernHistoryProjection = createTurnHistoryProjection();
+
+		// 写入类 RPC 返回的视图来自"只有头部"的 Chat（messages 为空或稀疏），
+		// 用它直接 setView 会让整排楼层按钮消失、正文也不刷新。这里一律不采纳
+		// 返回值，改为让缓存失效、重新走一次完整读取——只有落盘后的全量投影才可信。
+		function applyTavernResultView(sessionId, view) {
+			void view;
+			liveTavernView.invalidate(sessionId);
+			return liveTavernView.getSnapshot(sessionId).view || null;
+		}
+
 // @include features/assistant-renderer.js
 
 // @include features/card-list.js

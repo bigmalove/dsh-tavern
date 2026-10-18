@@ -188,7 +188,11 @@ import { createForegroundOrchestrationStrategies } from './domain/foreground-orc
 import { clearFailedTurnSurface, rollbackAvailability, reshadowRolledBackRounds, interruptedSurfaceTurns } from './domain/rollback-surface.js'
 import { assistantResultForTurn } from './domain/session-turn-result.js'
 import { createStorySubmissionTool, foldStorySubmission, STORY_SUBMIT_TOOL_NAME } from './domain/story-tool-submission.js'
-import { forkTurnsByMessageId as forkTargetsFromSession } from './domain/conversation-fork-targets.js'
+import { forkTurnsByMessageId as forkTargetsFromSession, floorsIndex as floorsIndexFromChat } from './domain/conversation-fork-targets.js'
+import { carriedFloors } from './domain/carried-floors.js'
+import { deletedReplyTurnKeys, deletedSurfaceSeqs } from './domain/deleted-surface-nodes.js'
+import { createHistoryDeletion } from './domain/history-deletion.js'
+import { createSwipeSelection } from './domain/swipe-selection.js'
 import { createTavernRetryLimiter } from './domain/tavern-retry-limiter.js'
 import { lastTavernHelperVariables, projectTavernHelperContext, hydrateTavernHelperMessages, replaceTavernHelperVariables, HELPER_MESSAGE_COLD_WINDOW } from './domain/tavern-helper-context.js'
 import { projectTavernHelperWorldbook } from './domain/tavern-helper-worldbook.js'
@@ -2071,6 +2075,13 @@ export async function apply(ctx) {
       debugTurns,
       latestAssistantMessageId,
       forkTurnsByMessageId,
+      // The complete projection and the incremental one must carry the same
+      // floor facts: the client only renders the edit / delete / version buttons
+      // on a view that has them, so a field missing here blanks the whole row.
+      // Player-input nodes carry a surface seq but no id, hence the second index.
+      ...floorsViewFields(chat, activity),
+      deletedSeqs: deletedSeqsForChat(chat),
+      deletedReplyTurns: deletedReplyTurnsForChat(chat),
       latestAssistantTurn: latestStoryTurn,
       inputSources,
       inputTemplateDisplays,
@@ -2220,13 +2231,52 @@ export async function apply(ctx) {
     const session = sessionStore.get(str(chat?.sessionId)) || agentRegistry.get(str(chat?.sessionId))?.session
     return forkTargetsFromSession(session, chat?.regeneratedDshTurns)
   }
-  function volatileSessionViewFields(chat, activity, changes) {
-    return { ...sessionStateView.volatile(chat, activity, changes), forkTurnsByMessageId: forkTurnsForChat(chat) }
+  // Per-floor operation facts for the rendered nodes, same live-event basis as
+  // the fork mapping; a floor outside the loaded window has no entry.
+  // Two indexes over one pass: replies are found by message id, player inputs
+  // by surface seq (their node data carries no id at all).
+  function floorsForChat(chat, activity) {
+    const empty = { byMessageId: {}, bySeq: {} }
+    const session = sessionStore.get(str(chat?.sessionId)) || agentRegistry.get(str(chat?.sessionId))?.session
+    if (!session) return empty
+    return floorsIndexFromChat(chat, session, { busy: Boolean(activity && activity.busy) }) || empty
+  }
+  function floorsViewFields(chat, activity) {
+    const floors = floorsForChat(chat, activity)
+    return { floorsByMessageId: floors.byMessageId, floorsBySeq: floors.bySeq }
+  }
+  // A deleted message must disappear from the page: the host only renders
+  // append-sourced nodes, and deletion writes a replacement copy, so the model
+  // context no longer has the message while the page still shows the original.
+  // Rebuilt from live session events on every projection. Keyed by seq rather
+  // than an array so a client can subscribe to one floor.
+  function deletedSeqsForChat(chat) {
+    const session = sessionStore.get(str(chat?.sessionId)) || agentRegistry.get(str(chat?.sessionId))?.session
+    if (!session) return {}
+    return Object.fromEntries(deletedSurfaceSeqs(session).map(seq => [String(seq), true]))
+  }
+  // The turn tail (copy / branch / duration / clock) is a separate host node, so
+  // hiding the body leaves it on screen. Name the rounds whose newest reply was
+  // deleted; both numbering schemes are included because the page's turn is the
+  // host chat's and the save's is the story's.
+  function deletedReplyTurnsForChat(chat) {
+    const session = sessionStore.get(str(chat?.sessionId)) || agentRegistry.get(str(chat?.sessionId))?.session
+    return session ? deletedReplyTurnKeys(session, chat?.regeneratedDshTurns) : []
+  }
+  // `carry` is for the cache-hit path only: its Chat is a trimmed projection in
+  // which messages carry no prose and no swipes, so recomputing would report one
+  // version per floor and the wrong token (see carried-floors.js). Incremental
+  // projections get complete rows and must recompute — freezing the floor table
+  // there pins index/turn/token to stale values and edits hit the wrong floor.
+  function volatileSessionViewFields(chat, activity, changes, { carry } = {}) {
+    const floors = carry ? carriedFloors(carry, { busy: Boolean(activity && activity.busy) }) : floorsViewFields(chat, activity)
+    return { ...sessionStateView.volatile(chat, activity, changes), forkTurnsByMessageId: forkTurnsForChat(chat),
+      deletedSeqs: deletedSeqsForChat(chat), deletedReplyTurns: deletedReplyTurnsForChat(chat), ...floors }
   }
 
   async function projectCachedSessionView(chat, previous, activity) {
     const mode = chat.mode || 'story'
-    const reused = Object.assign({}, previous, volatileSessionViewFields(chat, activity, {baseRevision:chat._storageRevision,indices:[],layoutChanged:false}))
+    const reused = Object.assign({}, previous, volatileSessionViewFields(chat, activity, {baseRevision:chat._storageRevision,indices:[],layoutChanged:false}, { carry: previous }))
     if (mode === 'script') reused.scriptProgress = await scriptProgressOf(chat)
     return reused
   }
@@ -4056,8 +4106,19 @@ export async function apply(ctx) {
     repairNative: (sessionId, session) => repairNativeStory(sessionId, session, '回退或重新生成时找不到原生位置'),
   })
 
+  // Floor operations (switch / edit / delete) name the floor they act on: a
+  // paged save only loads its newest rounds by default, so an unnamed older
+  // floor would read as a hole instead of the row the player clicked.
+  const floorChatForSession = async (sessionId, { index } = {}) => {
+    const need = { lastAssistant: true, lastVariables: true, ...(Number.isSafeInteger(index) ? { include: [index] } : {}) }
+    const selected = await boundedHistory.forSession(sessionId, need)
+    return selected ? normalizeChat(selected.chat) : chatForSession(sessionId)
+  }
+
   const bodyEditor = createBodyEditor({
-    chats: { forSession: hookChatForSession, update: updateChat, patch: patchChat },
+    // completeForSession: pairing player inputs against the floor table needs the
+    // indices of the complete history, which a sparse bounded window cannot give.
+    chats: { forSession: floorChatForSession, completeForSession: chatForSession, update: updateChat, patch: patchChat },
     sessions: { get: id => ctx.get('agents')?.get(id), flush: session => sessionStore.flush(session) },
     timeline: storyTimeline,
     activity: chat => backgroundTasks.activity(chat),
@@ -4069,6 +4130,44 @@ export async function apply(ctx) {
     present: presentStory,
     sessionPatch,
     repairNative: (sessionId, session) => repairNativeStory(sessionId, session, '编辑正文时找不到原生位置'),
+  })
+
+  // Switching one floor's reply version (swipe): the prose, its variables and its
+  // settlement travel together on the newest floor; older floors swap text only.
+  const swipeSelection = createSwipeSelection({
+    chats: { forSession: floorChatForSession, update: updateChat, patch: patchChat },
+    sessions: { get: id => ctx.get('agents')?.get(id), flush: session => sessionStore.flush(session) },
+    timeline: storyTimeline,
+    activity: chat => backgroundTasks.activity(chat),
+    project: async (text, chat) => {
+      const extensions = await readCardExtensions(chat.cardPath, chat)
+      return projectRuntimeReply(text, { charName: chat.cardName, macroState: chat.macroState,
+        regexScripts: composeTavernRegexScripts(extensions, chat.runtimePresetSnapshot?.regexScripts), placement: 2, isEdit: false, depth: 0 })
+    },
+    present: presentStory,
+    sessionPatch,
+    queueSettlement,
+    scripts: { dispatchEvent: event => tavernScriptHostAdapter.dispatchEvent(event) },
+    initializeOpeningVariables: async (chat, swipeId) => liveCardUpdate.openingVariables(chat, await readChatCard(chat), swipeId),
+  })
+
+  // Delete one floor's version, or one message; a single undo point is kept.
+  const historyDeletion = createHistoryDeletion({
+    // completeForSession: player inputs are paired through the floor table, which
+    // counts positions in the complete history.
+    chats: { forSession: floorChatForSession, completeForSession: chatForSession, update: updateChat, patch: patchChat },
+    sessions: { get: id => ctx.get('agents')?.get(id), flush: session => sessionStore.flush(session) },
+    timeline: storyTimeline,
+    activity: chat => backgroundTasks.activity(chat),
+    project: async (text, chat) => {
+      const extensions = await readCardExtensions(chat.cardPath, chat)
+      return projectRuntimeReply(text, { charName: chat.cardName, macroState: chat.macroState,
+        regexScripts: composeTavernRegexScripts(extensions, chat.runtimePresetSnapshot?.regexScripts), placement: 2, isEdit: false, depth: 0 })
+    },
+    present: presentStory,
+    sessionPatch,
+    queueSettlement,
+    scripts: { dispatchEvent: event => tavernScriptHostAdapter.dispatchEvent(event) },
   })
 
   // ---------- HTTP RPC（客户端同源 fetch） ----------
@@ -4745,13 +4844,40 @@ export async function apply(ctx) {
       case 'loadGuideLibrary': return { guides: await conversationGuides.load(args?.sessionId, args?.id) }
       case 'addGuide': return { guides: await conversationGuides.add(args?.sessionId, args?.text) }
       case 'deleteGuide': return { guides: await conversationGuides.remove(args?.sessionId, args) }
-      case 'getBodyEdit': return { edit: await bodyEditor.read(args && args.sessionId) }
+      case 'getBodyEdit': return { edit: await bodyEditor.read(args && args.sessionId, args) }
       case 'listGamePlugins': return { plugins: await pluginApi.gamePlugins(str(args && args.sessionId)) }
       case 'setGamePlugin': return { plugins: await pluginApi.setGamePlugin(str(args && args.sessionId), { name: args && args.name, enabled: args && args.enabled, replace: args && args.replace, task: args && args.task, taskOrder: args && args.taskOrder }) }
       case 'startPluginTask': return await startPluginTask(args && args.sessionId, args && args.key, args && args.input)
       case 'saveBodyEdit': {
         await reconcileStory(args && args.sessionId)
         const view = await bodyEditor.save(args && args.sessionId, args)
+        notifyPluginTimeline(args && args.sessionId, 'edit', { settled: true })
+        return { view }
+      }
+      // Switch one floor to another version of its reply.
+      case 'selectSwipe': {
+        await reconcileStory(args && args.sessionId)
+        const view = await swipeSelection.select(args && args.sessionId, args)
+        notifyPluginTimeline(args && args.sessionId, 'swipe', { turn: args && args.turn })
+        return { view }
+      }
+      // Drop one version, keeping the others.
+      case 'deleteFloorVersion': {
+        await reconcileStory(args && args.sessionId)
+        const view = await historyDeletion.deleteVersion(args && args.sessionId, args)
+        notifyPluginTimeline(args && args.sessionId, 'delete', { turn: args && args.turn })
+        return { view }
+      }
+      // Drop exactly one message: the reply, the player input or the greeting.
+      case 'deleteFloorMessage': {
+        await reconcileStory(args && args.sessionId)
+        const view = await historyDeletion.deleteMessage(args && args.sessionId, args)
+        notifyPluginTimeline(args && args.sessionId, 'delete', { turn: args && args.turn })
+        return { view }
+      }
+      // Put the last deleted message or version back.
+      case 'undoFloorDeletion': {
+        const view = await historyDeletion.undo(args && args.sessionId)
         notifyPluginTimeline(args && args.sessionId, 'edit', { settled: true })
         return { view }
       }

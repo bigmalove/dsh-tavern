@@ -497,6 +497,50 @@ export function createStoryTimeline(options = {}) {
     }
   }
 
+  /**
+   * Send the resident background Agents back to the last checkpoint so their next
+   * round is built from the history the save now holds. Shared by every intent
+   * that removes or rewrites committed prose.
+   */
+  function rewindParticipants(chat) {
+    const checkpoint = chat.timeline.checkpoints.at(-1)
+    for (const [role, participant] of Object.entries(chat.timeline.participants)) {
+      if (!persistentParticipant(participant.lifetime)) continue
+      const previous = object(checkpoint?.participants?.[role])
+      const source = participantCheckpointSource(previous)
+      const needsSession = !str(participant.sessionId)
+      const boundary = participant.requiresNewSessionOnRewind !== true && source?.sessionId === participant.sessionId ? source.boundary : -1
+      chat.timeline.participants[role] = {
+        ...participant, status: needsSession ? 'needs-session' : 'needs-rewind',
+        sessionId: needsSession ? '' : participant.sessionId,
+        boundary: needsSession ? null : boundary, rewindTo: needsSession ? null : boundary,
+        syncedRevision: null, updatedAt: now()
+      }
+    }
+  }
+
+  /**
+   * Send the resident background Agents back to the last checkpoint so their next
+   * round is built from the history the save now holds. Shared by every intent
+   * that removes or rewrites committed prose.
+   */
+  function rewindParticipants(chat) {
+    const checkpoint = chat.timeline.checkpoints.at(-1)
+    for (const [role, participant] of Object.entries(chat.timeline.participants)) {
+      if (!persistentParticipant(participant.lifetime)) continue
+      const previous = object(checkpoint?.participants?.[role])
+      const source = participantCheckpointSource(previous)
+      const needsSession = !str(participant.sessionId)
+      const boundary = participant.requiresNewSessionOnRewind !== true && source?.sessionId === participant.sessionId ? source.boundary : -1
+      chat.timeline.participants[role] = {
+        ...participant, status: needsSession ? 'needs-session' : 'needs-rewind',
+        sessionId: needsSession ? '' : participant.sessionId,
+        boundary: needsSession ? null : boundary, rewindTo: needsSession ? null : boundary,
+        syncedRevision: null, updatedAt: now()
+      }
+    }
+  }
+
   function apply(input) {
     let chat = ensure(input && input.chat)
     const intent = object(input && input.intent)
@@ -543,9 +587,164 @@ export function createStoryTimeline(options = {}) {
         }
       }
       chat.candidateAgent = null
+      // Editing any floor invalidates the pending single-message deletion undo:
+      // the row it would restore no longer matches the save.
+      delete chat.deletionUndo
       value = { status: 'edited', revision: chat.timeline.revision }
     }
-    else if (intent.kind === 'body.begin') value = beginBody(chat, intent)
+    else if (intent.kind === 'body.floor') {
+      // An older floor (or the greeting, or a player input) changed text only.
+      // The scene's variables and settlement belong to the latest round and are
+      // left alone; only what already read that text has to catch up.
+      const index = Number(intent.index)
+      const message = chat.messages[index]
+      const role = intent.role === 'user' ? 'user' : 'assistant'
+      if (!Number.isSafeInteger(index) || index < 0 || !message || message.role !== role) throw new Error('正文楼层不存在或已变化')
+      // A player input belongs to the round of the reply that follows it. That
+      // reply may be gone (it was deleted on its own), so the caller's turn is
+      // the fallback rather than refusing the edit outright.
+      const turn = role === 'user'
+        ? Number(chat.messages[index + 1]?.turn) || Number(intent.turn) || 0
+        : Number(message.turn) || (message.greeting === true ? 1 : 0)
+      if (!Number.isSafeInteger(turn) || turn < 1 || turn !== Number(intent.turn)) throw new Error('正文楼层不存在或已变化')
+      Object.assign(message, intent.patch)
+      delete message.displayRuntime
+      chat.timeline.revision++
+      chat.timeline.updatedAt = now()
+      rewindParticipants(chat)
+      chat.candidateAgent = null
+      chat.candidates = null
+      delete chat.deletionUndo
+      value = { status: 'edited', revision: chat.timeline.revision }
+    }
+    else if (intent.kind === 'body.swipe') {
+      // Switching one floor's version: the floor keeps its turn and only its
+      // projection changes. The latest floor carries the story's variables and
+      // settlement with it; older floors only swap their own text.
+      const index = Number(intent.index)
+      const message = chat.messages[index]
+      if (!message || message.role !== 'assistant' || Number(message.turn || (message.greeting === true ? 1 : 0)) !== Number(intent.turn)) throw new Error('正文楼层不存在或已变化')
+      // The patch may rewrite the version arrays itself (delete/restore); the
+      // target version must be valid for the resulting message, not the old one.
+      const count = Math.max(Array.isArray(intent.patch?.swipes) ? intent.patch.swipes.length
+        : Array.isArray(message.swipes) ? message.swipes.length : 0, 1)
+      const swipeId = Number(intent.swipeId)
+      if (!Number.isSafeInteger(swipeId) || swipeId < 0 || swipeId >= count) throw new Error('正文版本不存在')
+      Object.assign(message, intent.patch)
+      delete message.displayRuntime
+      chat.timeline.revision++
+      if (intent.latest === true) {
+        // Editing keeps the same committed round, but its next settlement must
+        // bind to the switched revision. Old in-flight work still fails basedOn.
+        const switchedRound = backgroundBody(chat)
+        if (switchedRound && Number(switchedRound.turn) === Number(intent.turn)) {
+          switchedRound.committedRevision = chat.timeline.revision
+        }
+        // The selected version's own settlement wins: restore a finished one,
+        // clear and let the caller re-settle a version that never finished.
+        const restored = object(intent.restoreState)
+        if (restored !== null && str(restored.settleStatus) === 'done') {
+          chat.posture = str(restored.posture)
+          chat.ledger = clone(restored.ledger || null)
+          chat.lastSettle = clone(restored.lastSettle || null)
+          chat.settleStatus = 'done'
+        } else {
+          chat.posture = ''
+          chat.ledger = null
+          chat.lastSettle = null
+          chat.settleStatus = 'idle'
+        }
+        chat.settleError = null
+        chat.candidates = null
+        rewindParticipants(chat)
+        chat.candidateAgent = null
+      }
+      if (message.greeting === true) chat.openingText = message.text
+      if (Object.hasOwn(intent, 'deletionUndo')) {
+        if (intent.deletionUndo === null) delete chat.deletionUndo
+        else chat.deletionUndo = clone(intent.deletionUndo)
+      } else delete chat.deletionUndo
+      chat.timeline.updatedAt = now()
+      value = { status: 'swiped', revision: chat.timeline.revision }
+    }
+    else if (intent.kind === 'message.delete') {
+      // Deleting removes exactly one message: the reply, the player input or the
+      // greeting it names. Neighbouring floors stay where they are.
+      const index = Number(intent.index)
+      const message = chat.messages[index]
+      const role = intent.role === 'user' ? 'user' : 'assistant'
+      if (!Number.isSafeInteger(index) || index < 0 || !message || message.role !== role) throw new Error('要删除的消息不存在')
+      const turn = role === 'user'
+        ? Number(chat.messages[index + 1]?.turn) || Number(intent.turn) || 0
+        : Number(message.turn) || (message.greeting === true ? 1 : 0)
+      if (!Number.isSafeInteger(turn) || turn < 1 || turn !== Number(intent.turn)) throw new Error('要删除的消息不存在或已变化')
+      const lastAssistant = chat.messages.findLastIndex(item => item?.role === 'assistant')
+      const removed = chat.messages.splice(index, 1)
+      chat.timeline.revision++
+      chat.timeline.updatedAt = now()
+      // The greeting doubles as the header's opening text; keep them in step.
+      if (role === 'assistant' && message.greeting === true) chat.openingText = ''
+      // Only the newest reply carries the scene state. Removing it hands that
+      // state back to the previous reply's own snapshot; removing anything else
+      // leaves the current scene untouched.
+      if (role === 'assistant' && index === lastAssistant) {
+        const previousIndex = chat.messages.findLastIndex(item => item?.role === 'assistant')
+        const previous = previousIndex < 0 ? null : chat.messages[previousIndex]
+        const swipeId = previous === null ? 0 : Math.max(0, Number(previous.swipeId) || 0)
+        const restored = previous === null || !Array.isArray(previous.swipeStates) ? null : object(previous.swipeStates[swipeId])
+        if (restored !== null && str(restored.settleStatus) === 'done') {
+          chat.posture = str(restored.posture)
+          chat.ledger = clone(restored.ledger || null)
+          chat.lastSettle = clone(restored.lastSettle || null)
+          chat.settleStatus = 'done'
+        } else {
+          chat.posture = ''
+          chat.ledger = null
+          chat.lastSettle = null
+          chat.settleStatus = 'idle'
+        }
+        const variables = previous === null || !Array.isArray(previous.variables) ? undefined : previous.variables[swipeId]
+        if (variables !== undefined) chat.variables = clone(variables)
+        chat.settleError = null
+      }
+      // Whatever was removed, the native context shrank: offer no stale
+      // candidates and let the resident background Agents rewind to it.
+      chat.candidates = null
+      rewindParticipants(chat)
+      chat.candidateAgent = null
+      if (intent.deletionUndo === null) delete chat.deletionUndo
+      else if (intent.deletionUndo !== undefined) chat.deletionUndo = clone(intent.deletionUndo)
+      value = { status: 'deleted', revision: chat.timeline.revision, removed }
+    }
+    else if (intent.kind === 'message.restore') {
+      // Undo of a single-message deletion: the row returns at its old position
+      // and the header goes back to the state it had before the deletion.
+      const index = Number(intent.index)
+      const message = object(intent.message)
+      if (!Number.isSafeInteger(index) || index < 0 || Object.keys(message).length === 0
+        || index > chat.messages.length) throw new Error('没有可恢复的消息')
+      chat.messages.splice(index, 0, clone(message))
+      if (message.greeting === true) chat.openingText = str(message.text)
+      const state = object(intent.state)
+      chat.posture = str(state.posture)
+      chat.ledger = clone(state.ledger === undefined ? null : state.ledger)
+      chat.lastSettle = clone(state.lastSettle === undefined ? null : state.lastSettle)
+      chat.settleStatus = str(state.settleStatus) || 'idle'
+      if (state.hasVariables === true) chat.variables = clone(state.variables)
+      else if (state.hasVariables === false) delete chat.variables
+      chat.settleError = null
+      chat.candidates = null
+      chat.timeline.revision++
+      rewindParticipants(chat)
+      chat.candidateAgent = null
+      delete chat.deletionUndo
+      value = { status: 'restored', revision: chat.timeline.revision }
+    }
+    else if (intent.kind === 'body.begin') {
+      // A new round makes any pending deletion undo point ambiguous.
+      delete chat.deletionUndo
+      value = beginBody(chat, intent)
+    }
     else if (intent.kind === 'agent.begin') value = beginAgent(chat, intent)
     else if (intent.kind === 'agent.bind') {
       const operation = chat.timeline.operations[intent.operationId]

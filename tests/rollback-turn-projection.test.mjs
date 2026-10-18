@@ -27,8 +27,12 @@ function row(kind, turn, alpha) {
 function harness(rows) {
   rows.forEach((row, index) => { row.previousElementSibling = rows[index - 1] ?? null })
   const document = { querySelectorAll(selector) {
-    assert.ok(['[data-chat-flow-kind="turn-tail"]', '[data-chat-flow-kind="context"]', '[data-chat-turn]'].includes(selector))
+    // The projection also asks for both tail spellings at once: older host rows
+    // only carry data-turn-tail. Answer it with the same tail rows.
+    const tails = '[data-chat-flow-kind="turn-tail"], [data-turn-tail]'
+    assert.ok(['[data-chat-flow-kind="turn-tail"]', '[data-chat-flow-kind="context"]', '[data-chat-turn]', tails].includes(selector))
     if (selector === '[data-chat-turn]') return rows.filter(row => row.getAttribute('data-chat-turn'))
+    if (selector === tails) return rows.filter(row => row.getAttribute('data-chat-flow-kind') === 'turn-tail')
     return rows.filter(row => selector === '[data-chat-flow-kind="' + row.getAttribute('data-chat-flow-kind') + '"]')
   } }
   const projection = client.createTurnHistoryProjection({ root: () => document, storage: () => ({ getItem: () => '{}' }) })
