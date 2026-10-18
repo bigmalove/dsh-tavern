@@ -5203,8 +5203,12 @@ export async function apply(ctx) {
   }
 
   function replaceAssistantReply(session, result, bodyText) {
-    if (result !== null && result.storyToolSubmission) return foldStorySubmission(session, result, bodyText)
-    if (result === null || result.text === bodyText) return
+    if (result !== null && result.storyToolSubmission && foldStorySubmission(session, result, bodyText)) return
+    // A submission that could not be folded keeps its call message as the target,
+    // so the body still replaces something the player can see. Returning early
+    // here left the round without any text and the view waiting forever.
+    if (result === null) return
+    if (!result.storyToolSubmission && result.text === bodyText) return
     const previous = result.event && result.event.data && result.event.data.message
     if (previous === null || typeof previous !== 'object') return
     replaceSessionSurface(session, 'assistant/message', {

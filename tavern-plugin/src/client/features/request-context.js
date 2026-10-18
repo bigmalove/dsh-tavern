@@ -19,7 +19,16 @@
             function addField(key) {
                 if (!Object.hasOwn(request, key)) return;
                 const labels = { system: "系统提示词", tools: "工具定义", messages: "消息" };
-                sections.push({ title: key + " · " + labels[key], value: request[key] });
+                // The tool list is the first thing to check when a turn ignores an
+                // instruction to call one: name them in the summary instead of making
+                // the reader scan the schema dump for a name.
+                const names = key === "tools" && Array.isArray(request.tools)
+                    ? request.tools.map(item => item && (item.name || item.function?.name)).filter(name => typeof name === "string" && name !== "")
+                    : null;
+                const title = names
+                    ? "tools · 工具定义（" + names.length + " 个：" + names.join("、") + "）"
+                    : key + " · " + labels[key];
+                sections.push({ title, value: request[key], toolNames: names });
             }
             function addMessage(message, index) {
                 const labels = { "tavern:runtime-preset-front": "前段预设", "tavern:runtime-preset-middle": "中段预设", "tavern:runtime-preset-back": "末尾预设投影" };
@@ -29,7 +38,11 @@
                     const plain = typeof block === "string" ? block : block?.type === "text" && Object.keys(block).every(key => key === "type" || key === "text") ? block.text : undefined;
                     if (typeof plain !== "string") {
                         const text = JSON.stringify(block, null, 2);
-                        if (text !== undefined) displayParts.push({ text });
+                        // Name the block so a call is visible without reading its JSON.
+                        const label = block?.type === "tool-call" ? "工具调用 · " + String(block.name || "")
+                            : block?.type === "tool-result" ? "工具回执 · " + String(block.toolCallId || "")
+                            : undefined;
+                        if (text !== undefined) displayParts.push({ text, label });
                         continue;
                     }
                     // Older host snapshots merge the catalog into user text and retain only
@@ -141,6 +154,8 @@
                     h("button", { disabled: loading, onClick: () => setRefresh(value => value + 1) }, loading ? "读取中…" : "刷新")),
                 record ? h("div", { className: "dsh-context-meta" },
                     h("span", { className: "dsh-context-badge" }, "第 " + record.turn + " 轮 · 步骤 " + record.step),
+                    request && Array.isArray(request.tools) ? h("span", { className: "dsh-context-badge" },
+                        "工具 " + request.tools.length + " 个" + (request.tools.some(item => (item && (item.name || item.function?.name)) === "submit_story") ? " · 含 submit_story" : " · 无 submit_story")) : null,
                     h("span", null, request.model || ""),
                     h("time", null, new Date(record.createdAt).toLocaleString())) : null,
                 h("div", { className: "dsh-context-toolbar" },
