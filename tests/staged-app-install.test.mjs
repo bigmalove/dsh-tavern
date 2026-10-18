@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -80,6 +80,37 @@ test('提交删除旧目录后、清除记录前中断：回滚识别为已提�
   assert.equal(read(app, 'bin/dsh-tavern.mjs'), 'v2:bin/dsh-tavern.mjs')
   assert.equal(read(app, 'data/chats/one.json'), '{"chat":1}')
   assert.equal(existsSync(path.join(app, '.dsh-tavern-swap.json')), false)
+})
+
+test('应用目录是符号链接时拒绝切换：不落 staging，软链保持原样', t => {
+  const base = mkdtempSync(path.join(tmpdir(), 'tavern-staged-link-'))
+  t.after(() => rmSync(base, { recursive: true, force: true }))
+  const checkout = path.join(base, 'checkout')
+  write(checkout, 'package.json', '{"name":"v1"}')
+  const app = path.join(base, 'apps', 'dsh-tavern')
+  mkdirSync(path.dirname(app), { recursive: true })
+  symlinkSync(checkout, app)
+  const source = path.join(base, 'source')
+  release(source, 'v2', ['package.json'])
+  assert.throws(() => prepare({ app, source }), error => /符号链接/.test(error.message) && error.message.includes(checkout))
+  const paths = stagedPaths(app)
+  assert.deepEqual(readdirSync(path.dirname(app)).sort(), ['dsh-tavern'], '不留下 staging 目录')
+  assert.equal(lstatSync(app).isSymbolicLink(), true)
+  assert.equal(read(checkout, 'package.json'), '{"name":"v1"}')
+  assert.equal(existsSync(paths.previous), false)
+})
+
+test('应用目录里的回收站目录不随切换搬运', t => {
+  const { app, source } = fixture(t)
+  installV1(app, source)
+  write(app, '.Trash-0/files/deleted.txt', '已删除')
+  write(app, '.Trash-1000/files/deleted.txt', '已删除')
+  release(source('v2'), 'v2', ['package.json', 'bin/dsh-tavern.mjs'])
+  prepare({ app, source: source('v2') })
+  swap(app)
+  assert.deepEqual(tree(app).filter(file => file.startsWith('.Trash')), [])
+  assert.equal(read(app, 'data/chats/one.json'), '{"chat":1}')
+  commit(app)
 })
 
 for (const boundary of ['old-app', 'new-app', 'user-data', 'nested-user-file']) {

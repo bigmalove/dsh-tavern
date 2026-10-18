@@ -210,6 +210,24 @@ for (const mode of ['relative-loose', 'absolute-packed', 'detached']) test('Git 
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
+test('源码工作区以 Git HEAD 为准：陈旧的安装记录不制造无法执行的更新', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'dsh-tavern-updater-checkout-'))
+  try {
+    const source = path.join(root, 'checkout')
+    const head = 'e'.repeat(40)
+    await mkdir(path.join(source, '.git'), { recursive: true })
+    await writeFile(path.join(source, '.git', 'HEAD'), head + '\n')
+    await writeFile(path.join(source, 'package.json'), JSON.stringify({ version: '2.0.0' }))
+    // Left behind by an install that ran before the tree became a live checkout.
+    await writeFile(path.join(source, '.dsh-tavern-release.json'), JSON.stringify({ commit: 'a'.repeat(40) }))
+    const updater = createApplicationUpdater({ dataRoot: path.join(root, 'data'), sourceRoot: source, runtimeHost: 'cli',
+      fetchManifest: async () => ({ version: '2.0.0' }), fetchLatestCommit: async () => head })
+    const result = await updater.check()
+    assert.equal(result.currentCommit, head)
+    assert.equal(result.phase, 'up-to-date')
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
 test('jsDelivr 兜底：本地清单未核验时用提交比较，比较不可达时以本地清单序号为下界 (#125)', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'dsh-tavern-updater-floor-'))
   try {

@@ -151,16 +151,7 @@ function processIsAlive(pid) {
   }
 }
 
-async function readRecordedCommit(sourceRoot, dshHome) {
-  const runtimeMetadata = await readVerifiedRuntimeMetadata(sourceRoot)
-  if (runtimeMetadata) return runtimeMetadata.revision
-  try {
-    const content = await readFile(path.join(sourceRoot, RELEASE_FILE), 'utf8')
-    const commit = String(JSON.parse(content.replace(/^\uFEFF/, ''))?.commit || '')
-    if (/^[0-9a-f]{40}$/i.test(commit)) return commit
-  } catch (error) {
-    if (error?.code !== 'ENOENT') throw error
-  }
+async function readCheckoutCommit(sourceRoot) {
   try {
     let gitRoot = path.join(sourceRoot, '.git')
     if ((await stat(gitRoot)).isFile()) {
@@ -185,6 +176,25 @@ async function readRecordedCommit(sourceRoot, dshHome) {
       const commit = packed.match(new RegExp(`^([0-9a-f]{40}) ${escaped}$`, 'mi'))?.[1] || ''
       if (commit) return commit
     }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error
+  }
+  return ''
+}
+
+async function readRecordedCommit(sourceRoot, dshHome) {
+  // Installed releases never ship .git, so a checkout here is a source tree kept
+  // live in place. Git is then the only truthful identity: a release record left
+  // by an earlier install points at an older commit and would make every check
+  // report an update that this layout cannot apply.
+  const checkout = await readCheckoutCommit(sourceRoot)
+  if (checkout) return checkout
+  const runtimeMetadata = await readVerifiedRuntimeMetadata(sourceRoot)
+  if (runtimeMetadata) return runtimeMetadata.revision
+  try {
+    const content = await readFile(path.join(sourceRoot, RELEASE_FILE), 'utf8')
+    const commit = String(JSON.parse(content.replace(/^\uFEFF/, ''))?.commit || '')
+    if (/^[0-9a-f]{40}$/i.test(commit)) return commit
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error
   }

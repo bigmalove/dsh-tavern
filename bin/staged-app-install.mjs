@@ -13,7 +13,7 @@
 // User files are everything in the app directory that the previous release did
 // not install (recorded in INVENTORY) and the new release does not ship, e.g.
 // legacy data/. They are moved, never copied, so large data costs nothing.
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync, realpathSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, writeFileSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { INVENTORY, sourceFiles } from './prune-installed-files.mjs'
@@ -22,10 +22,26 @@ import { copyTreeSync, removeTreeSync } from './portable-fs.mjs'
 const SWAP_RECORD = '.dsh-tavern-swap.json'
 const RELEASE_RECORD = '.dsh-tavern-release.json'
 const NEVER_CARRIED = new Set([INVENTORY, RELEASE_RECORD, SWAP_RECORD])
+// A file manager trashing something inside the app directory leaves the mount's
+// own trash behind (.Trash-<uid>). It is deleted data, not something to migrate.
+const TRASH_DIRECTORY = /^\.Trash(-\d+)?$/
 
 export function stagedPaths(app) {
   const resolved = path.resolve(app)
   return { app: resolved, staging: resolved + '.staging', previous: resolved + '.previous' }
+}
+
+// A switch renames app -> app.previous and carries user files into the new
+// directory, so both paths must sit on one device. When the app path is a
+// symlink to a checkout on another filesystem (a source tree kept live inside
+// apps/), the first carried file fails with EXDEV — and a switch that did
+// succeed would replace the link with a copy and detach it from the checkout.
+// Refuse up front, before the service is stopped, and name what to update.
+function assertSwitchable(app) {
+  let stats
+  try { stats = lstatSync(app) } catch (error) { if (error.code === 'ENOENT') return; throw error }
+  if (!stats.isSymbolicLink()) return
+  throw new Error(`应用目录是符号链接（${app} → ${readlinkSync(app)}），只能在源码目录更新：先在该目录 git pull，再重启服务；或把应用安装为普通目录。`)
 }
 
 // Windows may briefly hold handles (antivirus, indexer) right after the service exits.
@@ -57,6 +73,7 @@ export function recover(app) {
 
 export function prepare({ app, source, commit = '' }) {
   const paths = stagedPaths(app)
+  assertSwitchable(paths.app)
   recover(paths.app)
   copyTreeSync(path.resolve(source), paths.staging)
   removeTreeSync(path.join(paths.staging, RELEASE_RECORD))
@@ -79,7 +96,8 @@ export function carriedEntries(app, staging) {
     for (const entry of readdirSync(path.join(app, ...relative.split('/').filter(Boolean)), { withFileTypes: true })) {
       const next = relative ? relative + '/' + entry.name : entry.name
       // Dependencies belong to the release that installed them; the new one has its own.
-      if (entry.name === 'node_modules' || entry.name === '.git' || (!relative && NEVER_CARRIED.has(entry.name))) continue
+      if (entry.name === 'node_modules' || entry.name === '.git') continue
+      if (!relative && (NEVER_CARRIED.has(entry.name) || TRASH_DIRECTORY.test(entry.name))) continue
       const inNew = existsSync(path.join(staging, ...next.split('/')))
       if (entry.isDirectory()) {
         if (!inNew && !installedDirectories.has(next)) carried.push(next)
@@ -93,6 +111,7 @@ export function carriedEntries(app, staging) {
 
 export function swap(app) {
   const paths = stagedPaths(app)
+  assertSwitchable(paths.app)
   if (!existsSync(paths.staging)) throw new Error('缺少已准备的新版本：' + paths.staging)
   if (!existsSync(paths.app)) {
     writeFileSync(path.join(paths.staging, SWAP_RECORD), JSON.stringify({ fresh: true, moved: [] }) + '\n')

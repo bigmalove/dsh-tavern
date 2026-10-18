@@ -996,6 +996,11 @@ if [ "${INSTALL_HOST}" != "cli" ]; then
 fi
 
 STAGER=${SOURCE_DIR}/bin/staged-app-install.mjs
+# 切换版本靠 rename + 搬运用户文件，要求应用目录与它的兄弟目录在同一设备上；指向源码
+# 软链的应用目录会在搬运第一个文件时就 EXDEV，切换成功后还会把软链换成副本。提前说清楚。
+if [ "${INSTALL_HOST}" = "cli" ] && [ -L "${APP_DIR}" ]; then
+  fail "应用目录是符号链接：${APP_DIR} -> $(readlink "${APP_DIR}")。请在该源码目录 git pull 后重启服务，或把应用安装为普通目录。"
+fi
 if [ "${INSTALL_HOST}" = "cli" ] && [ -f "${STAGER}" ]; then
   # Prepare beside the running app; only the final switch stops the service, and a
   # failure after it restores the previous directory (see bin/staged-app-install.mjs).
