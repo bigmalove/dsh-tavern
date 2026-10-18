@@ -281,14 +281,51 @@
 		// 已删除的正文行留下一个不可见标记（assistant-renderer 里写的）。尾行紧跟在它
 		// 后面，按 DOM 邻接就能认出「这一回合的正文已经删了」——不依赖回合编号，
 		// 页面编号与存档编号不同也照样成立。
+		// 正文行的 flow kind 随宿主版本变：0.1.x 是 `assistant`，0.2.1 改成
+		// `assistant-step`。这里按前缀认，别把新宿主当成「前面不是正文」。
+		function isAssistantFlowKind(kind) {
+			return typeof kind === "string" && (kind === "assistant" || kind === "assistant-step" || kind === "assistant-message");
+		}
 		function previousReplyRowIsDeleted(tail) {
 			for (let sibling = tail.previousElementSibling; sibling; sibling = sibling.previousElementSibling) {
 				const kind = sibling.getAttribute ? sibling.getAttribute("data-chat-flow-kind") : "";
 				if (kind === "user" || kind === "turn-tail") return false;
-				if (kind !== "assistant") continue;
+				if (!isAssistantFlowKind(kind)) continue;
 				return Boolean(sibling.querySelector && sibling.querySelector('[data-tavern-deleted-floor]'));
 			}
 			return false;
+		}
+		// 0.2.1 给 surface 编辑（删除标记、撤销删除）另开一个 turn，宿主于是为它画出
+		// turn-process 和一行空 turn-tail：正文一条没有，页面上却多一排「已完成」。
+		// 判据是「这一回合在页面上没有任何正文行」，不依赖回合编号。
+		function applyEmptyTurnRows() {
+			const scope = root();
+			const steps = scope.querySelectorAll('[data-chat-flow-kind]');
+			const turnsWithBody = new Set();
+			for (let i = 0; i < steps.length; i++) {
+				const node = steps[i];
+				if (!isAssistantFlowKind(node.getAttribute && node.getAttribute("data-chat-flow-kind"))) continue;
+				const turn = String(node.getAttribute("data-chat-turn") || "");
+				if (turn !== "") turnsWithBody.add(turn);
+			}
+			const rows = scope.querySelectorAll('[data-chat-flow-kind="turn-tail"], [data-turn-tail]');
+			for (let i = 0; i < rows.length; i++) {
+				const node = rows[i];
+				const turn = tailTurnOf(node);
+				// 编号缺失、或者这一回合有正文：都不动。尾行只有回合结束后才画，所以
+				// 「尾行已存在但没有正文」就足以说明这是编辑留下的空回合。
+				if (turn === "" || turnsWithBody.has(turn)) continue;
+				hideRow(node);
+				// 同回合的过程行也一起收掉，否则只留下一条「已完成」。
+				const sameTurn = scope.querySelectorAll('[data-chat-flow-kind]');
+				for (let j = 0; j < sameTurn.length; j++) {
+					const row = sameTurn[j];
+					if (String(row.getAttribute && row.getAttribute("data-chat-turn") || "") !== turn) continue;
+					if (row.getAttribute && row.getAttribute("data-chat-flow-kind") === "turn-tail") continue;
+					if (isAssistantFlowKind(row.getAttribute && row.getAttribute("data-chat-flow-kind"))) continue;
+					hideRow(row);
+				}
+			}
 		}
 		function applyDeletedReplyTurns(turns) {
 			const set = new Set((Array.isArray(turns) ? turns : []).map(String));
@@ -299,6 +336,7 @@
 				if (set.size && tailTurnKeys(node).some(key => set.has(key))) { hideRow(node); continue; }
 				if (previousReplyRowIsDeleted(node)) hideRow(node);
 			}
+			applyEmptyTurnRows();
 		}
 		// 一次性的现场取证：把页面上真实的行属性发回服务端日志。残留问题只能靠这个
 		// 定位——编号到底是 native 还是 story、尾行带的是哪一个属性，猜不出来。
