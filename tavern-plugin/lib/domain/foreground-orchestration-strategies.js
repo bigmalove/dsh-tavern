@@ -460,6 +460,18 @@ export function createNativePlayOrchestrationStrategy(options) {
     // DSH may expose both editor generations; the legacy schema alone costs
     // ~800 tokens on every card-Agent step and duplicates read/edit/write.
     if (assembly.tools.some(schema => schema.name === 'edit')) assembly.tools = assembly.tools.filter(schema => schema.name !== 'str_replace_editor')
+    // 装配诊断：一张「开关开着但工具没进请求」的现场。只要这行里 storyToolCall
+    // 为 true 而 tools 缺 submit_story，就是下发环节的问题；两者都在而正文仍逐字
+    // 流出，则是模型没照做。前端标签页「完整上下文」能看到同一份 tools。
+    if (group === 'play') {
+      console.error('dsh-tavern: 工具装配 ' + JSON.stringify({
+        sessionId: str(input.sessionId), mode, chatFound: input.chat !== undefined,
+        storyToolCall: visible.has(STORY_SUBMIT_TOOL_NAME),
+        contract: sections.some(section => section.name === 'tavern:story-tool-submission'),
+        visible: [...visible],
+        tools: assembly.tools.map(schema => schema.name)
+      }))
+    }
     return assembly
   }
 
