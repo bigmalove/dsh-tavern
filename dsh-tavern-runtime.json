@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "revision": "7a8d7f5f4a91e49ebc458bed7f25c2c828b15504",
-  "releaseSequence": 665,
+  "revision": "8fc52b155f93d3ea01959664bda7e5b2aba1974a",
+  "releaseSequence": 666,
   "version": "2.7.0",
   "files": [
     {
@@ -901,8 +901,8 @@
     },
     {
       "path": "tavern-plugin/lib/domain/floor-location.js",
-      "sha256": "89a8266962b441a7aff70f22340821e607cbe102bfa2af56e4da392a01998314",
-      "size": 3678
+      "sha256": "c05d5c6560156b777402339f83d8b1e2b8d362b1bdc614c7a34b24642294c4ac",
+      "size": 5298
     },
     {
       "path": "tavern-plugin/lib/domain/foreground-compaction.js",
@@ -1031,8 +1031,8 @@
     },
     {
       "path": "tavern-plugin/lib/domain/history-deletion.js",
-      "sha256": "6d0e847ff433959a297951d25740c33dbe151ea1be75535dcad31bf652610489",
-      "size": 14174
+      "sha256": "997e62339b2ba5b28e748a31867c14f5fd2863ecf79bec70adac21748755bffd",
+      "size": 15736
     },
     {
       "path": "tavern-plugin/lib/domain/history-mutation-guards.js",
@@ -2201,8 +2201,8 @@
     },
     {
       "path": "tavern-plugin/lib/index.js",
-      "sha256": "a011e0b5b85e8b5233dae72f01937ff993f72471ad03f1784ad8598d497b8fb4",
-      "size": 352797
+      "sha256": "6f88461364c1e4ee7e436b40874511c020eb3a896bcb8332e6f22fd5d1629dbf",
+      "size": 352937
     },
     {
       "path": "tavern-plugin/lib/plugin-api.js",
