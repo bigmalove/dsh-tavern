@@ -17,13 +17,35 @@ const RELEASE_FILE = '.dsh-tavern-release.json'
 const RUNNING_TIMEOUT_MS = 15 * 60 * 1000
 // Matches the installation lock's stale-idle limit.
 const ORPHAN_RECORD_MS = 60 * 60 * 1000
-const VERSION_URL = 'https://raw.githubusercontent.com/flizzywine/dsh-tavern/main/package.json'
-const COMMIT_URL = 'https://api.github.com/repos/flizzywine/dsh-tavern/commits/main'
-const COMPARE_URL = 'https://api.github.com/repos/flizzywine/dsh-tavern/compare'
+// 版本检查读到哪个仓库，必须和安装脚本拉的仓库是同一个：这里原先是上游
+// flizzywine，而 install.sh / android/setup.sh 早已换成 fork，导致 fork 落后上游时
+// 一直提示「有新版本」，点更新拉的却是 fork main，版本号永远不变。
+// 归一化 DSH_TAVERN_REPOSITORY（安装脚本用的同一个变量），默认跟随 fork。
+export function updateSourceUrls(repository) {
+  const normalized = String(repository || '').trim()
+    .replace(/^https?:\/\/github\.com\//i, '')
+    .replace(/^git@github\.com:/i, '')
+    .replace(/\.git$/i, '')
+    .replace(/^\/+|\/+$/g, '')
+  const name = /^[\w.-]+\/[\w.-]+$/.test(normalized) ? normalized : 'bigmalove/dsh-tavern'
+  return {
+    repository: name,
+    version: `https://raw.githubusercontent.com/${name}/main/package.json`,
+    commit: `https://api.github.com/repos/${name}/commits/main`,
+    compare: `https://api.github.com/repos/${name}/compare`,
+    // jsDelivr 的清单只有发布工作流会刷新，fork 不跑该工作流，清单里的 revision 会滞后。
+    // 它只在 GitHub API 不可达时兜底：陈旧 revision 会判成 behind，不会伪造「有更新」。
+    cdnMetadata: `https://cdn.jsdelivr.net/gh/${name}@main/dsh-tavern-runtime.json`,
+  }
+}
+const UPDATE_SOURCE = updateSourceUrls(process.env.DSH_TAVERN_REPOSITORY)
+const VERSION_URL = UPDATE_SOURCE.version
+const COMMIT_URL = UPDATE_SOURCE.commit
+const COMPARE_URL = UPDATE_SOURCE.compare
 const execFileAsync = promisify(execFile)
 const UPDATE_CHECK_POLICY = 5
 const BUSY_PHASES = new Set(['running', 'cancelling', 'blocked'])
-const CDN_METADATA_URL = 'https://cdn.jsdelivr.net/gh/flizzywine/dsh-tavern@main/dsh-tavern-runtime.json'
+const CDN_METADATA_URL = UPDATE_SOURCE.cdnMetadata
 const RUNTIME_FILES = new Set(['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'cordis.patch.yml', 'install.ps1', 'install.sh'])
 const RUNTIME_DIRECTORIES = ['bin/', 'config/', 'presets/', 'tavern-plugin/', 'patches/']
 

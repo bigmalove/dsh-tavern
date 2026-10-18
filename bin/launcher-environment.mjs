@@ -44,7 +44,15 @@ export const PID_FILE = path.join(LOG_DIR, 'tavern.pid.json')
 export const FRONTEND_BOOTSTRAP_FILE = path.join(LOG_DIR, 'tavern.frontend-bootstrap.json')
 export const FRONTEND_BOOTSTRAP_VERSION = 2
 export const RELEASE_FILE = '.dsh-tavern-release.json'
-export const DEFAULT_COMMIT_URL = 'https://api.github.com/repos/bigmalove/dsh-tavern/commits/main'
+// 与 install.sh / install.ps1 / android/setup.sh 共用 DSH_TAVERN_REPOSITORY；
+// 换仓只改这一个变量，安装、更新、版本记录不会各指一个仓库。
+export const INSTALL_REPOSITORY = (() => {
+  const normalized = String(process.env.DSH_TAVERN_REPOSITORY || '').trim()
+    .replace(/^https?:\/\/github\.com\//i, '').replace(/^git@github\.com:/i, '')
+    .replace(/\.git$/i, '').replace(/^\/+|\/+$/g, '')
+  return /^[\w.-]+\/[\w.-]+$/.test(normalized) ? normalized : 'bigmalove/dsh-tavern'
+})()
+export const DEFAULT_COMMIT_URL = `https://api.github.com/repos/${INSTALL_REPOSITORY}/commits/main`
 export const SETTINGS_FILE = path.join(DSH_ROOT, 'settings.yaml')
 export const SIDEBAR_DEFAULTS_VERSION = 8
 export const TAVERN_SIDEBAR_DEFAULTS = {
