@@ -90,6 +90,24 @@ test('rescue carries the selected last valid MVU snapshot, reenables settlement 
  assert.deepEqual(h.records.get(source.id),source)
 })
 
+test('导入草稿在发布前就能被模板会话解析，导入结束立即撤销',async()=>{
+ const h=fixture(), drafts=new Map(), resolved=[]
+ h.options.drafts={hold:(id,chat)=>drafts.set(id,chat),clear:id=>drafts.delete(id)}
+ // The world book projection resolves its Session the same way the template runtime does.
+ h.options.projectForegroundWorldbook=async({chat})=>{resolved.push(drafts.get(chat.sessionId)?.id);return {context:''}}
+ await createChatHistoryImportService(h.options).import(input)
+ assert.deepEqual(resolved,['chat','chat'],'每一轮构帧时草稿都可解析')
+ assert.equal(drafts.size,0,'导入完成后不再持有草稿')
+})
+
+test('导入失败时同样撤销草稿引用，不泄漏到后续请求',async()=>{
+ const h=fixture(), drafts=new Map()
+ h.options.drafts={hold:(id,chat)=>drafts.set(id,chat),clear:id=>drafts.delete(id)}
+ h.options.projectForegroundWorldbook=async()=>({context:'',error:'worldbook unavailable'})
+ await assert.rejects(createChatHistoryImportService(h.options).import(input),/worldbook unavailable/)
+ assert.equal(drafts.size,0)
+})
+
 test('写作会话导入聊天记录：不读人物卡与世界书，按既有正文纯文字导入',async()=>{
  const h=fixture()
  let cardReads=0, worldBookReads=0

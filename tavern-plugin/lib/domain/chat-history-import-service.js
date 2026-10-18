@@ -45,7 +45,7 @@ function assertImportedWorldbook(projected) {
   }
 }
 
-export function createChatHistoryImportService({ initialization, cards, worldBooks, store, chats, native, planner, projectWorldBookTemplates, projectForegroundWorldbook }) {
+export function createChatHistoryImportService({ initialization, cards, worldBooks, store, chats, native, planner, projectWorldBookTemplates, projectForegroundWorldbook, drafts }) {
   const pending = new Map()
   async function inspect(input) {
     const parsed = parseChatHistory(input.text)
@@ -70,6 +70,12 @@ export function createChatHistoryImportService({ initialization, cards, worldBoo
         ...(!result.parsed.hasMvu ? ['未找到 MVU 快照；如人物卡有初始变量，将使用初始值'] : [])] }
   }
   async function perform(input) {
+    // Frames are built before the draft Chat is published under its Session, so the
+    // template runtime cannot resolve it by session id yet. The host keeps that draft
+    // reachable for the duration of the import and drops it on success or failure.
+    try { return await runImport(input) } finally { drafts?.clear?.(input.sessionId) }
+  }
+  async function runImport(input) {
     if (!/^[a-zA-Z0-9-]{8,100}$/.test(input.operationId || '') || !input.sessionId) throw new Error('导入操作或 Session 标识无效')
     const { parsed, card, worldBook, initialVariables, initialError, incompatible } = await inspect(input)
     const writing = input.writing === true
@@ -85,6 +91,8 @@ export function createChatHistoryImportService({ initialization, cards, worldBoo
     }
     if (!journal) {
       const chat = await initialization.prepareImport({ cardPath: writing ? '' : input.cardPath, sessionId: input.sessionId, userName: input.userName || parsed.userName, ...(writing ? { mode: 'writing' } : {}) })
+      // Bound before the first frame: world book templates resolve this Session.
+      drafts?.hold?.(input.sessionId, chat)
       if (input.rescue) {
         chat.mvu = input.rescue.mvuSnapshot ? { ...chat.mvu, enabled: true, owner: 'official', runtime: 'magvarupdate' } : { enabled: false }
         chat.variables = {}
@@ -137,6 +145,8 @@ export function createChatHistoryImportService({ initialization, cards, worldBoo
       await store.writeJson(path, journal)
     }
     if (journal.plan) {
+      // A resumed import rebuilds frames from the journal; keep that plan reachable too.
+      drafts?.hold?.(input.sessionId, journal.plan.chat)
       // Materialize ordinary Chat revisions for the native checkpoint mechanism.
       // Intermediate records are deliberately absent from the conversation registry.
       for (const checkpoint of journal.plan.chat.timeline.checkpoints) {
