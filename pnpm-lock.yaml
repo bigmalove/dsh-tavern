@@ -7,7 +7,7 @@ settings:
 patchedDependencies:
   dsh-better-sidebar@0.19.1: 173c43516a505a34c8d554cf5b7a70c25775d7ac28a032c05cc8626abc44be43
   dsh-pocket@2.10.6: ace55cf452ea922103d992115c56bd235c4d3da5e0607ac7664f4ba73032311d
-  dsh-web-mobile@2.4.1: d03569985f4443edd99b059ab83e3837038092c0eef2a97f34271510c91bbc97
+  dsh-web-mobile@2.4.1: bf506ea2f0c0c564b308ae9330d6edefff6c278b12f4235e27b405fc71adc597
 
 importers:
 
