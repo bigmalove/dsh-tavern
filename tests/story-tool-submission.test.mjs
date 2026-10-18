@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises'
 import { createStorySubmissionTool, storySubmissionForTurn } from "../tavern-plugin/lib/domain/story-tool-submission.js"
 import { assistantResultForTurn } from '../tavern-plugin/lib/domain/session-turn-result.js'
 
-function fixture(content = '<game>正文\\引号"\n新行</game>', { error = false, result = content, turn = 2 } = {}) {
+function fixture(content = '<game>正文\\引号"\n新行</game>', { error = false, result = content, turn = 2, legacy = false } = {}) {
   const raw = JSON.stringify({ content })
   return { id: 'game', events: [
     { type: 'turn/start', data: { turn } },
@@ -14,7 +14,11 @@ function fixture(content = '<game>正文\\引号"\n新行</game>', { error = fal
       { type: 'tool-call', id: 'submit-1', name: 'submit_story', arguments: raw }
     ] } } },
     { type: 'tool/call', data: { turn, callId: 'submit-1', name: 'submit_story', arguments: raw } },
-    { type: 'tool/result', data: { turn, message: { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'submit-1', isError: error, content: [{ type: 'text', text: result }] }] } } }
+    // 0.2.1 lifts the receipt into a first-class tool message; `legacy` keeps the
+    // tool-result block older logs still hold.
+    { type: 'tool/result', data: { turn, message: legacy
+      ? { role: 'user', content: [{ type: 'tool-result', toolCallId: 'submit-1', isError: error, content: [{ type: 'text', text: result }] }] }
+      : { role: 'tool', toolCallId: 'submit-1', isError: error, content: [{ type: 'text', text: result }] } } }
   ] }
 }
 
@@ -48,6 +52,21 @@ test('工具仅允许已开启的前台 story/script，拒绝空正文、后台�
   await assert.rejects(tool.execute({ content: '正文' }, { ...exec, signal: controller.signal }), { name: 'AbortError' })
   session.events.push({ type: 'turn/end', data: { turn: 1 } })
   await assert.rejects(tool.execute({ content: '正文' }, exec), /没有正在生成/)
+})
+
+test('旧档的 tool-result 块仍能认出提交正文', () => {
+  const session = fixture('旧档提交的正文', { legacy: true })
+  const submission = storySubmissionForTurn(session, 2)
+  assert.equal(submission && submission.text, '旧档提交的正文')
+  assert.equal(submission.storyToolSubmission, true)
+})
+
+test('0.2.1 的独立 tool 消息就是提交回执，正文取自工具参数', () => {
+  const session = fixture('她推开门。')
+  const submission = storySubmissionForTurn(session, 2)
+  assert.equal(submission && submission.content, '她推开门。')
+  assert.equal(assistantResultForTurn(session, 2).text, '她推开门。')
+  assert.equal(assistantResultForTurn(session, 2).storyToolSubmission, true)
 })
 
 const server = await readFile(new URL('../tavern-plugin/lib/index.js', import.meta.url), 'utf8')

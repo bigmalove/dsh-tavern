@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { sessionEvents } from './session-events.js'
 import { createSessionSurfaceMutator } from './session-surface-mutations.js'
+import { toolResultsOf, toolResultText } from './tool-result-message.js'
 
 export const STORY_SUBMIT_TOOL_NAME = 'submit_story'
 export const STORY_SUBMIT_PROMPT = [
@@ -45,15 +46,16 @@ export function storySubmissionForTurn(session, turn) {
       if (model && model.block.arguments === data.arguments) calls.set(data.callId, model)
     }
     if (event.type !== 'tool/result' || data.error || (visible && !visible.has(Number(event.seq ?? index)))) continue
-    for (const block of data.message?.content || []) {
-      if (block?.type !== 'tool-result' || block.isError === true) continue
-      const model = calls.get(block.toolCallId)
+    // The receipt arrives as its own `role: 'tool'` message on 0.2.1 and as a
+    // `tool-result` block on older logs; both name the call that was submitted.
+    for (const result of toolResultsOf(data.message)) {
+      if (result.isError) continue
+      const model = calls.get(result.toolCallId)
       if (!model) continue
       let content
       try { content = validContent(JSON.parse(model.block.arguments).content) } catch { continue }
-      const resultText = (block.content || []).filter(part => part?.type === 'text').map(part => part.text).join('')
-      if (resultText !== content) continue
-      return { index: model.index, receiptIndex: Number(event.seq ?? index), event: model.event, text: content.trim(), content, toolCallId: block.toolCallId, storyToolSubmission: true }
+      if (toolResultText(result) !== content) continue
+      return { index: model.index, receiptIndex: Number(event.seq ?? index), event: model.event, text: content.trim(), content, toolCallId: result.toolCallId, storyToolSubmission: true }
     }
   }
   return null
