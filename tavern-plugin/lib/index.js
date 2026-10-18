@@ -4005,6 +4005,7 @@ export async function apply(ctx) {
   const turnOrchestrator = createTurnOrchestrator({
     captureSceneWorldbook,
     storyToolCall: async () => (await readTavernSettings()).storyToolCall,
+    historyToolCall: async () => (await readTavernSettings()).storyHistoryToolCall,
     store: {
       chatForSession,
       storyContextForSession: sessionId => storyContext({ sessionId }),
