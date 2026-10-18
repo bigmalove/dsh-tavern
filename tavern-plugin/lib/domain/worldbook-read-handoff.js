@@ -11,23 +11,24 @@ export function foregroundWorldbookReads(chat, session) {
   for (const event of sessionEvents(session)) {
     if (Number(event.data?.turn) !== turn) continue
     for (const block of event.data?.message?.content || []) {
-      if (block.type === 'tool-call' && block.name === 'worldbook_search') {
-        try {
-          const args = typeof block.arguments === 'string' ? JSON.parse(block.arguments) : block.arguments
-          if (Array.isArray(args?.refs) && !args.query) calls.set(block.id, {refs:new Set(args.refs)})
-          else if (args.read === true && typeof args.query === 'string' && args.query.trim()) calls.set(block.id, {query:args.query.trim()})
-        } catch { /* Malformed calls do not produce transferable reads. */ }
-      }
+      if (block.type !== 'tool-call' || block.name !== 'worldbook_search') continue
+      try {
+        const args = typeof block.arguments === 'string' ? JSON.parse(block.arguments) : block.arguments
+        if (Array.isArray(args?.refs) && !args.query) calls.set(block.id, {refs:new Set(args.refs)})
+        else if (args.read === true && typeof args.query === 'string' && args.query.trim()) calls.set(block.id, {query:args.query.trim()})
+      } catch { /* Malformed calls do not produce transferable reads. */ }
     }
-    for (const block of toolResultsOf(event.data?.message)) {
-      if (block.isError || !calls.has(block.toolCallId)) continue
-      for (const part of block.content) {
-        if (part.type !== 'text') continue
+    // 0.2.1 delivers each receipt as its own tool message; older logs keep the
+    // `tool-result` block inside the message that also held the call.
+    for (const result of toolResultsOf(event.data?.message)) {
+      if (result.isError || !calls.has(result.toolCallId)) continue
+      for (const part of result.parts) {
+        if (part.type !== 'text' || typeof part.text !== 'string') continue
         try {
-          const result = JSON.parse(part.text)
-          const call = calls.get(block.toolCallId)
-          if (result.mode !== 'read' || (call.query && result.query !== call.query)) continue
-          for (const entry of result.entries || []) {
+          const parsed = JSON.parse(part.text)
+          const call = calls.get(result.toolCallId)
+          if (parsed.mode !== 'read' || (call.query && parsed.query !== call.query)) continue
+          for (const entry of parsed.entries || []) {
             if ((call.refs ? call.refs.has(entry.ref) : typeof entry.ref === 'string') && entry.status === 'ok' && typeof entry.text === 'string' && entry.text.trim()) {
               entries.set(entry.ref, { ref: entry.ref, title: entry.title || '', text: entry.text })
             }
