@@ -322,13 +322,19 @@ export function createNativePlayOrchestrationStrategy(options) {
       }
       // Persist/migrate the fixed system snapshot before native request assembly.
       if (typeof options.ensureSessionPrefix === 'function') await options.ensureSessionPrefix(input)
+      // Both resolved here because the request projection below is synchronous.
+      // The history switch only means anything when the submission tool is in
+      // this request: a transcript that calls a tool the provider was never given
+      // is rejected outright by strict backends, so the pair is decided together.
+      const historyWanted = typeof options.historyToolCall === 'function' ? (await options.historyToolCall()) === true : false
+      const submitOffered = historyWanted && (typeof options.visibleTools !== 'function'
+        || (await options.visibleTools(sessionId)).includes(STORY_SUBMIT_TOOL_NAME))
       stagedRequests.set(sessionId, {
         turn: Math.max(0, Number(payload.turn) || 0),
         step: Math.max(1, Number(payload.step) || 1),
         scope: 'foreground',
         snapshot: snapshot || null,
-        // Resolved here because the request projection below is synchronous.
-        historyToolCall: typeof options.historyToolCall === 'function' ? (await options.historyToolCall()) === true : false
+        historyToolCall: submitOffered
       })
     }
     if (Number(payload.step) === 1) {
@@ -460,6 +466,18 @@ export function createNativePlayOrchestrationStrategy(options) {
     // DSH may expose both editor generations; the legacy schema alone costs
     // ~800 tokens on every card-Agent step and duplicates read/edit/write.
     if (assembly.tools.some(schema => schema.name === 'edit')) assembly.tools = assembly.tools.filter(schema => schema.name !== 'str_replace_editor')
+    // 装配诊断：一张「开关开着但工具没进请求」的现场。只要这行里 storyToolCall
+    // 为 true 而 tools 缺 submit_story，就是下发环节的问题；两者都在而正文仍逐字
+    // 流出，则是模型没照做。前端标签页「完整上下文」能看到同一份 tools。
+    if (group === 'play') {
+      console.error('dsh-tavern: 工具装配 ' + JSON.stringify({
+        sessionId: str(input.sessionId), mode, chatFound: input.chat !== undefined,
+        storyToolCall: visible.has(STORY_SUBMIT_TOOL_NAME),
+        contract: sections.some(section => section.name === 'tavern:story-tool-submission'),
+        visible: [...visible],
+        tools: assembly.tools.map(schema => schema.name)
+      }))
+    }
     return assembly
   }
 

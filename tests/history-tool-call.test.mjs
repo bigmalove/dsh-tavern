@@ -65,6 +65,14 @@ test('调用标识由消息 id 推导，重复投影逐字节一致', () => {
   assert.notEqual(first[0].content[0].id, other[0].content[0].id)
 })
 
+test('调用标识能过网关：不超过 40 字符且只含 [A-Za-z0-9_-]', () => {
+  const id = projectHistoryAsToolCalls([body('message-7', '正文')], { toolName: TOOL })[0].content[0].id
+  assert.match(id, /^[A-Za-z0-9_-]{1,40}$/)
+  // A long, exotic message id must not leak into the call id.
+  const exotic = projectHistoryAsToolCalls([body('因为:session/中文?id=' + 'x'.repeat(200), '正文')], { toolName: TOOL })[0].content[0].id
+  assert.match(exotic, /^[A-Za-z0-9_-]{1,40}$/)
+})
+
 test('没有工具名或没有消息时原样返回', () => {
   const messages = [body('message-5', '正文')]
   assert.equal(projectHistoryAsToolCalls(messages, {}), messages)
