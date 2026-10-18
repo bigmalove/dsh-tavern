@@ -5549,6 +5549,10 @@ export async function apply(ctx) {
       systemAppend: () => runtimePrompt('system-append'),
       stagedRequests: runtimePresetSnapshots,
       modeFor: async function (sessionId) { return await turnOrchestrator.modeFor(sessionId) },
+      // The request projection reads this switch; without it wired here the
+      // history switch never reaches a request at all. (`storyToolCall` needs no
+      // wiring: it changes the tool list, which `visibleTools` already decides.)
+      historyToolCall: async () => (await readTavernSettings()).storyHistoryToolCall,
       filterMessages: appendWritingSkillState,
       resolvePreset: resolveChatRuntimePreset,
       prepareTurn: async function (input) { return await foregroundHandoff.prepare(input) },
