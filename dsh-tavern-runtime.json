@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "revision": "a5be47b0e936aa41d1502a1ab37d1ade098a05b1",
-  "releaseSequence": 678,
+  "revision": "d59e46706e2bf5143d895494075d4d293e4e462b",
+  "releaseSequence": 679,
   "version": "2.7.0",
   "files": [
     {
@@ -461,8 +461,8 @@
     },
     {
       "path": "tavern-plugin/lib/client.js",
-      "sha256": "f6ed9ad378fad5e859413a2717346d8eac3cf524aaba2f6159f78285cbc1d97a",
-      "size": 1838572
+      "sha256": "3ac1df9624ce9daa24d645de0ea1628375fb54689d847673ed6c710308372bca",
+      "size": 1833203
     },
     {
       "path": "tavern-plugin/lib/cordis-inspect.js",
@@ -4886,8 +4886,8 @@
     },
     {
       "path": "tavern-plugin/src/client/modules/frame-touch-scroll.js",
-      "sha256": "5aa94db20e3cdc5c2c9add168695534bb244cae72e2a4054b9dd083253a36b8c",
-      "size": 16352
+      "sha256": "bbec975f8d9e05044065b568c7d6091d65516b009ddabf1f1f6f98b395219a9a",
+      "size": 11153
     },
     {
       "path": "tavern-plugin/src/client/modules/frame-viewport-height.js",
