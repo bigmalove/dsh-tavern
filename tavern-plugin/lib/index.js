@@ -5327,6 +5327,7 @@ export async function apply(ctx) {
       systemAppend: () => runtimePrompt('system-append'),
       stagedRequests: runtimePresetSnapshots,
       modeFor: async function (sessionId) { return await turnOrchestrator.modeFor(sessionId) },
+      historyToolCall: async () => (await readTavernSettings()).storyHistoryToolCall,
       filterMessages: appendWritingSkillState,
       resolvePreset: resolveChatRuntimePreset,
       prepareTurn: async function (input) { return await foregroundHandoff.prepare(input) },

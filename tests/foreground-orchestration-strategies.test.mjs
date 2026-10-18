@@ -215,3 +215,34 @@ test('预设后段骰子同一轮各步一致，新一轮或重新生成重新�
   assert.notEqual(backs[1], backs[2], '同一轮重新开始（重新生成）重新抽')
   assert.notEqual(backs[2], backs[3], '下一轮重新抽')
 })
+
+test('历史正文走工具调用：开关打开时请求里的旧正文变成提交参数，关掉后原样', async () => {
+  const body = { id: 'body-1', role: 'assistant', source: { kind: 'model', provider: 'dsh-tavern', model: 'reply-projection' }, content: [{ type: 'text', text: '上一轮正文' }] }
+  async function requestWith(historyToolCall) {
+    const run = strategies({ nativePlay: {
+      async modeFor() { return 'story' },
+      filterMessages(messages) { return messages },
+      async resolvePreset() { return null },
+      async prepareTurn() { return { frame: { userInput: { projectedText: '输入' } } } },
+      appendFrame(input) { return { messages: input.messages, receipt: {} } },
+      recordFrame() {}, async visibleTools() { return ['submit_story'] },
+      modePrompt() { return '正文任务' }, controlledToolNames: new Set(),
+      ...(historyToolCall === undefined ? {} : { historyToolCall: async () => historyToolCall })
+    } })
+    const messages = [userMessage('第一次'), body, userMessage('第二次')]
+    await run.value.prepareStep({ sessionId: 'native', payload: { turn: 2, step: 1, messages }, decision: { kind: 'enter', messages }, chat: run.chats.get('native') })
+    return run.value.projectRequest({ sessionId: 'native', system: 's', messages })
+  }
+
+  // Nothing else staged, so an untouched request is handed back to the host as-is.
+  const off = await requestWith(undefined)
+  assert.equal(off, null, '开关关闭时不改请求')
+
+  const on = await requestWith(true)
+  assert.deepEqual(on.messages.map(message => message.role), ['user', 'assistant', 'user', 'user'])
+  assert.deepEqual(on.messages[1].content.map(block => block.type), ['tool-call'])
+  assert.equal(on.messages[1].content[0].name, 'submit_story')
+  assert.deepEqual(JSON.parse(on.messages[1].content[0].arguments), { content: '上一轮正文' })
+  assert.deepEqual(on.messages[2].content.map(block => block.type), ['tool-result'])
+  assert.equal(on.messages[3].content[0].text, '第二次', '本轮玩家输入保持原样')
+})
