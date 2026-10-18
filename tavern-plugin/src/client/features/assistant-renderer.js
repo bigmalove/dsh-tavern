@@ -700,7 +700,12 @@
 				});
 				const distantHeight = useTavernDistantFloor(historyNode, settled && !sessionTransitioning && storyTurn > 0 && latestProjectionTurn - storyTurn >= TAVERN_LIVE_FLOORS);
 				// 提前 return 必须在所有 hook 之后：放在 hook 前面，生成开始/结束时 hook 数量会变，React 直接报错。
-				if (regenerating || deleted) return null;
+				// 已删除时不能只返回 null：宿主那一回合的尾行（复制/分支/用时/时间）是另一个
+				// 节点，正文消失后它在 DOM 里没有任何可识别的痕迹，只能靠回合编号去猜——
+				// 而页面上的编号与存档的编号在重新生成过之后并不相同。留一个不可见的标记，
+				// 尾行就能按 DOM 邻接直接认出「这一回合的正文已经删了」。
+				if (deleted) return React.createElement("span", { "data-tavern-deleted-floor": "1", hidden: true });
+				if (regenerating) return null;
 				if (!(data.status === "running" || data.status === "interrupted" || rendered.length > 0)) return null;
 				if (distantHeight > 0) return React.createElement("div", { ref:historyNode, className: "dsh-tavern-assistant", "data-distant-floor": true, style: { height: distantHeight + "px" } });
 				const mvuReceiptNode = settled && ownsTurn ? React.createElement(TavernTurnMvuReceipt, { sessionId: props.sessionId, turn: storyTurn }) : null;

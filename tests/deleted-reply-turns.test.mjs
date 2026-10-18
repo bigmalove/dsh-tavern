@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Session } from './fixtures/dsh-session-host.mjs'
 import { appendSessionEvent } from '../tavern-plugin/lib/domain/session-events.js'
-import { deletedReplyTurns, deletedSurfaceSeqs } from '../tavern-plugin/lib/domain/deleted-surface-nodes.js'
+import { deletedReplyTurnKeys, deletedReplyTurns, deletedSurfaceSeqs } from '../tavern-plugin/lib/domain/deleted-surface-nodes.js'
 import { createSessionSurfaceMutator } from '../tavern-plugin/lib/domain/session-surface-mutations.js'
 
 function round(session, turn, input, body) {
@@ -59,4 +59,20 @@ test('删玩家输入不藏尾行；撤销后两个列表都清空', () => {
   })
   assert.deepEqual(deletedSurfaceSeqs(session), [])
   assert.deepEqual(deletedReplyTurns(session), [])
+})
+
+// 页面上的尾行行带的是宿主 Chat 的 turn，存档记的是剧情 turn，重新生成过就会分叉。
+// 只发一套编号时，「这一套对不上」就等于彻底不生效——所以两套都要给。
+test('重新生成过的回合：native 与 story 两套编号都发出来', () => {
+  const session = Session.create('deleted-mapped')
+  round(session, 2, '推门', '第一段正文')
+  round(session, 3, '继续', '第二段正文')
+  marker(session, seqOf(session, 'a3'), 'mark-a3')
+  // 剧情第 3 回合被重新生成到 native 第 5 回合。
+  assert.deepEqual(deletedReplyTurnKeys(session, { 3: 5 }), [3, 5])
+  // 反过来也一样：事件里是 3，映射表说它显示成 5。
+  assert.deepEqual(deletedReplyTurnKeys(session, { 7: 3 }), [3, 7])
+  // 无关映射不影响结果。
+  assert.deepEqual(deletedReplyTurnKeys(session, { 1: 9 }), [3])
+  assert.deepEqual(deletedReplyTurnKeys(session), [3])
 })

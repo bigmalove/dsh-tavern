@@ -58,7 +58,25 @@ export function deletedSurfaceSeqs(session) {
   return deletedSurfaceNodes(session).seqs
 }
 
-/** 尾行该消失的回合：这一回合最后一条回复已经被删除。 */
+/** 尾行该消失的回合（事件里的 native turn）：这一回合最后一条回复已经被删除。 */
 export function deletedReplyTurns(session) {
   return deletedSurfaceNodes(session).replyTurns
+}
+
+/**
+ * 同一个回合的两套编号。宿主页面上的尾行行带的是宿主 Chat 的 turn，Tavern 存档里
+ * 记的是剧情 turn，发生过重新生成时两者并不相同；`regeneratedDshTurns` 就是这张
+ * 映射表。把两边都发给客户端，无论页面上用的是哪一套编号都能对上。
+ */
+export function deletedReplyTurnKeys(session, regeneratedDshTurns) {
+  const keys = new Set(deletedReplyTurns(session).map(Number))
+  const mappings = regeneratedDshTurns && typeof regeneratedDshTurns === 'object' && !Array.isArray(regeneratedDshTurns)
+    ? regeneratedDshTurns : {}
+  for (const [story, native] of Object.entries(mappings)) {
+    const storyTurn = Number(story), nativeTurn = Number(native)
+    if (!Number.isSafeInteger(storyTurn) || !Number.isSafeInteger(nativeTurn)) continue
+    if (keys.has(storyTurn)) keys.add(nativeTurn)
+    else if (keys.has(nativeTurn)) keys.add(storyTurn)
+  }
+  return [...keys].filter(turn => Number.isSafeInteger(turn) && turn > 0).sort((left, right) => left - right)
 }

@@ -193,7 +193,7 @@ import { assistantResultForTurn } from './domain/session-turn-result.js'
 import { createStorySubmissionTool, foldStorySubmission, STORY_SUBMIT_TOOL_NAME } from './domain/story-tool-submission.js'
 import { forkTurnsByMessageId as forkTargetsFromSession, floorsIndex as floorsIndexFromChat } from './domain/conversation-fork-targets.js'
 import { carriedFloors } from './domain/carried-floors.js'
-import { deletedReplyTurns, deletedSurfaceSeqs } from './domain/deleted-surface-nodes.js'
+import { deletedReplyTurnKeys, deletedSurfaceSeqs } from './domain/deleted-surface-nodes.js'
 import { createTavernRetryLimiter } from './domain/tavern-retry-limiter.js'
 import { lastTavernHelperVariables, projectTavernHelperContext, hydrateTavernHelperMessages, replaceTavernHelperVariables, HELPER_MESSAGE_COLD_WINDOW } from './domain/tavern-helper-context.js'
 import { projectTavernHelperWorldbook } from './domain/tavern-helper-worldbook.js'
@@ -2279,9 +2279,11 @@ export async function apply(ctx) {
   }
   // 尾行（复制/分支/用时/时间）是宿主单独画的节点，正文藏掉了它还在。报出「最后一条
   // 回复已被删除」的回合，客户端按回合藏掉那条尾行；撤销后这个列表自然变空。
+  // 宿主行上的 turn 与存档里的剧情 turn 可能不是同一套（重新生成过就会分叉），
+  // 所以把映射表两边都展开，页面用哪套编号都能对上。
   function deletedReplyTurnsForChat(chat) {
     const session = sessionStore.get(str(chat?.sessionId)) || agentRegistry.get(str(chat?.sessionId))?.session
-    return session ? deletedReplyTurns(session) : []
+    return session ? deletedReplyTurnKeys(session, chat?.regeneratedDshTurns) : []
   }
   // carry 只给缓存命中那条路用：它的 Chat 是 projectChatSessionState 的裁剪投影，
   // 消息行没有正文也没有 swipes，算出来的版本数是 1、token 也对不上（见 carried-floors.js）。
@@ -4915,6 +4917,16 @@ export async function apply(ctx) {
         const view = await historyDeletion.deleteMessage(args && args.sessionId, args)
         notifyPluginTimeline(args && args.sessionId, 'delete', { turn: args && args.turn })
         return { view }
+      }
+      // 页面自述它看到的尾行是什么样子。「删除后操作栏还残留」这类问题，服务端只能
+      // 猜到编号对不上，拿不到 DOM 就只能反复返工：这条通道把页面上的行属性、我们
+      // 的判定输入、以及最后是否真的隐藏了写进日志。
+      case 'reportDeletedTailDiagnostics': {
+        const payload = args && args.payload && typeof args.payload === 'object' ? args.payload : {}
+        console.warn('dsh-tavern: 尾行诊断 ' + JSON.stringify({
+          sessionId: args && args.sessionId, expected: payload.expected, rows: payload.rows, at: Date.now()
+        }).slice(0, 4000))
+        return { ok: true }
       }
       case 'undoFloorDeletion': {
         const view = await historyDeletion.undo(args && args.sessionId)

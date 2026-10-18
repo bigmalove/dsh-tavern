@@ -119,12 +119,21 @@
 			const storage = options.storage || function () { return window.localStorage; };
         const hiddenRows = new Map();
         function hideRow(row) {
-            if (!hiddenRows.has(row)) hiddenRows.set(row, row.style.display);
-            row.style.display = "none";
+            if (!hiddenRows.has(row)) hiddenRows.set(row, { display: row.style.display, priority: row.style.getPropertyPriority ? row.style.getPropertyPriority("display") : "" });
+            // 宿主自己的样式表可能给这些行设 display，inline 声明加 !important 才压得住。
+            if (row.style.setProperty) row.style.setProperty("display", "none", "important");
+            else row.style.display = "none";
+            row.hidden = true;
         }
         function restoreHiddenRows() {
             for (const [row, previous] of hiddenRows) {
-                if (row.style.display === "none") row.style.display = previous;
+                const value = previous && typeof previous === "object" ? previous.display : previous;
+                const priority = previous && typeof previous === "object" ? previous.priority : "";
+                if (row.style.setProperty) {
+                    if (value) row.style.setProperty("display", value, priority || "");
+                    else row.style.removeProperty("display");
+                } else row.style.display = value;
+                row.hidden = false;
             }
             hiddenRows.clear();
         }
@@ -258,14 +267,64 @@
 		}
 		// 单条删除只藏那一楼正文，尾行（复制/分支/用时/时间）是宿主另画的节点，会留在
 		// 页面上。这里只藏尾行本身：玩家输入与同回合其它楼层都还在，不能顺手带走。
+		// 页面上那条行的 turn 可能来自宿主 Chat（native），也可能来自存档（story）：
+		// 服务端把两套编号都展开过，这里再顺手把 flow-key 里的数字也算一个候选。
+		function tailTurnKeys(node) {
+			const keys = [];
+			const turn = tailTurnOf(node);
+			if (turn !== "") keys.push(String(turn));
+			const key = node.getAttribute ? node.getAttribute("data-chat-flow-key") : "";
+			const matched = typeof key === "string" ? key.match(/(?:^|:)(\d+)$/) : null;
+			if (matched && !keys.includes(matched[1])) keys.push(matched[1]);
+			return keys;
+		}
+		// 已删除的正文行留下一个不可见标记（assistant-renderer 里写的）。尾行紧跟在它
+		// 后面，按 DOM 邻接就能认出「这一回合的正文已经删了」——不依赖回合编号，
+		// 页面编号与存档编号不同也照样成立。
+		function previousReplyRowIsDeleted(tail) {
+			for (let sibling = tail.previousElementSibling; sibling; sibling = sibling.previousElementSibling) {
+				const kind = sibling.getAttribute ? sibling.getAttribute("data-chat-flow-kind") : "";
+				if (kind === "user" || kind === "turn-tail") return false;
+				if (kind !== "assistant") continue;
+				return Boolean(sibling.querySelector && sibling.querySelector('[data-tavern-deleted-floor]'));
+			}
+			return false;
+		}
 		function applyDeletedReplyTurns(turns) {
 			const set = new Set((Array.isArray(turns) ? turns : []).map(String));
-			if (set.size === 0) return;
-			const tails = root().querySelectorAll('[data-chat-flow-kind="turn-tail"], [data-turn-tail]');
-			for (let i = 0; i < tails.length; i++) {
-				const tail = tails[i];
-				if (set.has(tailTurnOf(tail))) hideRow(tail);
+			const rows = root().querySelectorAll('[data-chat-flow-kind="turn-tail"], [data-turn-tail]');
+			for (let i = 0; i < rows.length; i++) {
+				const node = rows[i];
+				// 编号命中，或者紧邻的正文已经被删——任一条成立就藏。
+				if (set.size && tailTurnKeys(node).some(key => set.has(key))) { hideRow(node); continue; }
+				if (previousReplyRowIsDeleted(node)) hideRow(node);
 			}
+		}
+		// 一次性的现场取证：把页面上真实的行属性发回服务端日志。残留问题只能靠这个
+		// 定位——编号到底是 native 还是 story、尾行带的是哪一个属性，猜不出来。
+		let tailDiagnosticAt = 0;
+		function reportTailDiagnostics(sessionId, expected) {
+			const now = Date.now();
+			if (now - tailDiagnosticAt < 4000) return;
+			tailDiagnosticAt = now;
+			try {
+				const rows = root().querySelectorAll('[data-chat-flow-kind="turn-tail"], [data-turn-tail]');
+				const payload = {
+					expected: Array.isArray(expected) ? expected : [],
+					rows: Array.prototype.map.call(rows, function (node) {
+						return {
+							kind: node.getAttribute && node.getAttribute("data-chat-flow-kind"),
+							turn: node.getAttribute && node.getAttribute("data-chat-turn"),
+							tail: node.getAttribute && node.getAttribute("data-turn-tail"),
+							key: node.getAttribute && node.getAttribute("data-chat-flow-key"),
+							display: node.style ? node.style.display : "",
+							hidden: node.hidden === true,
+							tags: typeof node.innerHTML === "string" ? node.innerHTML.slice(0, 40) : ""
+						};
+					})
+				};
+				if (typeof rpc === "function") rpc("reportDeletedTailDiagnostics", { payload: payload }, sessionId).catch(function () {});
+			} catch (error) { /* 诊断绝不打断渲染 */ }
 		}
 			function apply(sessionId, turns, regeneratedDshTurns, deletedReplyTurns) {
                 // Reconcile both directions: an older observer may have hidden a
@@ -274,6 +333,7 @@
 				applySuppressedDshTurns(turns, regeneratedDshTurns);
 				applyRegeneratedDshTurns(regeneratedDshTurns);
 				applyDeletedReplyTurns(deletedReplyTurns);
+				if (Array.isArray(deletedReplyTurns) && deletedReplyTurns.length) reportTailDiagnostics(sessionId, deletedReplyTurns);
                 // Native rows can mount without their turn tail. Explicit ownership
                 // must remain authoritative during streaming and partial hydration.
                 const suppressed = new Set((Array.isArray(turns) ? turns : []).map(String));
