@@ -91,7 +91,9 @@ export function createChatHistoryImportService({ initialization, cards, worldBoo
     }
     if (!journal) {
       const chat = await initialization.prepareImport({ cardPath: writing ? '' : input.cardPath, sessionId: input.sessionId, userName: input.userName || parsed.userName, ...(writing ? { mode: 'writing' } : {}) })
-      // Bound before the first frame: world book templates resolve this Session.
+      // Frames are built before this draft is published under its Session, so world book
+      // templates cannot resolve it by session id yet. The host holds it only while frames
+      // are built and releases it, with its template runtime, before anything is written.
       drafts?.hold?.(input.sessionId, chat)
       if (input.rescue) {
         chat.mvu = input.rescue.mvuSnapshot ? { ...chat.mvu, enabled: true, owner: 'official', runtime: 'magvarupdate' } : { enabled: false }
@@ -134,7 +136,7 @@ export function createChatHistoryImportService({ initialization, cards, worldBoo
             nativeTurn: turn, scriptReference: null,
             worldBookContext: [recalled.context, templates?.context].filter(Boolean).join('\n\n') })
         }
-      })
+            }).finally(() => drafts?.clear?.(input.sessionId))
       if (input.rescue) {
         plan.chat.timeline.checkpoints = []
         plan.chat.importHistory.rescue = input.rescue
