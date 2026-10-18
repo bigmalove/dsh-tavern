@@ -158,3 +158,14 @@ getCast(台词+28情绪) ────────┴→ 触发判定(间隔/概�
 ## 附：为什么不把 Tavern 伪装成 SillyTavern
 
 上游依赖的三样东西——`eventOn`、`getChatMessages`、`generateRaw`——在 Tavern 里都没有对应物。写一层 ST 全局 shim 能让上游产物原样跑，但会把两套生命周期绑死：Tavern 每次改会话/回合模型，shim 都要跟着改，而且 shim 里拿不到 `textVersion`、回退、分集这些保证。原生适配约 1,900 行，一次写完；shim 是长期负债。
+
+## 落地结果（2026-10-18 晚）
+
+已按上述方案实现并跑通，但**没有放进本仓库**：插件独立成 `/mnt/E/vibecode/dsh-tavern-desktop-pet`（自己的 git 仓库，保留 3 个提交历史），本仓库不再包含它，也不进 `dsh.profile.bundles`。安装走它自己的 `node build.mjs --deploy`（写到 `$DSH_HOME/profile-data/tavern/data/plugins/`）。
+
+实测修正了方案里的两处判断：
+
+- **`getStage` 不是万能入口**：写作/剧本局没有人物卡，它直接抛「这一局没有绑定人物卡」。要靠宿主侧 `getTurnState` + `getHistory` 兜底。
+- **`runTask` 不是随时可用**：它要求这一局在 DSH 里有活跃前台 Agent，刚打开还没发言时报「前台会话不可用」，需要直连 `llm` 兜底。
+
+另外踩到一个与插件无关、但会让所有模型调用失败的坑：插件包的 `package.json` 必须有 `version`，否则 DSH 的请求扩展（`deepseekLlmApiExtensions`）在列 `name@version` 时抛错，症状是统一的 `DeepSeek request extension preparation failed`。
