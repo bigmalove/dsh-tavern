@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "revision": "b50999de14f9a500283462a299a9d34b17889369",
-  "releaseSequence": 754,
+  "revision": "774ca5af782e16e37fc536f9a965fcc7317be15a",
+  "releaseSequence": 755,
   "version": "3.0.0",
   "files": [
     {
@@ -1556,8 +1556,8 @@
     },
     {
       "path": "tavern-plugin/lib/domain/rollback-surface.js",
-      "sha256": "ff77f05ec25e2db78bbd99275105c545be8789c3b5cebd4031606f0ab7a4c55f",
-      "size": 37680
+      "sha256": "f8dd837036acbbe133c6e52331630f24e9f7d72840a474f00c2dc7a8d5be4f03",
+      "size": 38695
     },
     {
       "path": "tavern-plugin/lib/domain/round-anchor.js",
@@ -1961,8 +1961,8 @@
     },
     {
       "path": "tavern-plugin/lib/domain/story-tool-submission.js",
-      "sha256": "d7a8b5a85783600dff28bf1960f648c010d0d16de93ed0f8def4d7b921200e0a",
-      "size": 7352
+      "sha256": "d60836b034b1472269447048f79d6cf17bd3dd42c7437cfc9de5c1eefadc96ac",
+      "size": 8259
     },
     {
       "path": "tavern-plugin/lib/domain/surface-recovery.js",
