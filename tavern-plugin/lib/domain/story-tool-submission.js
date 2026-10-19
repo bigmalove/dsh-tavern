@@ -89,10 +89,6 @@ export function storySubmissionForTurn(session, turn) {
  * chat view show the step as an answer (it ignores surface replacements); the
  * replacement then leaves that one text where the call, receipt and copy were,
  * so the model sees the body once and rollback/regeneration see a normal round.
- *
- * @returns true when the round was folded. A false result is not fatal: the
- *   caller replaces the call message with the body alone, which keeps the answer
- *   visible even when the surface no longer matches what this turn produced.
  */
 export function foldStorySubmission(session, result, bodyText) {
   const data = result.event.data
@@ -111,7 +107,7 @@ export function foldStorySubmission(session, result, bodyText) {
   // A step may dispatch several tools, so other receipts can sit between the
   // call and this submission's receipt. The range must cite every node it
   // removes or the replacement is refused with "缺少有效的来源引用".
-  if (from < 0 || to < from) return false
+  if (from < 0 || to < from) return
   // The appended copy and the replacement are one message. The chat view keys a
   // round's actions by the message id it rendered and the fork map reads the id
   // of the newest projection event, so two ids here hide the fork action.
@@ -123,17 +119,14 @@ export function foldStorySubmission(session, result, bodyText) {
   }
   // Settlement runs after the submission's step closed: the copy and its replacement
   // share one edit step, so the log stays loadable and the step still shows the answer.
-  // A failed fold must not fail the round, so the outcome travels back as a boolean.
-  const folded = surface.editStep(() => {
+  surface.editStep(() => {
     const shown = surface.append('assistant/message', { turn, step, message: reply }, { surfaceOp: 'append', sourceEventSeqs: [] })
     const shownSeq = Number(typeof shown === 'number' ? shown : shown.seq)
     const end = session.surface.nodes.map(Number).indexOf(shownSeq)
-    if (end < to) return false
+    if (end < to) return
     surface.replace('assistant/message', { turn, step, message: reply },
       { start, end: shownSeq, sourceEventSeqs: session.surface.nodes.slice(from, end + 1).map(Number) })
-    return true
   })
-  return folded === true
 }
 
 export function activeStoryTurn(session) {

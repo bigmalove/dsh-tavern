@@ -77,11 +77,11 @@ test('回执被宿主改写（截断/加前缀）时仍以调用参数里的正�
   assert.equal(submission.echoed, false)
 })
 
-test('折叠失败返回 false 而不是抛错，调用方才能退化成普通正文', () => {
+test('折叠失败只静默返回，不抛错也不回报结果', () => {
   const result = { event: { data: { turn: 1, step: 1, message: { id: 'm-1', role: 'assistant', source: { kind: 'model' }, content: [] } } }, receiptIndex: 9, index: 99, content: '正文' }
-  // surface 上没有这个回合的节点：范围算不出来，必须返回 false 让调用方兜底，
-  // 不能抛错——turn-stopping 里抛错会让回合结束不了，界面一直等。
-  assert.equal(foldStorySubmission({ surface: { nodes: [] }, events: [] }, result, '正文'), false)
+  // surface 上没有这个回合的节点：范围算不出来，直接返回；不能抛错——turn-stopping
+  // 里抛错会让回合结束不了，界面一直等。
+  assert.equal(foldStorySubmission({ surface: { nodes: [] }, events: [] }, result, '正文'), undefined)
 })
 
 test('工具被拒时只返回原始错误，不再附带「改为直接输出」的提示', async () => {
