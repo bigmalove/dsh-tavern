@@ -154,6 +154,7 @@ import { createCandidateTasks } from './domain/candidate-tasks.js'
 import { extractEpubText } from './domain/epub-text.js'
 import { createFileResourceStore, normalizeResourcePath, resourceKind, stripPngTextChunks } from './domain/file-resources.js'
 import { createMobileCardImport } from './domain/mobile-card-import.js'
+import { createMobileFiles } from './domain/mobile-files.js'
 import { createForegroundHandoff } from './domain/foreground-handoff.js'
 import { createForegroundFrameBuilder, foregroundRequestContext } from './domain/agent-input-frame.js'
 import { retireForegroundFrames } from './domain/foreground-frame-retirement.js'
@@ -758,6 +759,13 @@ export async function apply(ctx) {
   const fileResources = createFileResourceStore({ dataRoot })
   const resourceWorkspaceProjection = createResourceWorkspaceProjection({ root: dataRoot + '/resources' })
   const mobileCardImport = createMobileCardImport({ runtimeHost: process.env.DSH_TAVERN_RUNTIME_HOST })
+  // Saves and SillyTavern logs come from the same download folders. The embedded
+  // WebView cannot always reach a system file picker, so the container lists them.
+  const mobileSaveImport = createMobileFiles({
+    runtimeHost: process.env.DSH_TAVERN_RUNTIME_HOST,
+    extensions: ['.dshsave', '.zip', '.jsonl'],
+    maxBytes: 256 * 1024 * 1024
+  })
   const cardDeletion = createCardDeletion({ resources: fileResources })
   const cardTaskPrompts = Object.freeze({
     edit: 'card-task-edit',
@@ -1707,7 +1715,10 @@ export async function apply(ctx) {
   const prepareGameSaveResources = createGameSaveResources({ resources: fileResources, cardPreparation })
   async function importGameSave(args) {
     if (typeof args?.fileB64 !== 'string' || !args.fileB64) throw new Error('请选择 .dshsave 存档文件')
-    const save = readGameSave(Buffer.from(args.fileB64, 'base64'), { tavernVersion: TAVERN_PACKAGE_VERSION })
+    return await importGameSaveBuffer(Buffer.from(args.fileB64, 'base64'))
+  }
+  async function importGameSaveBuffer(bytes) {
+    const save = readGameSave(bytes, { tavernVersion: TAVERN_PACKAGE_VERSION })
     assertImportableSave(save)
     if (!save.card?.payload && !save.chat.cardDefinitionSnapshot && !await readCard(str(save.chat.cardPath)).catch(() => undefined)) throw new Error('存档包里没有人物卡，本机也没有这张卡，无法导入')
     const sourceChatId = str(save.chat.id), sourceSessionId = str(save.session.header?.id || save.chat.sessionId)
@@ -4927,6 +4938,19 @@ case 'getDisplayPreferences': { const settings = await readTavernSettings(); ret
       // A log the host cannot open is repaired on demand: the client retries the open
       // once after this reports a rewrite, and untouched logs cost one read.
       case 'listMobileCardImports': return await mobileCardImport.list()
+      case 'listMobileSaveImports': return await mobileSaveImport.list()
+      case 'importMobileGameSave': {
+        const entry = await mobileSaveImport.read(args && args.id)
+        if (!/\.(dshsave|zip)$/i.test(entry.name)) throw new Error('请选择 .dshsave 存档文件')
+        return await importGameSaveBuffer(entry.buffer)
+      }
+      case 'readMobileChatImport': {
+        // A chat log goes into one RPC body as text; keep it to the 8 MB the
+        // browser picker path also enforces.
+        const entry = await mobileSaveImport.read(args && args.id, { maxBytes: 8 * 1024 * 1024 })
+        if (!/\.jsonl$/i.test(entry.name)) throw new Error('请选择 SillyTavern 聊天记录（.jsonl）')
+        return { fileName: entry.name, text: entry.buffer.toString('utf8') }
+      }
       case 'importMobileCard': {
         const archive = await mobileCardImport.archive(args && args.id)
         return { card: archive ? await importCardArchiveFile(archive.file, archive.name) : await importCard(await mobileCardImport.read(args && args.id)) }

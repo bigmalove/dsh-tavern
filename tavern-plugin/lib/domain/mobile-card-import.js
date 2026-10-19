@@ -1,25 +1,12 @@
-import { lstat, readFile, readdir } from 'node:fs/promises'
-import path from 'node:path'
-
+import { createMobileFiles } from './mobile-files.js'
 import { renderPngThumbnail } from './png-thumbnail.js'
 
-const CARD_EXTENSIONS = new Set(['.json', '.png', '.charx', '.dshcard'])
+const CARD_EXTENSIONS = ['.json', '.png', '.charx', '.dshcard']
 const DEFAULT_MAX_BYTES = 25 * 1024 * 1024
 const DEFAULT_THUMBNAIL_CACHE = 240
 
-function defaultRoots() {
-  return [
-    { id: 'download', label: '手机 Download', path: '/sdcard/Download' },
-    { id: 'dsha-download', label: 'DSHA 下载', path: '/sdcard/Download/DSHA/下载' }
-  ]
-}
-
-function encodeName(name) {
-  return Buffer.from(name, 'utf8').toString('base64url')
-}
-
-function decodeName(value) {
-  try { return Buffer.from(value, 'base64url').toString('utf8') } catch { throw new Error('无效的手机文件标识') }
+function extensionOf(name) {
+  return name.toLowerCase().slice(name.lastIndexOf('.'))
 }
 
 function pngPayload(buffer, name) {
@@ -48,70 +35,33 @@ function pngPayload(buffer, name) {
 }
 
 export function createMobileCardImport(options = {}) {
-  const enabled = options.runtimeHost === 'android'
-  const maxBytes = Number.isFinite(options.maxBytes) ? options.maxBytes : DEFAULT_MAX_BYTES
-  const roots = (options.roots || defaultRoots()).map(function (root) {
-    return { id: String(root.id), label: String(root.label), path: path.resolve(String(root.path)) }
+  const enabled = options.runtimeHost === 'android' || options.enabled === true
+  const files = createMobileFiles({
+    runtimeHost: options.runtimeHost,
+    enabled: options.enabled,
+    roots: options.roots,
+    extensions: CARD_EXTENSIONS,
+    maxBytes: Number.isFinite(options.maxBytes) ? options.maxBytes : DEFAULT_MAX_BYTES
   })
-  const rootById = new Map(roots.map(function (root) { return [root.id, root] }))
   const thumbnailCacheLimit = Number.isFinite(options.thumbnailCache) && options.thumbnailCache > 0 ? Math.floor(options.thumbnailCache) : DEFAULT_THUMBNAIL_CACHE
   const thumbnailCache = new Map()
-
-  async function inspect(root, name) {
-    if (path.basename(name) !== name || !CARD_EXTENSIONS.has(path.extname(name).toLowerCase())) return null
-    const target = path.join(root.path, name)
-    let info
-    try { info = await lstat(target) } catch { return null }
-    if (!info.isFile() || info.isSymbolicLink() || info.size <= 0 || info.size > maxBytes) return null
-    return { id: root.id + ':' + encodeName(name), name, directory: root.label, size: info.size, modifiedAt: info.mtimeMs }
-  }
-
-  async function list() {
-    if (!enabled) return { available: false, files: [] }
-    const files = []
-    const seen = new Set()
-    let readableRoots = 0
-    for (const root of roots) {
-      let names
-      try { names = await readdir(root.path) } catch { continue }
-      readableRoots += 1
-      for (const name of names) {
-        const item = await inspect(root, name)
-        if (item && !seen.has(item.id)) { seen.add(item.id); files.push(item) }
-      }
-    }
-    files.sort(function (left, right) { return right.modifiedAt - left.modifiedAt || left.name.localeCompare(right.name, 'zh-CN') })
-    // No cap: the dialog lists the whole download folder and loads thumbnails lazily.
-    return { available: true, storageAccessible: readableRoots > 0, total: files.length, files }
-  }
 
   /** Archives (CHARX, DSH cards) are read from disk where they are, not loaded whole. */
   async function archive(id) {
     if (!enabled) throw new Error('当前宿主不允许从手机下载目录导入')
-    const entry = await resolve(id)
-    return /\.(charx|dshcard)$/i.test(entry.item.name) ? { file: path.join(entry.root.path, entry.item.name), name: entry.item.name } : null
+    const entry = await files.resolve(id)
+    return /\.(charx|dshcard)$/i.test(entry.item.name) ? { file: entry.file, name: entry.item.name } : null
   }
 
   async function read(id) {
     if (!enabled) throw new Error('当前宿主不允许从手机下载目录导入')
-    const entry = await resolve(id)
-    const buffer = await readFile(path.join(entry.root.path, entry.item.name))
-    const extension = path.extname(entry.item.name).toLowerCase()
+    const entry = await files.resolve(id)
+    const buffer = (await files.read(id)).buffer
+    const extension = extensionOf(entry.item.name)
     if (extension === '.charx') return { kind: 'charx', name: entry.item.name, fileB64: buffer.toString('base64') }
     return extension === '.json'
       ? { kind: 'text', name: entry.item.name, text: buffer.toString('utf8') }
       : pngPayload(buffer, entry.item.name)
-  }
-
-  async function resolve(id) {
-    const separator = typeof id === 'string' ? id.indexOf(':') : -1
-    if (separator <= 0) throw new Error('无效的手机文件标识')
-    const root = rootById.get(id.slice(0, separator))
-    const name = decodeName(id.slice(separator + 1))
-    if (!root || path.basename(name) !== name || !CARD_EXTENSIONS.has(path.extname(name).toLowerCase())) throw new Error('不允许读取这个手机文件')
-    const item = await inspect(root, name)
-    if (!item || item.id !== id) throw new Error('手机文件不存在、过大或不允许读取')
-    return { root, item }
   }
 
   /**
@@ -120,14 +70,13 @@ export function createMobileCardImport(options = {}) {
    */
   async function thumbnail(id) {
     if (!enabled) throw new Error('当前宿主不允许从手机下载目录导入')
-    const entry = await resolve(id)
-    if (path.extname(entry.item.name).toLowerCase() !== '.png') return undefined
+    const entry = await files.resolve(id)
+    if (extensionOf(entry.item.name) !== '.png') return undefined
     const key = entry.item.id + ':' + entry.item.size + ':' + entry.item.modifiedAt
     if (thumbnailCache.has(key)) return thumbnailCache.get(key)
     let thumb
     try {
-      const buffer = await readFile(path.join(entry.root.path, entry.item.name))
-      thumb = renderPngThumbnail(buffer)
+      thumb = renderPngThumbnail((await files.read(id)).buffer)
     } catch {
       thumb = undefined
     }
@@ -136,5 +85,5 @@ export function createMobileCardImport(options = {}) {
     return thumb
   }
 
-  return Object.freeze({ list, read, archive, thumbnail })
+  return Object.freeze({ list: files.list, read, archive, thumbnail })
 }

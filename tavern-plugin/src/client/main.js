@@ -309,8 +309,79 @@ window.__ModuleLoader__.load({
 			);
 		}
 
-		// @include modules/runtime-generation-monitor.js
+		/**
+		 * Save and chat-log import without a system file picker.
+		 *
+		 * The embedded DSHA window hands `<input type=file>` to the host, and a ROM
+		 * without a usable DocumentsUI answers every launch with 「无法打开文件选择器」.
+		 * `/sdcard/Download` is readable from the container, so list it instead and
+		 * only fall back to the picker when nothing usable is there.
+		 */
+		function MobileSaveImportPicker(props) {
+			const h = React.createElement;
+			const [catalog, setCatalog] = React.useState(null);
+			const [busy, setBusy] = React.useState(false);
+			const [error, setError] = React.useState("");
+			const [filter, setFilter] = React.useState("");
+			const kind = props.kind === "chat" ? "chat" : "save";
+			const matchesKind = function (file) {
+				const name = String(file && file.name || "").toLowerCase();
+				return kind === "chat" ? name.endsWith(".jsonl") : (name.endsWith(".dshsave") || name.endsWith(".zip"));
+			};
+			function load() {
+				return rpcWithTimeout("listMobileSaveImports", {}).then(function (result) { setCatalog(result); return result; }, function (err) { setCatalog({ available: false, files: [] }); setError(String(err && err.message || err)); return { available: false, files: [] }; });
+			}
+			React.useEffect(function () { if (props.open) load(); }, [props.open]);
+			function usePicker() {
+				if (typeof props.onUsePicker === "function") props.onUsePicker();
+			}
+			async function choose(file) {
+				if (busy) return;
+				setBusy(true); setError("");
+				try { await props.onChoose(file); }
+				catch (err) { setError(String(err && err.message || err)); }
+				finally { setBusy(false); }
+			}
+			if (!props.open) return null;
+			const all = (catalog && Array.isArray(catalog.files) ? catalog.files : []).filter(matchesKind);
+			const needle = filter.trim().toLowerCase();
+			const files = needle ? all.filter(function (file) { return String(file.name || "").toLowerCase().indexOf(needle) >= 0; }) : all;
+			function rowOf(file) {
+				return h("button", {
+					key: file.id,
+					className: "dsh-tavern-mobile-import-file",
+					disabled: busy,
+					onClick: function () { choose(file); }
+				},
+					h("span", { className: "dsh-tavern-mobile-import-thumb placeholder", "aria-hidden": "true" },
+						h("span", { className: "dsh-tavern-mobile-import-thumb-fallback" }, String(file.name || "").replace(/^.*\./, "").toUpperCase())),
+					h("span", { className: "dsh-tavern-mobile-import-meta" },
+						h("b", { title: file.name }, file.name),
+						h("span", null, file.directory + " · " + Math.ceil(Number(file.size || 0) / 1024) + " KB")));
+			}
+			const title = kind === "chat" ? "从手机 Download 选聊天记录" : "从手机 Download 选存档";
+			const hint = kind === "chat"
+				? "把 SillyTavern 导出的 .jsonl 放进手机 Download，回到这里点选。"
+				: "把 .dshsave 存档放进手机 Download，回到这里点选。";
+			return h("div", { className: "dsh-tavern-mobile-import", role: "dialog", "aria-modal": "true", "aria-label": title }, h("div", { className: "dsh-tavern-mobile-import-shell" }, h("div", { className: "dsh-tavern-mobile-import-panel" },
+				h("div", { className: "dsh-tavern-mobile-import-title" }, title),
+				h("div", { className: "dsh-tavern-question-sub" }, hint),
+				h("div", { className: "dsh-tavern-mobile-import-count" }, "共 " + all.length + " 个文件" + (needle ? "，匹配 " + files.length + " 个" : "")),
+				error ? h("div", { className: "dsh-tavern-dock-error", role: "alert" }, error) : null,
+				h("div", { className: "dsh-tavern-mobile-import-tools" },
+					h("input", { className: "dsh-tavern-mobile-import-search", type: "search", value: filter, placeholder: "筛选文件名", disabled: busy, onChange: function (event) { setFilter(event.target.value); } })),
+				h("div", { className: "dsh-tavern-mobile-import-list" }, files.length ? files.map(rowOf)
+					: h("div", { className: "dsh-tavern-empty" }, needle ? "没有匹配“" + filter.trim() + "”的文件"
+						: catalog && catalog.storageAccessible === false ? "DSHA 无法读取下载目录。请在系统设置中允许 DSHA ‘访问所有文件’，然后点刷新。"
+						: kind === "chat" ? "下载目录里还没有 .jsonl 聊天记录。" : "下载目录里还没有 .dshsave 存档。")),
+				h("div", { className: "dsh-tavern-library-head-actions dsh-tavern-mobile-import-actions" },
+					h("button", { className: "dsh-tavern-btn", disabled: busy, onClick: load }, "刷新"),
+					h("button", { className: "dsh-tavern-btn", disabled: busy, onClick: usePicker }, "使用系统文件选择器"),
+					h("button", { className: "dsh-tavern-btn", disabled: busy, onClick: props.onClose }, "关闭"))
+			)));
+		}
 
+		// @include modules/runtime-generation-monitor.js
 		function reloadTavernClient() {
 			const script = Array.from(document.scripts || []).find(function (item) {
 				return String(item && item.src || "").includes("/plugins/dsh-tavern-plugin/client.js");
