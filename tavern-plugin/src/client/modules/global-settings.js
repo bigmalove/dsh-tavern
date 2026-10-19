@@ -1,5 +1,5 @@
 // Settings owns its initial snapshot; each editor saves only its own resource.
-function createGlobalSettingsModule({ React, rpc, notifySettingsChanged, TavernDefaultModelSetting, TavernConversationWritingSkills, DisplayPreferencesSettings, CandidatePreferencesSettings, PromptTemplateSettingsEntry, ContextCompactionSettings }) {
+function createGlobalSettingsModule({ React, rpc, notifySettingsChanged, TavernDefaultModelSetting, TavernConversationWritingSkills, DisplayPreferencesSettings, HeaderItemsSettings, CandidatePreferencesSettings, PromptTemplateSettingsEntry, ContextCompactionSettings }) {
     function GlobalPlayDefaults({ settings }) {
         const h = React.createElement;
         const [data, setData] = React.useState(null), [busy, setBusy] = React.useState(false), [message, setMessage] = React.useState("");
@@ -108,6 +108,7 @@ function createGlobalSettingsModule({ React, rpc, notifySettingsChanged, TavernD
                 state.settings ? h(SettingSwitch, { settings: state.settings, name: "castPresentation", title: "对话头像",
                     description: "后台结算时顺带标注每句台词的说话人和情绪，台词显示成带头像的一行。主角用人物卡头像，其他人物用首字头像。" }) : null,
                 h(DisplayPreferencesSettings),
+                h(HeaderItemsSettings),
                 h(CandidatePreferencesSettings)),
             group("高级", "",
                 state.settings ? h(SettingSwitch, { settings: state.settings, name: "storyToolCall", title: "正文走工具调用",

@@ -143,8 +143,15 @@
             let value = null, revision = 0;
             const listeners = new Set();
             const key = "dsh-tavern:display-preferences-changed";
+            // The top bar reads this before the first read lands; the shipped
+            // default keeps it from flashing an empty row.
+            function headerItemsOf(settings) {
+                const input = settings && settings.headerItems;
+                if (!input || typeof input !== "object" || !Array.isArray(input.items)) return { display: TAVERN_HEADER_DEFAULT.display, items: [...TAVERN_HEADER_DEFAULT.items] };
+                return { display: input.display === "icon" ? "icon" : "icon-text", items: input.items.filter(item => typeof item === "string").slice(0, 24) };
+            }
             function apply(settings) {
-                value = { hideContextAndReasoning: settings.hideContextAndReasoning === true,
+                value = { hideContextAndReasoning: settings.hideContextAndReasoning === true, headerItems: headerItemsOf(settings),
                     renderDepth: Number.isSafeInteger(settings.renderDepth) ? settings.renderDepth : 3 };
                 document.documentElement.classList.toggle("dsh-tavern-hide-process", value.hideContextAndReasoning);
                 listeners.forEach(listener => listener());
@@ -202,6 +209,124 @@
                 notice ? h("p", { className: "dsh-tavern-settings-desc", role: "status" }, notice) : null);
         }
 
+        function HeaderItemsSettings(props) {
+            const h = React.createElement;
+            // The settings page folds this block; the 顶栏设置 dialog is already
+            // that one block, so folding there would hide everything behind a
+            // title that repeats the dialog's own heading.
+            const collapsible = !(props && props.collapsible === false);
+            const preferences = React.useSyncExternalStore(displayPreferences.subscribe, displayPreferences.snapshot, displayPreferences.snapshot);
+            const catalog = React.useSyncExternalStore(tavernHeaderCatalog.subscribe, tavernHeaderCatalog.snapshot, tavernHeaderCatalog.snapshot);
+            const [busy, setBusy] = React.useState(false), [notice, setNotice] = React.useState("");
+            const [dragging, setDragging] = React.useState("");
+            const dragRef = React.useRef("");
+            const config = preferences && preferences.headerItems ? preferences.headerItems : TAVERN_HEADER_DEFAULT;
+            const items = Array.isArray(config.items) ? config.items : [];
+            const known = React.useMemo(function () {
+                const list = [], seen = new Set();
+                function push(entry) { if (!entry || !entry.id || seen.has(entry.id)) return; seen.add(entry.id); list.push(entry); }
+                push({ id: "header:export", label: "导出" });
+                push({ id: "dsh-tavern:status", label: "酒馆状态" });
+                catalog.forEach(push);
+                return list;
+            }, [catalog]);
+            const byId = React.useMemo(function () {
+                const map = new Map(known.map(entry => [entry.id, entry]));
+                return id => map.get(id) || { id: id, label: String(id).replace(/^[^:]+:/, "") };
+            }, [known]);
+            const groups = React.useMemo(function () {
+                const headerTools = known.filter(entry => entry.id === "header:export");
+                return [["顶栏工具", headerTools]].concat(tavernStartGroups(known.filter(entry => entry.id !== "header:export"), tavernUiExtensions.startGroups()));
+            }, [known]);
+            async function save(next) {
+                setBusy(true); setNotice("");
+                try { await displayPreferences.save({ headerItems: { display: next.display, items: next.items } }); setNotice("已保存，对所有对话立即生效"); }
+                catch (error) { setNotice("保存失败：" + String(error.message || error)); }
+                finally { setBusy(false); }
+            }
+            function changeItems(next) { return save({ display: config.display, items: next }); }
+            function toggle(id) {
+                if (busy) return;
+                return changeItems(items.includes(id) ? items.filter(value => value !== id) : [...items, id]);
+            }
+            function move(id, delta) {
+                if (busy) return;
+                const index = items.indexOf(id), target = index + delta;
+                if (index < 0 || target < 0 || target >= items.length) return;
+                const next = items.slice();
+                [next[index], next[target]] = [next[target], next[index]];
+                return changeItems(next);
+            }
+            function drop(target) {
+                const source = dragRef.current;
+                dragRef.current = ""; setDragging("");
+                if (busy || !source || source === target) return;
+                const next = items.filter(value => value !== source);
+                next.splice(next.indexOf(target) + (items.indexOf(source) < items.indexOf(target) ? 1 : 0), 0, source);
+                return changeItems(next);
+            }
+            const mode = (value, title, description, preview) => h("button", {
+                type: "button", className: "dsh-tavern-header-mode", role: "radio", "aria-checked": config.display === value, disabled: busy || preferences === null,
+                onClick: function () { if (config.display !== value) save({ display: value, items: items }); }
+            },
+                h("span", { className: "dsh-tavern-header-mode-preview" }, preview),
+                h("span", { className: "dsh-tavern-header-mode-name" }, h("span", { className: "dsh-tavern-header-radio" }), title),
+                h("small", null, description));
+            const chip = option => {
+                const on = items.includes(option.id);
+                return h("button", { key: option.id, type: "button", className: "dsh-tavern-header-chip" + (on ? " is-on" : ""), "aria-pressed": on, disabled: busy, onClick: function () { void toggle(option.id); } },
+                    h("span", { className: "dsh-tavern-header-chip-icon", "aria-hidden": true }, tavernStartIcon(option.id, option, 13)),
+                    option.label,
+                    h("span", { className: "dsh-tavern-header-chip-state", "aria-hidden": true }, on ? "✓" : "＋"));
+            };
+            const headerSummary = (config.display === "icon" ? "只显示图标" : "图标 + 文字") + " · " + items.length + " 个按钮";
+            const heading = h("strong", { className: "dsh-tavern-settings-title", key: "title" }, "自定义顶栏");
+            return h(collapsible ? "details" : "section", { className: "dsh-tavern-settings-group dsh-tavern-header-settings-group" + (collapsible ? "" : " is-expanded") },
+                collapsible ? h("summary", { className: "dsh-tavern-header-summary" },
+                    heading,
+                    h("span", { className: "dsh-tavern-header-summary-meta" }, headerSummary),
+                    h("span", { className: "dsh-tavern-header-summary-chevron", "aria-hidden": true }, "▾")) : null,
+                h("div", { className: "dsh-tavern-settings-copy" },
+                    collapsible ? null : heading,
+                    h("p", { className: "dsh-tavern-settings-desc" }, "决定会话顶栏显示哪些按钮、按什么顺序、要不要文字。改动立即保存，对所有对话生效。全屏和右侧栏按钮由宿主提供，始终保留在最右。")),
+                h("div", { className: "dsh-tavern-header-modes", role: "radiogroup", "aria-label": "顶栏显示方式" },
+                    mode("icon", "只显示图标", "最省空间，悬停显示名称",
+                        h(React.Fragment, null, h("span", { className: "dsh-tavern-header-mode-chip is-square" }, tavernStartIcon("dsh-tavern:worldbooks", null, 13)), h("span", { className: "dsh-tavern-header-mode-chip is-square" }, tavernStartIcon("dsh-tavern:cards", null, 13)))),
+                    mode("icon-text", "图标 + 文字", "一眼认出，适合宽屏",
+                        h(React.Fragment, null, h("span", { className: "dsh-tavern-header-mode-chip" }, tavernStartIcon("dsh-tavern:worldbooks", null, 13), "世界书"), h("span", { className: "dsh-tavern-header-mode-chip" }, tavernStartIcon("dsh-tavern:cards", null, 13), "人物卡")))),
+                items.length ? h("ul", { className: "dsh-tavern-header-list" }, items.map(function (id, index) {
+                    const entry = byId(id);
+                    return h("li", {
+                        key: id, className: "dsh-tavern-header-list-row" + (dragging === id ? " is-dragging" : ""),
+                        onDragOver: function (event) { if (dragRef.current && dragRef.current !== id) event.preventDefault(); },
+                        onDrop: function (event) { event.preventDefault(); void drop(id); }
+                    },
+                        h("span", {
+                            className: "dsh-tavern-header-grip", title: "拖动排序", "aria-hidden": true, draggable: !busy,
+                            onDragStart: function (event) { dragRef.current = id; setDragging(id); if (event.dataTransfer) { event.dataTransfer.effectAllowed = "move"; try { event.dataTransfer.setData("text/plain", id); } catch (_) {} } },
+                            onDragEnd: function () { dragRef.current = ""; setDragging(""); }
+                        }, "⋮⋮"),
+                        h("span", { className: "dsh-tavern-header-list-icon", "aria-hidden": true }, tavernStartIcon(id, entry, 16)),
+                        h("span", { className: "dsh-tavern-header-list-name" }, h("strong", null, entry.label), h("small", null, id === "header:export" || id === "dsh-tavern:status" ? "原有按钮" : "侧栏页面")),
+                        h("span", { className: "dsh-tavern-header-list-ops" },
+                            h("button", { type: "button", className: "dsh-tavern-header-op", "aria-label": "上移", title: "上移", disabled: busy || index === 0, onClick: function () { void move(id, -1); } }, "↑"),
+                            h("button", { type: "button", className: "dsh-tavern-header-op", "aria-label": "下移", title: "下移", disabled: busy || index === items.length - 1, onClick: function () { void move(id, 1); } }, "↓"),
+                            h("button", { type: "button", className: "dsh-tavern-header-op is-danger", "aria-label": "移除", title: "移除", disabled: busy, onClick: function () { void toggle(id); } }, "×")));
+                })) : h("p", { className: "dsh-tavern-header-empty" }, "顶栏上没有可编辑的按钮了。从下方添加，或点「恢复默认」找回酒馆状态和导出。"),
+                h("div", { className: "dsh-tavern-header-catalog" },
+                    h("strong", { className: "dsh-tavern-settings-title" }, "可添加的按钮"),
+                    h("p", { className: "dsh-tavern-settings-desc" }, "「顶栏工具」是顶栏自带的按钮；其余与侧栏开始页一致，插件注册的页面也会出现在这里。"),
+                    groups.filter(group => group[1].length).map(function ([title, options]) {
+                        return h("div", { key: title, className: "dsh-tavern-header-catalog-group" },
+                            h("div", { className: "dsh-tavern-header-catalog-title" }, title),
+                            h("div", { className: "dsh-tavern-header-chips" }, options.map(chip)));
+                    })),
+                h("div", { className: "dsh-tavern-header-foot" },
+                    h("p", { className: "dsh-tavern-settings-desc" }, "手机和窄窗口上统一只显示图标；放不下的页面会收进顶栏末尾的「⋯」菜单。酒馆状态和导出不会收起。"),
+                    h("button", { type: "button", className: "dsh-tavern-btn", disabled: busy, onClick: function () { void save({ display: TAVERN_HEADER_DEFAULT.display, items: [...TAVERN_HEADER_DEFAULT.items] }); } }, "恢复默认")),
+                notice ? h("p", { className: "dsh-tavern-settings-desc", role: "status" }, notice) : null);
+        }
+
         function useCandidatePreferences() {
             const [mode, setMode] = React.useState("after-send");
             React.useEffect(function () {
@@ -247,6 +372,6 @@
         // @include modules/global-settings.js
         const { TavernSettingsSection } = createGlobalSettingsModule({
             React, rpc, notifySettingsChanged: () => window.dispatchEvent(new CustomEvent("dsh-tavern-settings-changed")),
-            TavernDefaultModelSetting, TavernConversationWritingSkills, DisplayPreferencesSettings,
+            TavernDefaultModelSetting, TavernConversationWritingSkills, DisplayPreferencesSettings, HeaderItemsSettings,
             CandidatePreferencesSettings, PromptTemplateSettingsEntry, ContextCompactionSettings
         });
