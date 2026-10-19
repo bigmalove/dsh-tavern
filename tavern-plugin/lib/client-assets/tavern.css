@@ -2826,6 +2826,13 @@ body.dsh-tavern-shell-active [class*="_headerUtilities"]:has(.dsh-tavern-header-
   body.dsh-tavern-shell-active [data-mobile-nav="frame"] header:has([class*="_headerUtilities"]) [class*="_titleRow"] {
     min-height: 40px; padding-left: 40px; gap: 4px; align-items: center;
   }
+  /* 标题那一格是 flex:1，默认 min-width:auto 等于 min-content（实测 200+），
+     压不下去就整行溢出，最右边的 utilities 与角落按钮互相压住。让标题可截断。 */
+  body.dsh-tavern-shell-active header:has([class*="_headerUtilities"]) [class*="_titleCluster"] { min-width: 0; }
+  body.dsh-tavern-shell-active header:has([class*="_headerUtilities"]) [class*="_crumbs"] { min-width: 0; overflow: hidden; }
+  body.dsh-tavern-shell-active header:has([class*="_headerUtilities"]) [class*="_crumb"] {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   body.dsh-tavern-shell-active [data-mobile-nav="toggle"] {
     top: 2px !important; left: 4px !important; width: 40px; height: 40px;
   }
