@@ -315,7 +315,8 @@ test('完整重生成为原轮次追加新版本并保留旧版本，再执行�
   assert.deepEqual(result.regeneratedDshTurns, { '2': 3 })
   assert.equal(result.regenInProgress, undefined)
   assert.equal(result.settleStatus, 'done')
-  assert.match(h.agent.input.content[0].text, /^推门\n\n【本轮补充要求】/)
+  // 有意见时带上当前正文作为改写底稿。
+  assert.match(h.agent.input.content[0].text, /^推门\n\n【当前正文】\n[\s\S]+\n\n【改写要求】/)
   assert.match(h.agent.input.content[0].text, /写得短一些/)
   assert.doesNotMatch(h.agent.input.content[0].text, /重新生成|原玩家输入/)
   assert.ok(h.calls.indexOf('readRevision') < h.calls.indexOf('rollback.regen'))

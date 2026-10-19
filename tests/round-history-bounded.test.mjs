@@ -214,19 +214,19 @@ test('a failed bounded regeneration restores the same Chat as the complete abort
   assert.deepEqual(comparable(results[0].after), comparable(results[1].after))
 })
 
-test('重掷在两条路径上都不把旧正文交给模型，结果一致', async t => {
+test('不填意见时两条路径都不把旧正文交给模型，结果一致', async t => {
   const results = []
   for (const bounded of [true, false]) {
     const h = await fixture(t, bounded)
     const before = await h.p.read('chat')
-    const view = await h.rounds.regenerate('chat', '', 'session', { reroll: true })
+    const view = await h.rounds.regenerate('chat', '', 'session')
     results.push({ h, before, view, after: await h.p.read('chat') })
   }
   for (const { h, before, view, after } of results) {
-    // The saved body of the round being rerolled never reaches the provider:
-    // the request projection replaces the old reply with this attempt's input.
+    // The saved body of the round never reaches the provider: the request
+    // projection replaces the old reply with this attempt's input.
     const request = JSON.stringify(projectRegenerationRequestMessages(h.agent.sentRequest))
-    assert.equal(request.includes('新正文'), false, '旧正文不能进入重掷请求')
+    assert.equal(request.includes('新正文'), false, '没有意见时，这一版正文不能进入请求')
     assert.equal(view.adopted.text.startsWith('重写正文'), true)
     assert.equal(after.messages.length, before.messages.length)
     assert.equal(after.messages.at(-1).text, view.adopted.text)
@@ -246,15 +246,30 @@ test('重掷在两条路径上都不把旧正文交给模型，结果一致', as
   assert.deepEqual(strip(results[0].after), strip(results[1].after))
 })
 
-test('重掷失败后两条路径都把旧正文放回模型上下文', async t => {
+test('重新生成失败后两条路径都把旧正文放回模型上下文', async t => {
   for (const bounded of [true, false]) {
     const h = await fixture(t, bounded)
     h.hooks.failGeneration = true
-    await assert.rejects(h.rounds.regenerate('chat', '', 'session', { reroll: true }), /fixture generation failed/)
+    await assert.rejects(h.rounds.regenerate('chat', '', 'session'), /fixture generation failed/)
     const bodies = h.session.surface.nodes.map(seq => h.session.events[seq])
       .filter(e => e?.type === 'assistant/message')
       .map(e => (e.data.message.content || []).map(block => block.text || '').join(''))
     assert.equal(bodies.includes('新正文'), true, '撤销后旧正文必须回到模型上下文')
     assert.equal((await h.p.read('chat')).regenInProgress, undefined)
+  }
+})
+
+test('填了意见时两条路径都把当前正文当底稿，且只出现一次', async t => {
+  for (const bounded of [true, false]) {
+    const h = await fixture(t, bounded)
+    const view = await h.rounds.regenerate('chat', '写得短一些', 'session')
+    assert.equal(view.adopted.text.startsWith('重写正文'), true)
+    const input = h.agent.sentRequest.find(message => message.role === 'user' && String(message.content?.[0]?.text || '').includes('【改写要求】'))
+    assert.ok(input, '本轮输入要带上改写要求')
+    const draft = String(input.content[0].text)
+    // The draft is the current body, and it is the only copy in the request.
+    assert.match(draft, /【当前正文】\n新正文/)
+    const request = JSON.stringify(projectRegenerationRequestMessages(h.agent.sentRequest))
+    assert.equal(request.split('新正文').length - 1, 1, '旧回复被去掉，正文只经由改写输入出现一次')
   }
 })

@@ -5262,7 +5262,7 @@ case 'getDisplayPreferences': { const settings = await readTavernSettings(); ret
       case 'regenBody': {
         await reconcileStory(args && args.sessionId)
         // rewrite: revise the current body with the guidance; omitted is a fresh sample.
-        const view = await regenBody(args && args.chatId, args && args.guidance, args && args.sessionId, { rewrite: args && args.rewrite === true })
+        const view = await regenBody(args && args.chatId, args && args.guidance, args && args.sessionId)
         notifyPluginTimeline(args && args.sessionId, 'regenerate')
         return { view }
       }

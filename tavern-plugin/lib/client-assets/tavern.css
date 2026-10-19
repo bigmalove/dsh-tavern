@@ -445,9 +445,6 @@ body.dsh-tavern-shell-active span:has(.dsh-tavern-hero-lockup) + span { display:
 .dsh-tavern-regen-cancel { margin-left: auto; padding: 6px 12px; font: inherit; font-size: 14px; border: 0; border-radius: 8px; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; }
 .dsh-tavern-regen-cancel:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 .dsh-tavern-regen-submit { padding: 6px 16px; font: inherit; font-size: 14px; white-space: nowrap; font-weight: 600; }
-/* 次要动作（参考旧正文重写）：与主按钮并排但更安静，避免误点成默认行为。 */
-.dsh-tavern-regen-submit.dsh-tavern-regen-rewrite { padding: 6px 14px; font-weight: 500; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; }
-.dsh-tavern-regen-submit.dsh-tavern-regen-rewrite:hover { border-color: var(--dsh-tavern-accent-border); color: var(--dsh-tavern-accent); background: var(--dsh-tavern-accent-soft); }
 .dsh-tavern-status { height: 100%; box-sizing: border-box; display: flex; flex-direction: column; color: var(--dsw-alias-label-primary); background: var(--dsw-specific-sidebar-fill); }
 .dsh-tavern-resources { height: 100%; box-sizing: border-box; display: flex; flex-direction: column; color: var(--dsw-alias-label-primary); background: var(--dsw-specific-sidebar-fill); }
 .dsh-tavern-library { height: 100%; box-sizing: border-box; display: flex; flex-direction: column; color: var(--dsw-alias-label-primary); background: var(--dsw-specific-sidebar-fill); }
