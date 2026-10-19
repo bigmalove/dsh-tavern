@@ -15421,6 +15421,38 @@ async function runTavernTouchDiagnostics(host, onStatus) {
 				if (column && typeof column.isExpanded === "function" && column.isExpanded() === false && typeof column.toggleExpanded === "function") column.toggleExpanded();
 			} catch (_) {}
 		}
+		// 「进入游戏时打开酒馆状态」的判定：什么时候算玩家离开了这一局。
+		//
+		// 侧栏拿到的 current 由会话列表的 retainedBy.mainView 推导。列表刷新、侧栏重挂载的那几帧
+		// 读不到主会话，会得到空串。把空串当成「离开」会清掉「这一局已经展示过」的记号，等快照
+		// 回来，同一局又被当成新进入：右侧栏重新展开、状态页被聚焦，直接盖在正文上。
+		//
+		// 所以只有真的切到另一个会话才立刻清记号；空串要持续 TAVERN_AUTO_OPEN_BLANK_MS 才算离开
+		// （开始页、卡片工作台），短暂抖动不算。
+
+		var TAVERN_AUTO_OPEN_BLANK_MS = 800;
+
+		function tavernAutoOpenClearedBy(mark, current) {
+			return Boolean(current) && current !== mark;
+		}
+
+		// 右侧栏此刻是否已经展开、并且正停在其中一页上。自动打开要先问这一句：重复打开会展开
+		// 收起状态下的整列并聚焦那一页，等于把面板压到正文上。
+		function tavernRightColumnShowsPage(column, kinds) {
+			if (!column || typeof column.isExpanded !== "function" || typeof column.active !== "function") return false;
+			try {
+				if (column.isExpanded() !== true) return false;
+				const page = column.active();
+				if (!page) return false;
+				return kinds.some(function (kind) { return page.kind === kind || page.contentId === kind; });
+			} catch (_) { return false; }
+		}
+
+		function tavernRightColumnShowing(ctx, kinds) {
+			try {
+				return tavernRightColumnShowsPage(ctx && typeof ctx.get === "function" ? ctx.get("sidebarRight") : null, kinds);
+			} catch (_) { return false; }
+		}
 		const tavernAutoOpenStatus = (function () {
 			let enabled = true, loaded = null;
 			function load() { loaded = rpc("getTavernSettings").then(function (result) { enabled = !(result && result.settings && result.settings.autoOpenStatusPanel === false); }, function () {}); return loaded; }
@@ -15733,8 +15765,16 @@ async function runTavernTouchDiagnostics(host, onStatus) {
 				return function () { stopped = true; window.clearTimeout(timer); };
 			}, [openingPicker && openingPicker.card && openingPicker.card.path, openingPicker && openingPicker.userName, openingPicker && openingPicker.preparing, requestMode, compatibilityAvailable]);
 			// Leaving the game (for another game, a card-design chat or the start page) lets coming back open the tabs again.
+			// An empty `current` is not a leave: the session list is refreshing or the sidebar remounted, and the
+			// mark would be cleared on that flicker — the next snapshot then reopens the panel over the story.
+			// Only a blank that outlives the flicker means the player really left (start page, another workspace).
 			React.useEffect(function () {
-				if (current !== tavernSettingsTabsShownFor) tavernSettingsTabsShownFor = "";
+				if (current) {
+					if (tavernAutoOpenClearedBy(tavernSettingsTabsShownFor, current)) tavernSettingsTabsShownFor = "";
+					return;
+				}
+				const timer = window.setTimeout(function () { tavernSettingsTabsShownFor = ""; }, TAVERN_AUTO_OPEN_BLANK_MS);
+				return function () { window.clearTimeout(timer); };
 			}, [current]);
 			React.useEffect(function () {
 				if (!readyTavernSession || typeof props.openConversationSettingsTab !== "function") return;
@@ -16740,8 +16780,12 @@ async function runTavernTouchDiagnostics(host, onStatus) {
 					openConversationSettingsTab: async function (sessionId) {
 						if (narrowLayout()) return closeNarrowSidebar();
 						if (tavernSettingsTabsShownFor === sessionId) return;
-						tavernSettingsTabsShownFor = sessionId;
+						// The setting is off: do not claim the session, so turning it on later still opens the tabs.
 						if (!await tavernAutoOpenStatus.read()) return;
+						// The column already shows one of these pages (it was never closed, or the sidebar remounted):
+						// opening again expands the column and focuses the page, pulling it over the story for nothing.
+						if (tavernRightColumnShowing(ctx, ["dsh-tavern:conversation-settings", "dsh-tavern:status"])) { tavernSettingsTabsShownFor = sessionId; return; }
+						tavernSettingsTabsShownFor = sessionId;
 						const opened = await openTavernSidebarTab(ctx, { type: "dsh-tavern:conversation-settings" }, { sessionId: sessionId }) && await openTavernSidebarTab(ctx, { type: "dsh-tavern:status" }, { sessionId: sessionId });
 						// Not opened (the player already moved on, or the host refused): try again next time this game is entered.
 						if (!opened) { if (tavernSettingsTabsShownFor === sessionId) tavernSettingsTabsShownFor = ""; return; }
