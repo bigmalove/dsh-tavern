@@ -17788,10 +17788,10 @@ async function runTavernTouchDiagnostics(host, onStatus) {
                             description: "把历史里的正文和玩家消息都以工具参数的形式回放给模型，而不是普通对话文字；实测能明显降低续写被拒答的概率。本轮输入保持原样。需要模型支持工具调用，只影响发送给模型的历史，存档和界面不变。" }) : null,
                         h(PromptTemplateSettingsEntry),
                         h(ContextCompactionSettings),
-                        h(ContextCompactionSettings),
                         h(TouchDiagnosticsSetting),
                         // Most players never need this; it lives at the bottom of 高级, folded.
-                        h(HeaderItemsSettings)),            state.error ? React.createElement("div", { className: "dsh-tavern-settings-error", role: "alert" }, "保存失败：" + state.error) : null
+                        h(HeaderItemsSettings)),
+                    state.error ? React.createElement("div", { className: "dsh-tavern-settings-error", role: "alert" }, "保存失败：" + state.error) : null
                 );
             }
 
@@ -21444,8 +21444,8 @@ async function runTavernTouchDiagnostics(host, onStatus) {
 			return value;
 		}
 
-		async function submitBodyRegeneration(sessionId, panel, guidance, rewrite) {
-			const res = await rpc("regenBody", { guidance: String(guidance || "").trim(), rewrite: rewrite === true }, sessionId);
+		async function submitBodyRegeneration(sessionId, panel, guidance) {
+			const res = await rpc("regenBody", { guidance: String(guidance || "").trim() }, sessionId);
 			applyBodyRegenerationResult({ liveTavernView: liveTavernView, historyProjection: historyProjection, sessionId: sessionId, view: res.view, tail: panel.tail });
 			setCandidatePanel(null);
 		}
@@ -21586,7 +21586,7 @@ async function runTavernTouchDiagnostics(host, onStatus) {
 						generate(false);
 					}
 				} }, settlementActive ? "后台结算中…" : (activity.busy ? activity.label : ((busy || taskBusy) ? "生成中…" : (hasReadyPanel ? "重新生成候选项" : "生成候选项")))),
-				(canReplayFailed || canRollback) ? h("button", { className: "dsh-tavern-choice-trigger", disabled: frontRunning || (!canReplayFailed && activity.busy && !settlementActive) || regenBusy || replayBusy, title: canReplayFailed ? "移除被中断的回复并原样重放本轮请求（复用模型缓存）" : (settlementActive ? "重新生成将取消当前正文的后台结算" : (activity.busy ? activity.blockReason : "直接重掷，或填意见后参考旧正文重写")), onClick: canReplayFailed ? replayFailed : openRegeneration }, replayBusy ? "重放中…" : regenBusy ? "重生成中…" : canReplayFailed ? "重新生成本轮" : "重新生成正文") : null,
+				(canReplayFailed || canRollback) ? h("button", { className: "dsh-tavern-choice-trigger", disabled: frontRunning || (!canReplayFailed && activity.busy && !settlementActive) || regenBusy || replayBusy, title: canReplayFailed ? "移除被中断的回复并原样重放本轮请求（复用模型缓存）" : (settlementActive ? "重新生成将取消当前正文的后台结算" : (activity.busy ? activity.blockReason : "不填意见是重新来一次；填了意见就在当前正文基础上改")), onClick: canReplayFailed ? replayFailed : openRegeneration }, replayBusy ? "重放中…" : regenBusy ? "重生成中…" : canReplayFailed ? "重新生成本轮" : "重新生成正文") : null,
 				canReplayFailed ? h("button", { className: "dsh-tavern-choice-trigger dsh-tavern-withdraw-failed", disabled: frontRunning || replayBusy || withdrawBusy, title: "清除这一轮：恢复到这一轮开始前，此前的剧情和变量不变，原输入放回输入框", onClick: withdrawFailed }, withdrawBusy ? "撤回中…" : "撤回这条输入") : null
 			);
 		}
@@ -22524,14 +22524,7 @@ async function runTavernTouchDiagnostics(host, onStatus) {
 							return h("button", { key: text, type: "button", className: "dsh-tavern-regen-example", onClick: function () { addExample(text); } }, text);
 						})),
 						h("button", { type: "button", className: "dsh-tavern-regen-cancel", onClick: props.onCancel }, "取消"),
-						// 改写必须有个方向：没填意见时只留重掷，免得按钮名不副实。
-						props.rewriteLabel && props.value.trim() ? h("button", {
-							type: "button",
-							className: "dsh-tavern-regen-submit dsh-tavern-regen-rewrite",
-							title: props.rewriteTitle || "",
-							onClick: props.onRewrite
-						}, props.rewriteLabel) : null,
-						h("button", { type: "button", className: "dsh-tavern-question-primary dsh-tavern-regen-submit", title: props.submitTitle || "", onClick: props.onSubmit }, props.submitLabel)
+						h("button", { type: "button", className: "dsh-tavern-question-primary dsh-tavern-regen-submit", onClick: props.onSubmit }, props.submitLabel)
 					)
 				);
 			return h("div", { className: "dsh-tavern-question dsh-tavern-regen" },
@@ -22554,33 +22547,29 @@ async function runTavernTouchDiagnostics(host, onStatus) {
 			React.useEffect(function () { if (opened) setGuidance(regenGuidance.get(props.sessionId) || ""); }, [opened, props.sessionId]);
 			const h = React.createElement;
 			if (!isPlayMode(sessionMode) || running || !panel || panel.sessionId !== props.sessionId) return null;
-			async function generate(rewrite) {
+			async function generate() {
 				const guide = guidance.trim();
 				if (guide) regenGuidance.set(props.sessionId, guide); else regenGuidance.delete(props.sessionId);
-				setRegenPanel(Object.assign({}, panel, { phase: "loading", error: "", rewrite: rewrite === true && guide !== "" }));
+				setRegenPanel(Object.assign({}, panel, { phase: "loading", error: "", rewrite: guide !== "" }));
 				try {
-					await submitBodyRegeneration(props.sessionId, panel, guide, rewrite === true && guide !== "");
+					await submitBodyRegeneration(props.sessionId, panel, guide);
 					setRegenPanel(null);
 				} catch (err) {
-					tavernErrorHub.report(rewrite === true ? "参考正文重写" : "重新生成正文", err);
+					tavernErrorHub.report("正文重新生成", err);
 					setRegenPanel(Object.assign({}, panel, { phase: "error", error: String(err && err.message || err) }));
 				}
 			}
 			return h(RegenGuideForm, {
 				title: "重新生成正文",
-				hint: "重掷：模型看不到这一版正文；重写：把这一版交给模型，在原稿上改写",
-				loading: panel.phase === "loading" ? (panel.rewrite === true ? "正在参考旧正文重写…" : "正在重掷正文…") : "",
+				hint: "不填意见是重新来一次；填了意见就在当前正文基础上改",
+				loading: panel.phase === "loading" ? (panel.rewrite ? "正在按意见改写正文…" : "正在重新生成正文…") : "",
 				error: panel.error,
 				value: guidance,
 				onChange: setGuidance,
 				placeholder: "指导意见（可选）",
 				examples: ["写得更长", "侧重心理描写", "加快节奏"],
-				submitLabel: "重掷正文",
-				submitTitle: "重新生成这一轮正文，模型不会看到当前这一版",
-				onSubmit: function () { generate(false); },
-				rewriteLabel: "参考旧正文重写",
-				rewriteTitle: "把当前正文一并发给模型，让它在原稿基础上按意见改写",
-				onRewrite: function () { generate(true); },
+				submitLabel: "生成并替换正文",
+				onSubmit: generate,
 				onCancel: function () { setRegenPanel(null); }
 			});
 		}

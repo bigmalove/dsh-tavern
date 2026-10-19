@@ -116,10 +116,10 @@ function createGlobalSettingsModule({ React, rpc, notifySettingsChanged, TavernD
                     description: "把历史里的正文和玩家消息都以工具参数的形式回放给模型，而不是普通对话文字；实测能明显降低续写被拒答的概率。本轮输入保持原样。需要模型支持工具调用，只影响发送给模型的历史，存档和界面不变。" }) : null,
                 h(PromptTemplateSettingsEntry),
                 h(ContextCompactionSettings),
-                h(ContextCompactionSettings),
                 h(TouchDiagnosticsSetting),
                 // Most players never need this; it lives at the bottom of 高级, folded.
-                h(HeaderItemsSettings)),            state.error ? React.createElement("div", { className: "dsh-tavern-settings-error", role: "alert" }, "保存失败：" + state.error) : null
+                h(HeaderItemsSettings)),
+            state.error ? React.createElement("div", { className: "dsh-tavern-settings-error", role: "alert" }, "保存失败：" + state.error) : null
         );
     }
 
