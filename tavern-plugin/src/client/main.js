@@ -824,6 +824,8 @@ window.__ModuleLoader__.load({
 
 // @include features/worldbook-library.js
 
+// @include features/worldbook-switcher.js
+
 // @include features/card-plugins.js
 
 // @include features/card-library.js
@@ -1027,6 +1029,14 @@ window.__ModuleLoader__.load({
 			ctx.effect(() => ctx.betterSidebar.registerTab({ id: "dsh-tavern:skills", title: "Skill 库", order: 8, single: true, component: props => React.createElement(TavernSkillsTab, { sessionId: props.scope.sessionId }) }), "dsh-tavern: Skill library");
             ctx.effect(() => ctx.betterSidebar.registerTab({ id: "dsh-tavern:card-memory", title: "改卡记忆", order: 9, single: true, component: props => React.createElement(TavernCardMemoryTab, { sessionId: props.scope.sessionId }) }), "dsh-tavern: card memory");
 			worldBookLibraryFeature.register({ ctx: ctx, appendMention: appendMention });
+			ctx.effect(function () {
+				return worldBookSwitcherFeature.register({
+					ctx: ctx,
+					openLibrary: function (source, sessionId) {
+						return openTavernSidebarTab(ctx, { type: "dsh-tavern:worldbooks", meta: source ? { worldBookSource: source } : null }, { sessionId: sessionId });
+					}
+				});
+			}, "dsh-tavern: worldbook switcher panel");
 			cardLibraryFeature.register({ ctx: ctx, appendMention: appendMention });
 			ctx.effect(function () {
 				reconcileLibraryTabTitles();
