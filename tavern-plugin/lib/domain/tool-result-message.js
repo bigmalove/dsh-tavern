@@ -35,11 +35,3 @@ export function toolResultsOf(message) {
   }
   return results
 }
-
-/** The text a tool returned, without depending on which shape it arrived in. */
-export function toolResultText(result) {
-  return partsOf(result && (result.content || result.parts))
-    .filter(part => part.type === 'text' && typeof part.text === 'string')
-    .map(part => part.text)
-    .join('')
-}

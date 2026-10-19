@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { sessionEvents } from './session-events.js'
 import { createSessionSurfaceMutator } from './session-surface-mutations.js'
-import { toolResultsOf, toolResultText } from './tool-result-message.js'
+import { toolResultsOf } from './tool-result-message.js'
 
 export const STORY_SUBMIT_TOOL_NAME = 'submit_story'
 export const STORY_SUBMIT_PROMPT = [
@@ -41,8 +41,9 @@ export function storySubmissionForTurn(session, turn) {
   }
   const messages = new Map()
   const calls = new Map()
-  // Receipts are collected by call id first; an exact echo wins, a reformatted
-  // one still counts. Both are only credible once the call itself was found.
+  // Any non-error receipt for this call proves the submission succeeded; the body
+  // comes from the call's own arguments, so a host that reformats the receipt
+  // cannot hide a submission.
   const receipts = new Map()
   for (let index = start + 1; index < events.length; index++) {
     const event = events[index]
@@ -64,7 +65,7 @@ export function storySubmissionForTurn(session, turn) {
       if (result.isError) continue
       const model = calls.get(result.toolCallId)
       if (!model) continue
-      receipts.set(result.toolCallId, { text: toolResultText(result), receiptIndex: Number(event.seq ?? index), model })
+      receipts.set(result.toolCallId, { receiptIndex: Number(event.seq ?? index), model })
     }
   }
   for (const [callId, receipt] of receipts) {
@@ -77,7 +78,6 @@ export function storySubmissionForTurn(session, turn) {
       text: content.trim(),
       content,
       toolCallId: callId,
-      echoed: receipt.text === content,
       storyToolSubmission: true
     }
   }

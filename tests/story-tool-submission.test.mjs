@@ -74,7 +74,6 @@ test('回执被宿主改写（截断/加前缀）时仍以调用参数里的正�
   const submission = storySubmissionForTurn(session, 2)
   assert.ok(submission, '回执不逐字相等也必须是提交')
   assert.equal(submission.text, content)
-  assert.equal(submission.echoed, false)
 })
 
 test('折叠失败只静默返回，不抛错也不回报结果', () => {
