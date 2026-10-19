@@ -23,7 +23,7 @@ test('移动端实际样式：顶栏、键盘、候选、面板、编辑器与�
     for (const width of [320, 360, 390, 430, 768, 1023]) {
       await page.setViewportSize({ width, height: 844 })
       await settle()
-      const selectors = ['[data-mobile-nav="toggle"]', '.dsh-tavern-play-fullscreen', '.dsh-tavern-header-settings', '.dsh-tavern-export-action', '[aria-label="资源面板"]']
+      const selectors = ['.dsh-tavern-play-fullscreen', '.dsh-tavern-header-settings', '.dsh-tavern-export-action', '[aria-label="资源面板"]']
       const rects = await Promise.all(selectors.map(box))
       for (let i = 0; i < rects.length; i++) {
         const rect = rects[i]
@@ -67,7 +67,7 @@ test('移动端实际样式：顶栏、键盘、候选、面板、编辑器与�
   })
 
   await t.test('真实插槽包装和全屏状态不缩小根页面，操作栏保持在可用区顶部', async () => {
-    assert.equal(await page.locator('[data-slot="conversation.session.header"] > header').count(), 1)
+    assert.equal(await page.locator('[data-slot="conversation.header"] > header').count(), 1)
     for (const width of [390, 850, 1280]) {
       await page.setViewportSize({ width, height: 844 })
       await page.evaluate(() => document.documentElement.classList.add('dsh-tavern-play-fullscreen'))
@@ -121,7 +121,7 @@ test('移动端实际样式：顶栏、键盘、候选、面板、编辑器与�
     for (const width of [1024, 1280, 1440]) {
       await page.setViewportSize({ width, height: 900 }); await settle()
       assert.equal(await page.evaluate(() => document.documentElement.classList.contains('dsh-tavern-coarse-play')), false)
-      assert.equal(await page.locator('#frame').evaluate(el => getComputedStyle(el).position), 'static')
+      assert.equal(await page.locator('#frame').evaluate(el => getComputedStyle(el).position), 'relative', '桌面保持宿主外壳的定位，不被钉到可视区')
     }
     await page.evaluate(() => window.releaseViewport())
     assert.equal(await page.evaluate(() => document.documentElement.style.getPropertyValue('--dsh-vv-height')), '')
@@ -140,6 +140,18 @@ test('移动端实际样式：顶栏、键盘、候选、面板、编辑器与�
     })
     await page.setViewportSize({ width: 360, height: 640 }); await settle()
     assert.equal((await box('#frame')).height, 640)
+  })
+
+  await t.test('全屏右栏打开后盖住输入区和候选按钮，面板底部内容不被遮挡', async () => {
+    await page.setViewportSize({ width: 390, height: 844 }); await install(page)
+    await page.getByRole('button', { name: '资源面板', exact: true }).click(); await settle()
+    for (const selector of ['[data-composer-card]', '.dsh-tavern-dock-actions']) {
+      const covered = await page.locator(selector).evaluate(el => {
+        const r = el.getBoundingClientRect(), hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)
+        return document.querySelector('[data-sidebar-right-panel]').contains(hit)
+      })
+      assert.equal(covered, true, selector)
+    }
   })
 
   await t.test('人物卡、世界书、预设、设置与弹窗在窄屏键盘上方可滚动', async () => {
@@ -248,12 +260,19 @@ test('移动端实际样式：顶栏、键盘、候选、面板、编辑器与�
     const hostDialogRule = `@media (max-width: 1023px) and (pointer: coarse) {
       [aria-modal="true"]:not(:has(> :first-child > :last-child > button)) { max-width: calc(100vw - 32px); }
     }`
-    await page.setContent(`<style>body{margin:0}${style}${hostDialogRule}
-      .plain{position:absolute;inset:0}</style>
-      <div class="dsh-tavern-embed plain" id="capped" role="dialog" aria-modal="true"><iframe></iframe></div>
-      <div class="dsh-tavern-embed plain" id="uncapped" role="dialog"><iframe></iframe></div>`)
-    assert.equal(Math.round((await box('#capped')).width), 360 - 32, '带 aria-modal 会被宿主限宽规则截掉 32px')
-    assert.equal(Math.round((await box('#uncapped')).width), 360, '只留 role=dialog 的外壳铺满视口')
+    // 规则挂在 (pointer: coarse) 下，必须在触屏页里断言；桌面页这一档不命中，量出来恒为满宽。
+    const phone = await browser.newPage({ viewport: { width: 360, height: 800 }, hasTouch: true })
+    try {
+      await phone.setContent(`<style>body{margin:0}${style}${hostDialogRule}
+        .plain{position:absolute;inset:0}</style>
+        <div class="dsh-tavern-embed plain" id="capped" role="dialog" aria-modal="true"><iframe></iframe></div>
+        <div class="dsh-tavern-embed plain" id="uncapped" role="dialog"><iframe></iframe></div>`)
+      const phoneWidth = selector => phone.locator(selector).evaluate(el => Math.round(el.getBoundingClientRect().width))
+      assert.equal(await phoneWidth('#capped'), 360 - 32, '带 aria-modal 会被宿主限宽规则截掉 32px')
+      assert.equal(await phoneWidth('#uncapped'), 360, '只留 role=dialog 的外壳铺满视口')
+    } finally {
+      await phone.close()
+    }
   })
   assert.deepEqual(errors, [])
 })

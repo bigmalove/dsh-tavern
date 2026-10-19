@@ -92,6 +92,9 @@ function createGlobalSettingsModule({ React, rpc, notifySettingsChanged, TavernD
                 ...children);
         }
         return h("div", { className: "dsh-tavern-settings-section dsh-tavern-global-settings" },
+            h("p", { className: "dsh-tavern-gs-notice" }, "遇到问题或想交流玩法，欢迎加入 ",
+                h("a", { href: "https://discord.gg/hYAEjKnpra", target: "_blank", rel: "noopener noreferrer" }, "Discord 交流群"),
+                "。本项目没有官方的 QQ 群、微信群。"),
             group("默认模型", "用于新游戏和新的卡片工作台对话，已有对话保持当前配置。建议使用 High 推理强度；Max 容易过度思考、增加等待。",
             h("div", { className: "dsh-tavern-gs-card" },
             React.createElement(TavernDefaultModelSetting, { label: "默认前台模型", title: "前台模型", description: "写正文、扮演角色，直接决定剧情质量", fallback: "使用 DSH 默认模型", selection: state.defaultForegroundModel, catalog: state.modelCatalog, disabled: state.loading || state.busy, onChange: selection => saveDefault("defaultForegroundModel", selection) }),
@@ -102,6 +105,9 @@ function createGlobalSettingsModule({ React, rpc, notifySettingsChanged, TavernD
             group("新游戏默认", "开局时继承，开局后可在本局设置中单独修改。",
                 state.settings ? h(GlobalPlayDefaults, { settings: state.settings }) : null,
                 h(TavernConversationWritingSkills, { globalDefaults: true })),
+            group("游戏内容", "进行中的游戏也按这些设置采用最新内容。",
+                state.settings ? h(SettingSwitch, { settings: state.settings, name: "worldbookAutoSync", title: "世界书自动更新",
+                    description: "人物卡绑定的世界书一改，进行中的游戏下一轮就用最新内容，不必再点「重新加载人物卡和世界书」。旧存档第一次仍需点一次；人物卡本身、开场变量和变量结构也仍需手动重新加载；本局脚本写进世界书的内容会被这次更新覆盖。" }) : null),
             group("显示与交互", "",
                 state.settings ? h(SettingSwitch, { settings: state.settings, name: "autoOpenStatusPanel", title: "进入游戏时打开酒馆状态",
                     description: "进入或切换到一局游戏时，右侧面板自动展开并显示本局设置和酒馆状态。关闭后右侧面板保持你上次的样子。" }) : null,

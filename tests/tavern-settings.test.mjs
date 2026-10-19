@@ -28,6 +28,13 @@ test('进入游戏时打开酒馆状态：默认开，可以关', () => {
   assert.throws(() => applyTavernSettingsPatch({}, { autoOpenStatusPanel: 'no' }), /布尔值/)
 })
 
+test('世界书自动更新：默认开，可以关', () => {
+  assert.equal(presentTavernSettings({}, {}).worldbookAutoSync, true, '世界书改动默认进入进行中的游戏')
+  const off = applyTavernSettingsPatch({}, { worldbookAutoSync: false })
+  assert.equal(presentTavernSettings(off, {}).worldbookAutoSync, false)
+  assert.throws(() => applyTavernSettingsPatch({}, { worldbookAutoSync: 'no' }), /布尔值/)
+})
+
 test('系统提示词方案：切换时保存当前内容，生效内容始终在顶层字段', () => {
   let document = applyTavernSettingsPatch({ promptOverrides: { story: 'A' }, systemAppendEnabled: false }, { promptSet: { action: 'create', name: '快节奏' } })
   assert.equal(document.promptOverrides, undefined)

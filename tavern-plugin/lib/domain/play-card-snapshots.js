@@ -1,6 +1,7 @@
 import { worldbookContentDigest } from './worldbook-version.js'
 import { createHash } from 'node:crypto'
 import { constantWorldBookContext } from './worldbook-recall.js'
+import { inspectWorldBookDocument } from './worldbook-resource.js'
 import { sanitizeAgentProjectionText } from './runtime-content-projection.js'
 import { defaultUserPreferenceProfile } from './user-preference-profile.js'
 
@@ -13,8 +14,10 @@ function cardAgent(chat) { return chat.mode === 'card' && chat.cardEditContext?.
 function preferenceOnly(chat) { return cardAgent(chat) && chat.cardReferenceContext?.version !== 1 }
 
 /** Owns snapshot preparation, migration, persistence and concurrent build sharing. */
-export function createPlayCardSnapshots({ worldBooks, planner, readCard, writeChat, captureSceneWorldbook, userPreferenceProfile, logger = console }) {
+export function createPlayCardSnapshots({ worldBooks, planner, readCard, writeChat, updateChat, settings, captureSceneWorldbook, userPreferenceProfile, logger = console }) {
   const pending = new Map()
+  const syncing = new Set()
+  const lastSyncWarning = new Map()
 
   async function constantContext(chat, card) {
     try { return constantWorldBookContext({ worldBook: await worldBooks.bound(chat.cardPath, card, chat) }).context }
@@ -132,25 +135,113 @@ export function createPlayCardSnapshots({ worldBooks, planner, readCard, writeCh
     return cardContentDigest({ card: cardContentDigest(card), worldbook: worldbookContentDigest(snapshot) })
   }
 
-  async function updateStatus(chat, card) {
+  // One library observation serves both the badge and the automatic refresh.
+  async function observe(chat, card) {
+    const snapshot = bookSnapshot(await liveBook(chat, card))
+    return { snapshot, digest: updateDigest(card, snapshot) }
+  }
+
+  function compare(chat, observed) {
+    const previous = chat.worldbookLibraryDigest ?? chat.openingWorldbookSnapshot?.libraryDigest
+    // Legacy snapshots may already contain local script writes. Without the
+    // original resource version, request explicit synchronization instead of
+    // silently adopting the current library as the historical baseline.
+    const worldbookChanged = previous ? previous !== observed.snapshot.libraryDigest
+      : worldbookContentDigest({ source: chat.openingWorldbookSnapshot?.source }) !== worldbookContentDigest({ source: observed.snapshot.source })
+    const worldbookSyncRequired = !previous && !!(observed.snapshot.source || observed.snapshot.document || chat.openingWorldbookSnapshot?.source || chat.openingWorldbookSnapshot?.document)
+    return { previous, worldbookChanged, worldbookSyncRequired }
+  }
+
+  function cardStatusBase(chat, card) {
     const cardChanged = !chat.cardContentDigest || chat.cardContentDigest !== cardContentDigest(card)
     const migrations = (card?.extensions?.dsh_tavern?.stateMigrations || []).filter(plan => !chat.cardStateMigrationIds?.includes(plan.id)).flatMap(plan => plan.operations || []).map(op => op.op === 'move' ? op.from + ' → ' + op.path : op.op === 'convert' ? op.path + ' → ' + op.type : '删除 ' + op.path)
-    const base = { legacy: !chat.cardContentDigest, cardChanged, migrations }
+    return { legacy: !chat.cardContentDigest, cardChanged, migrations }
+  }
+
+  async function updateStatus(chat, card, observed) {
+    const base = cardStatusBase(chat, card)
     try {
-      const snapshot = bookSnapshot(await liveBook(chat, card))
-      const digest = updateDigest(card, snapshot)
-      const previous = chat.worldbookLibraryDigest ?? chat.openingWorldbookSnapshot?.libraryDigest
-      // Legacy snapshots may already contain local script writes. Without the
-      // original resource version, request explicit synchronization instead of
-      // silently adopting the current library as the historical baseline.
-      const worldbookChanged = previous ? previous !== snapshot.libraryDigest
-        : worldbookContentDigest({ source: chat.openingWorldbookSnapshot?.source }) !== worldbookContentDigest({ source: snapshot.source })
-      const worldbookSyncRequired = !previous && !!(snapshot.source || snapshot.document || chat.openingWorldbookSnapshot?.source || chat.openingWorldbookSnapshot?.document)
-      return { ...base, available: cardChanged || worldbookChanged || worldbookSyncRequired, worldbookChanged, worldbookSyncRequired, digest }
+      const current = observed ?? await observe(chat, card)
+      const { worldbookChanged, worldbookSyncRequired } = compare(chat, current)
+      const available = base.cardChanged || worldbookChanged || worldbookSyncRequired
+      return { ...base, available, worldbookChanged, worldbookSyncRequired, digest: current.digest }
     } catch (error) {
       // Missing/corrupt library resources must not prevent reading a saved game.
       return { ...base, available: true, worldbookChanged: true, digest: '', error: str(error?.message || error) }
     }
+  }
+
+  /** Constant entries live in the card prefix; a changed set must rebuild it. */
+  function constantText(document) {
+    try { return constantWorldBookContext({ worldBook: document ? { view: inspectWorldBookDocument(document) } : null }).context }
+    catch { return '' }
+  }
+
+  // Automatic mode replaces this game's frozen copy with the library on the next
+  // read, without touching the card definition, its initvars or the MVU state.
+  // Explicit reload still owns those, so a card edit keeps its own button.
+  async function autoSync(chat, card, options = {}) {
+    if (typeof updateChat !== 'function' || typeof settings !== 'function') return null
+    if (!usesFixedContext(chat) || cardAgent(chat) || preferenceOnly(chat)) return null
+    if (chat.openingWorldbookSnapshot?.version !== 1) return null
+    if (chat.regenInProgress === true || options.busy === true) return null
+    const active = options.settings ?? await settings()
+    if (active.worldbookAutoSync !== true) return null
+    const key = chat.id || chat
+    if (syncing.has(key)) return null
+    syncing.add(key)
+    try {
+      const definition = card ?? await readCard(chat.cardPath)
+      let observed
+      try { observed = await observe(chat, definition) }
+      catch (error) {
+        // Views retry every refresh: repeat the same failure only once.
+        const message = str(error && error.message || error)
+        if (lastSyncWarning.get(key) !== message) {
+          lastSyncWarning.set(key, message)
+          if (lastSyncWarning.size > 64) lastSyncWarning.delete(lastSyncWarning.keys().next().value)
+          logger.warn('dsh-tavern: 世界书自动更新读取失败，保留本局快照：', message)
+        }
+        return null
+      }
+      lastSyncWarning.delete(key)
+      const change = compare(chat, observed)
+      // A legacy save has no recorded baseline: its copy may already contain
+      // script writes, so only an explicit reload may replace it.
+      if (!change.worldbookChanged) return { observed, applied: false }
+      const next = observed.snapshot
+      const patch = { openingWorldbookSnapshot: next, worldbookLibraryDigest: next.libraryDigest,
+        preparedWorldBook: null, preparedWorldBookContext: '' }
+      if (constantText(chat.openingWorldbookSnapshot.document) !== constantText(next.document)) {
+        // Constant entries live in the fixed prefix. Rebuild it from the card this
+        // save was opened with, so an automatic update cannot pull a newer card
+        // definition into the game behind the explicit reload's back.
+        try {
+          Object.assign(patch, await build({ ...chat, openingWorldbookSnapshot: next },
+            chat.cardDefinitionSnapshot || definition, true))
+          patch.openingWorldbookSnapshot = next
+          patch.cardContextRevision = (Number(chat.cardContextRevision) || 0) + 1
+        } catch (error) {
+          // Keep the old copy instead of a prefix that disagrees with recall.
+          logger.warn('dsh-tavern: 常驻世界书已变化但人物卡前缀重建失败，稍后重试：', str(error && error.message || error))
+          return null
+        }
+      }
+      // A save applied while this read was running already re-baselined the
+      // snapshot; keep its version instead of writing a stale one.
+      let applied = false
+      const saved = await updateChat(chat.id, current => {
+        const latest = current.worldbookLibraryDigest ?? current.openingWorldbookSnapshot?.libraryDigest
+        if (latest !== change.previous) return current
+        applied = true
+        return Object.assign({}, current, patch)
+      }, { source: 'card-context.worldbook-auto' })
+      if (!applied || !saved) return { observed, applied: false }
+      // Callers keep using this object for the rest of the read; adopt the
+      // committed values the same way ensure() adopts its own write.
+      try { Object.assign(chat, patch) } catch { /* a projection may be frozen; the save above is authoritative */ }
+      return { observed, applied: true, patch, saved }
+    } finally { syncing.delete(key) }
   }
 
   async function replacement(chat, card, expectedDigest) {
@@ -190,5 +281,5 @@ export function createPlayCardSnapshots({ worldBooks, planner, readCard, writeCh
     }
   }
 
-  return Object.freeze({ prepare, ensure, settled, constantContext, updateStatus, replacement, preferenceReplacement })
+  return Object.freeze({ prepare, ensure, settled, constantContext, updateStatus, autoSync, replacement, preferenceReplacement })
 }

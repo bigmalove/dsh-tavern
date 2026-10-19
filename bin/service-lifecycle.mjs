@@ -171,6 +171,11 @@ async function serviceState() {
   return { port, record: pidAlive ? record : legacyRecord, portOpen, ready }
 }
 
+export function legacyServiceOwnedHere(command, host = RUNTIME_HOST, root = DSH_ROOT) {
+  if (host === 'desktop') return command.includes('dsh-desktop-host')
+  return command.includes(path.join(root, 'runtime') + path.sep) && command.includes('dsh --profile')
+}
+
 function findLegacyService(port) {
   if (process.platform === 'win32' || !commandExists('lsof')) return null
   const listeners = spawnSync('lsof', ['-tiTCP:' + port, '-sTCP:LISTEN'], { encoding: 'utf8' })
@@ -178,7 +183,9 @@ function findLegacyService(port) {
   const pids = listeners.stdout.split(/\s+/).map(Number).filter(Number.isInteger)
   for (const pid of pids) {
     const processInfo = spawnSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' })
-    if (processInfo.status === 0 && processInfo.stdout.includes(`dsh --profile ${PROFILE}`)) {
+    // Same profile name is not enough: the CLI install (~/.dsh-tavern) and the desktop install (~/.dsh)
+    // both serve `tavern`, from different data. Adopt only this install's own runtime.
+    if (processInfo.status === 0 && processInfo.stdout.includes(`--profile ${PROFILE}`) && legacyServiceOwnedHere(processInfo.stdout)) {
       return { pid, port, profile: PROFILE, source: SOURCE_ROOT, legacy: true }
     }
   }

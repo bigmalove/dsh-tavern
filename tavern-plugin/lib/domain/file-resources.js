@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { createDurableFilePromotion } from '../durable-file-promotion.js'
 import { createResourceMutationJournal } from './resource-mutation-journal.js'
 import { inspectPreset } from './preset-reading.js'
+import { isPng, pngCardTextChunk, pngRawTextChunks, pngWithTextChunks } from './card-assets.js'
 
 const KIND_DIR = Object.freeze({ card: 'cards', preset: 'presets', source: 'materials', script: 'scripts', worldbook: 'worldbooks' })
 const INTERNAL_FILE_PATTERNS = Object.freeze([/\.write-lock$/i, /\.pending-\d+-[0-9a-f-]+$/i, /\.staging-[0-9a-f-]+$/i])
@@ -202,6 +203,39 @@ export function createFileResourceStore(options = {}) {
     const originalName = await originalCardName(normalized)
     if (originalName === null || path.extname(originalName).toLowerCase() !== '.png') return undefined
     return await readFile(path.join(path.dirname(absolute(normalized, true)), originalName))
+  }
+
+  // Gives a card a cover by making its original a card PNG: the new pixels, carrying the
+  // original's own card data (a JSON original's text, or a PNG original's text chunks).
+  // A card with no original at all embeds `fallbackCardText()`. The working copy is untouched.
+  async function setCardCover(relative, image, fallbackCardText) {
+    const normalized = normalizeResourcePath(relative, 'card')
+    if (!await exists(absolute(normalized))) throw new Error('人物卡不存在: ' + normalized)
+    if (!isPng(image)) throw new Error('封面必须是 PNG 图片')
+    const originalDir = path.dirname(absolute(normalized, true))
+    const stem = path.posix.basename(normalized, path.posix.extname(normalized))
+    const originalName = await originalCardName(normalized)
+    const original = originalName === null ? null : path.join(originalDir, originalName)
+    const wasPng = originalName !== null && path.extname(originalName).toLowerCase() === '.png'
+    let chunks
+    if (wasPng) chunks = pngRawTextChunks(await readFile(original))
+    else {
+      const text = original ? (await readFile(original)).toString('utf8') : String(await fallbackCardText())
+      let spec = ''
+      try { spec = String(JSON.parse(text)?.spec || '') } catch (_) {}
+      chunks = [pngCardTextChunk('chara', text)]
+      if (spec === 'chara_card_v3') chunks.push(pngCardTextChunk('ccv3', text))
+    }
+    const bytes = pngWithTextChunks(image, chunks)
+    await mkdir(originalDir, { recursive: true })
+    const target = path.join(originalDir, stem + '.png')
+    const temp = target + '.' + randomUUID() + '.tmp'
+    await writeFile(temp, bytes)
+    try {
+      if (original && !wasPng) await rm(original, { force: true })
+      await rename(temp, target)
+    } catch (error) { await rm(temp, { force: true }); throw error }
+    return { path: normalized }
   }
 
   async function cardImagePreview(relative) {
@@ -1029,5 +1063,5 @@ export function createFileResourceStore(options = {}) {
     return result
   }
 
-  return Object.freeze({ globalWorldBookSources, setGlobalWorldBook: serializeWorldBookMutation(setGlobalWorldBook), absolute, copyCard, bindMaterial: serializeWorldBookMutation(bindMaterial), bindWorldBook: serializeWorldBookMutation(bindWorldBook), bindWorldBooks: serializeWorldBookMutation(bindWorldBooks), cardsForMaterial, cardImagePreview, ensure, ensureCardWorkspace, originalCardPayload: relative => originalCardPayload(normalizeResourcePath(relative, 'card')), hasCardImage, importCard, importText: serializeWorldBookMutation(importText), importBoundScript: serializeWorldBookMutation(importBoundScript), importWorldBook, list, metadata, migrateLegacy, readCard, readCardImage, readText, remove: serializeWorldBookMutation(remove), rename: serializeWorldBookMutation(renameResource), replaceScript, restoreCard, scriptBindingsForCards, scriptForCard, unbindMaterial: serializeWorldBookMutation(unbindMaterial), unbindWorldBook: serializeWorldBookMutation(unbindWorldBook), worldBookBindingForCard, writeWorking })
+  return Object.freeze({ globalWorldBookSources, setGlobalWorldBook: serializeWorldBookMutation(setGlobalWorldBook), absolute, copyCard, bindMaterial: serializeWorldBookMutation(bindMaterial), bindWorldBook: serializeWorldBookMutation(bindWorldBook), bindWorldBooks: serializeWorldBookMutation(bindWorldBooks), cardsForMaterial, cardImagePreview, ensure, ensureCardWorkspace, originalCardPayload: relative => originalCardPayload(normalizeResourcePath(relative, 'card')), hasCardImage, importCard, importText: serializeWorldBookMutation(importText), importBoundScript: serializeWorldBookMutation(importBoundScript), importWorldBook, list, metadata, migrateLegacy, readCard, readCardImage, readText, remove: serializeWorldBookMutation(remove), rename: serializeWorldBookMutation(renameResource), replaceScript, restoreCard, scriptBindingsForCards, setCardCover, scriptForCard, unbindMaterial: serializeWorldBookMutation(unbindMaterial), unbindWorldBook: serializeWorldBookMutation(unbindWorldBook), worldBookBindingForCard, writeWorking })
 }

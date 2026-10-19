@@ -100,6 +100,8 @@
 
 			// @include modules/story-ledger.js
 
+			// @include modules/mvu-variables.js
+
 			// @include script-navigation.js
 
         function TavernSaveUpgrade(props) {
@@ -412,7 +414,8 @@
 					),
 					h(TavernPluginTasks, { sessionId: props.sessionId, activity: view.activity, busy: running || view.activity?.busy || view.activity?.phase === "pending" }),
 					h(TavernPluginStatusSections, { sessionId: props.sessionId }),
-					h(TavernLedger, { sessionId: props.sessionId, ledger: view.ledger, ledgerTask: view.ledgerTask, busy: running || view.activity?.busy })
+					h(TavernLedger, { sessionId: props.sessionId, ledger: view.ledger, ledgerTask: view.ledgerTask, busy: running || view.activity?.busy }),
+					h(TavernMvuVariables, { sessionId: props.sessionId, view: view })
 
 				)
 			);
@@ -1888,11 +1891,8 @@
                 setMore(null);
                 if (id === "header:export") return;
                 if (id === "dsh-tavern:status") { props.openStatus(owner); return; }
-                // 世界书按钮弹出的快捷面板；「完整」再进右侧栏世界书库。
-                if (id === "dsh-tavern:worldbooks" && node) {
-                    worldBookSwitcherFeature.open(node, owner);
-                    return;
-                }
+                // 世界书按钮弹出快捷面板（「完整」再进右侧栏世界书库）。
+                if (id === "dsh-tavern:worldbooks" && node) { worldBookSwitcherFeature.open(node, owner); return; }
                 openTavernSidebarTab(props.ctx, { type: id }, { sessionId: owner });
             }
             function item(id) {

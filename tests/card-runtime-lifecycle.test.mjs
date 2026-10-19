@@ -453,8 +453,12 @@ for (const completes of [false, true]) test(`写入拒绝的错误码到达脚�
   const reply = frame.contentWindow.messages.find(x => x.requestId === 'write')
   if (completes) h.message(frame, 'dsh-tavern-helper-event-complete', { eventId: 'rejected-event', scriptId: 'script', error: reply.error, errorCode: reply.errorCode })
   else {
-    now = 20
-    for (const timer of [...h.timers.values()]) if (timer.delay < 10) timer.run()
+    // 看门狗按时运行，沙箱一直不回应才算失联。
+    for (let step = 0; step < 10 && !failure; step++) {
+      now += 3
+      for (const [key, timer] of [...h.timers]) if (timer.delay < 10) { h.timers.delete(key); timer.run() }
+      await tick()
+    }
   }
   await done
   h.runtime.dispose()
@@ -462,6 +466,26 @@ for (const completes of [false, true]) test(`写入拒绝的错误码到达脚�
   assert.match(failure.message, /不属于当前 MVU 结算事件/)
   assert.equal(completes ? failure.code : failure.cause?.code, 'MVU_SETTLEMENT_EVENT_MISMATCH')
   if (!completes) assert.equal(diagnostics.at(-1).causeCode, 'MVU_SETTLEMENT_EVENT_MISMATCH')
+})
+
+test('页面被挂起后恢复：先重新探测再判失联，期间续租；之后持续无回应仍判失联', async () => {
+  let now = 0
+  const h = sandbox({ now: () => now, eventTimeoutMs: 30 })
+  h.runtime.sync('A', view())
+  const frame = h.ready()
+  let failure
+  h.runtime.emit('UPDATE', [1], context(), [], 'stalled').catch(error => { failure = error })
+  await tick()
+  const queries = () => frame.contentWindow.messages.filter(x => x.type === 'dsh-tavern-helper-event-query').length
+  const runWatchdog = async () => { for (const [key, timer] of [...h.timers]) if (timer.delay < 30) { h.timers.delete(key); timer.run() } await tick() }
+  now = 41000
+  assert.equal(h.runtime.eventResponsive('stalled'), true, '看门狗还没跑时不放弃租约')
+  await runWatchdog()
+  assert.equal(failure, undefined)
+  assert.equal(queries(), 1)
+  for (let step = 0; step < 20 && !failure; step++) { now += 10; await runWatchdog() }
+  assert.equal(failure?.code, 'TAVERN_SCRIPT_RUNTIME_UNREACHABLE')
+  h.runtime.dispose()
 })
 
 test('start 已接收但响应丢失时重试同一 start，不先执行脚本或报告失败', async t => {

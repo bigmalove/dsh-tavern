@@ -9,6 +9,7 @@ import { resourceSaveSummary, observeResourceSave } from './resource-save-summar
 import { projectFullPromptTemplateState, applyFullPromptTemplateState, validateFullPromptTemplateSave, expandFullPromptTemplatePatch } from './full-prompt-template-state.js'
 import { mutateScriptPrompts } from './tavern-script-prompts.js'
 import { exportSillyTavernWorldBook, inspectWorldBookDocument, updateWorldBookDocument } from './worldbook-resource.js'
+import { worldbookContentDigest } from './worldbook-version.js'
 import { isDeepStrictEqual } from 'node:util'
 import { applyChatPluginData, validateChatPluginRequest, assertPluginJson } from './tavern-chat-plugin-data.js'
 import {
@@ -464,9 +465,15 @@ export function createTavernScriptHostAdapter(options = {}) {
     const view = inspectWorldBookDocument(document)
     replaceTavernHelperWorldbookOperations(view, projectTavernHelperWorldbook(view).entries)
     // Legacy chats have no opening snapshot; first merged-book write makes a private copy.
-    resolved.chat.openingWorldbookSnapshot = {
+    const snapshot = {
       ...(resolved.chat.openingWorldbookSnapshot || { version: 1, source: structuredClone(resolved.record.source) }), document
     }
+    // Pin the library version this write started from. Automatic refresh must not
+    // treat the script's own entry as a library edit and undo it next turn.
+    if (snapshot.libraryDigest === undefined) {
+      snapshot.libraryDigest = worldbookContentDigest({ source: resolved.record.source, document: resolved.record.document })
+    }
+    resolved.chat.openingWorldbookSnapshot = snapshot
     await options.writeChat(resolved.chat, { source: 'tavern-helper.local-worldbook' })
     return { ...resolved.record, document, view }
   }

@@ -1081,9 +1081,9 @@
 			) : null;
 			const playPicker = h("div", { ref: openingLayoutRef, className: "dsh-tavern-card-picker", role: "dialog", "aria-modal": "true", "aria-label": openingPicker ? "游戏准备" : "选择人物卡开始游玩" }, pickerError, openingPicker ? h(React.Fragment, null, importChoice, h("div", { style: { display: importChoice ? "none" : "contents" } }, openingChoice)) : h(React.Fragment, null,
 				h("div", { className: "dsh-tavern-card-picker-head" }, h("span", null, "选择人物卡 · 开始游玩"), h("span", { className: "dsh-tavern-spacer" }), cardBatch.managing ? null : h("button", { className: "dsh-tavern-btn", disabled: busy || !cards.length, onClick: function () { cardBatch.begin(); } }, "批量管理"), h(MobileCardImportButton, { inputRef: fileRef, disabled: busy, onImported: async function () { await refresh(); notifyDataChanged(["cards"]); } }),
-					// No accept: Android SAF filters by MIME, and `.dshsave`/`.jsonl` have no
-					// registered type, so any accept list hides the very file being imported.
-					// The import validates the extension and says what it accepts.
+					// No accept list: Android's storage framework filters by MIME type, and
+					// `.dshsave`/`.jsonl` have no registered type, so a list would hide the very
+					// file being imported. The import validates the extension instead.
 					h("input", { ref: saveImportFile, type: "file", accept: TAVERN_CARD_FILE_ACCEPT, style: { display: "none" }, onChange: function (event) { const file = event.target.files && event.target.files[0]; event.target.value = ""; if (file) importGameSave(file); } }),
 					h("input", { ref: sillyTavernChatFile, type: "file", accept: TAVERN_CARD_FILE_ACCEPT, style: { display: "none" }, onChange: function (event) { const file = event.target.files && event.target.files[0]; event.target.value = ""; void chooseSillyTavernChat(file); } }),
 					h("div", { className: "dsh-tavern-more-actions dsh-tavern-save-import-menu", ref: saveImportMenu },
@@ -1340,12 +1340,13 @@
 					openConversationSettingsTab: async function (sessionId) {
 						if (narrowLayout()) return closeNarrowSidebar();
 						if (tavernSettingsTabsShownFor === sessionId) return;
-						// The setting is off: do not claim the session, so turning it on later still opens the tabs.
-						if (!await tavernAutoOpenStatus.read()) return;
+						// Claim before awaiting the setting, so a second call during the read cannot open twice.
+						tavernSettingsTabsShownFor = sessionId;
+						// The setting is off: release the claim, so turning it on later still opens the tabs.
+						if (!await tavernAutoOpenStatus.read()) { if (tavernSettingsTabsShownFor === sessionId) tavernSettingsTabsShownFor = ""; return; }
 						// The column already shows one of these pages (it was never closed, or the sidebar remounted):
 						// opening again expands the column and focuses the page, pulling it over the story for nothing.
-						if (tavernRightColumnShowing(ctx, ["dsh-tavern:conversation-settings", "dsh-tavern:status"])) { tavernSettingsTabsShownFor = sessionId; return; }
-						tavernSettingsTabsShownFor = sessionId;
+						if (tavernRightColumnShowing(ctx, ["dsh-tavern:conversation-settings", "dsh-tavern:status"])) return;
 						const opened = await openTavernSidebarTab(ctx, { type: "dsh-tavern:conversation-settings" }, { sessionId: sessionId }) && await openTavernSidebarTab(ctx, { type: "dsh-tavern:status" }, { sessionId: sessionId });
 						// Not opened (the player already moved on, or the host refused): try again next time this game is entered.
 						if (!opened) { if (tavernSettingsTabsShownFor === sessionId) tavernSettingsTabsShownFor = ""; return; }

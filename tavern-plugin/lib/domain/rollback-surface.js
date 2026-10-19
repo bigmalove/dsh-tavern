@@ -508,12 +508,11 @@ export function regenerationProjection(replacement, data, operationId) {
 /**
  * Idempotent: each replacement reuses its id and sources, so a retry after a crash writes nothing twice.
  *
- * A tool-submitted round has no streamed answer of its own: its body only ever
- * existed as a replacement copy, and the human transcript renders append-origin
- * events ("replacement copies stay model-only"). Regenerating such a round hides
- * the old turn and leaves the new one empty — the body is nowhere on screen.
- * Give it a transcript copy first, then shadow the whole range including that
- * copy, exactly like the fold does for a live submission.
+ * The transcript draws append-origin events only; a replacement stays model-only.
+ * A round whose body exists only as a replacement (it was submitted through a tool
+ * call, so it never streamed an answer of its own) therefore renders as nothing
+ * after regenerating. Give it a transcript copy, then shadow the range including
+ * that copy — the same shape the fold writes for a live submission.
  */
 export function applyRegenerationProjection(session, projection) {
   const events = sessionEvents(session)

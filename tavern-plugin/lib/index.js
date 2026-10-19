@@ -17,6 +17,7 @@ import { registerGameplayTools } from './tools/gameplay.js'
 import { registerUserProfileTools } from './tools/user-profile.js'
 import { registerSkillTools } from './tools/skills.js'
 import { registerCardReadingTools } from './tools/card-reading.js'
+import { registerCardCoverTools } from './tools/card-cover.js'
 import { createCardValidationCheck } from './tools/card-validation-check.js'
 import { createSkillGatedTools } from './domain/skill-gated-tools.js'
 import { registerPlayChatTool } from './tools/play-chat.js'
@@ -179,7 +180,7 @@ import { POSTURE_SUBMIT_TOOL, POSTURE_SUBMIT_TOOL_NAME, lastSubmittedPosture, no
 import { createCastPresentation } from './domain/cast-presentation.js'
 import { createCastAssets } from './domain/cast-assets.js'
 import { createSpeech } from './domain/speech.js'
-import { buildCharx, cardImport, cardImportFromCard } from './domain/card-assets.js'
+import { buildCharx, cardImport, cardImportFromCard, pngCardTextChunk, pngWithTextChunks } from './domain/card-assets.js'
 import { createAssetPacks } from './domain/asset-packs.js'
 import { readCardArchive } from './domain/card-archive.js'
 import { openZipFile } from './domain/zip-file.js'
@@ -1291,6 +1292,22 @@ export async function apply(ctx) {
     const name = str(document?.data?.name || cardPreparation.project(workspace).name || '人物卡')
     return { name, bytes: buildCharx({ document, cover: image ? stripPngTextChunks(image) : null, manifest, characterName: name, readFile: file => files.get(file) }) }
   }
+  async function presentCardText(cardPath) {
+    const workspace = await readCardWorkspace(cardPath)
+    if (workspace === undefined) throw Object.assign(new Error('人物卡不存在: ' + cardPath), { code: 'TAVERN_NOT_FOUND' })
+    const document = cardPreparation.present({ card: workspace, as: 'sillytavern-v3', characterBook: await worldBooks.characterBookForCard(cardPath) })
+    return { document, text: JSON.stringify(document) }
+  }
+  // A standard card PNG: the cover's pixels carrying the current working card, as `chara`
+  // (what older tools read) and `ccv3` (what SillyTavern reads first).
+  async function exportCardPng(input) {
+    const cardPath = normalizeResourcePath(input, 'card')
+    const { document, text } = await presentCardText(cardPath)
+    const image = await fileResources.readCardImage(cardPath).catch(() => undefined)
+    if (!image) throw Object.assign(new Error('人物卡还没有封面，请先用 tavern_set_card_cover 配封面'), { code: 'TAVERN_NOT_FOUND' })
+    const name = str(document?.data?.name || '人物卡')
+    return { name, bytes: pngWithTextChunks(image, [pngCardTextChunk('chara', text), pngCardTextChunk('ccv3', text)]) }
+  }
   const cardSummaries = createCardSummaryCache({
     absolute: cardPath => fileResources.absolute(cardPath),
     read: async cardPath => {
@@ -2150,9 +2167,16 @@ export async function apply(ctx) {
     }
     return Object.assign(cardPreparation.present({ card: card, as: 'view' }), { path: str(card.path || chat.cardPath) })
   }
-  async function cardUpdateStatus(chat) {
-    try { return await playCardSnapshots.updateStatus(chat, await readCard(chat.cardPath)) }
-    catch (error) { return {available:true,error:String(error.message || error)} }
+  // Automatic world book updates land here: any idle read of a playing session
+  // lets a library edit enter this game without the explicit reload button.
+  async function cardUpdateStatus(chat, context = {}) {
+    try {
+      const card = await readCard(chat.cardPath)
+      const synced = context.busy === true ? null
+        : await playCardSnapshots.autoSync(chat, card, { settings: context.settings })
+      // One library read now serves both the automatic refresh and the badge.
+      return await playCardSnapshots.updateStatus(chat, card, synced?.observed)
+    } catch (error) { return {available:true,error:String(error.message || error)} }
   }
   const liveCardUpdate = createLiveCardUpdate({readGlobals:readPromptTemplateGlobalVariables})
   ctx.effect(() => () => liveCardUpdate.dispose())
@@ -2211,7 +2235,9 @@ export async function apply(ctx) {
     const forkTurnsByMessageId = forkTurnsForChat(chat)
     const {inputSources,inputTemplateDisplays}=inputFieldsProjection.project(persistedProjection ? chat : {...chat,_storageRevision:undefined}, options.inputChanges)
     const cardUpdate = ['story', 'script'].includes(chat.mode || 'story') && chat.requestMode !== 'sillytavern'
-      ? await cardUpdateStatus(chat) : { available: false }
+      ? await cardUpdateStatus(chat, { busy: activity.busy || ['pending', 'running', 'waiting-runtime'].includes(chat.settleStatus)
+        || agentRegistry.get(chat.sessionId)?.phase?.kind === 'running', settings: runtimeSettings })
+      : { available: false }
     const helperEnabled = hasTavernScriptRuntime(chat, cardExtensions.helperScripts)
     const helperRuntime = helperEnabled
       ? projectTavernHelperScripts(cardExtensions.helperScripts, chat.tavernHelperScriptVariables)
@@ -2617,7 +2643,8 @@ export async function apply(ctx) {
     return await conversationInitialization.ensureOpening(sessionId)
   }
   const contextPlanner = createContextPlanner({ prompt: runtimePrompt, callModel: callModel, now: Date.now, logger: console })
-  const playCardSnapshots = createPlayCardSnapshots({ worldBooks, planner: contextPlanner, readCard: readChatCard, writeChat, captureSceneWorldbook, userPreferenceProfile })
+  const playCardSnapshots = createPlayCardSnapshots({ worldBooks, planner: contextPlanner, readCard: readChatCard, writeChat, updateChat,
+    settings: readTavernSettings, captureSceneWorldbook, userPreferenceProfile })
   const ensurePlayCardSnapshot = playCardSnapshots.ensure
   async function ensureNativeSystemPrefix(session, chat) {
     // Rebuilding the snapshot persists the complete Chat; a bounded history cannot.
@@ -4397,6 +4424,15 @@ export async function apply(ctx) {
     prefilterWorldbook: chatId => worldbookPrefilter.start(chatId),
     cancelPrefilter: chatId => worldbookPrefilter.cancel(chatId),
     waitReconcile: async sessionId => { await reconciling.get(str(sessionId))?.catch(() => {}) },
+    syncWorldBook: async function (chat) {
+      if (!['story', 'script'].includes(chat.mode || 'story')) return
+      try {
+        // The opening-window slice carries only task fields; the snapshot lives
+        // in the complete record that this turn is about to read anyway.
+        const full = chat.openingWorldbookSnapshot ? chat : await chatForSession(chat.sessionId)
+        if (full) await playCardSnapshots.autoSync(full, undefined, { busy: false })
+      } catch (error) { console.warn('dsh-tavern: 世界书自动更新失败，本轮沿用本局快照：', str(error && error.message || error)) }
+    },
     clearFailedTurns: async function (sessionId) {
       const mode = await turnOrchestrator.modeFor(sessionId)
       if (!['story', 'script'].includes(mode)) return 0
@@ -5674,7 +5710,7 @@ case 'getDisplayPreferences': { const settings = await readTavernSettings(); ret
   }
 
   const skillGatedTools = createSkillGatedTools()
-  const controlledToolNames = new Set([STORY_SUBMIT_TOOL_NAME, 'tavern_read_variables', ...CARD_MEMORY_TOOLS, 'bash', 'pwsh', ...dshFileToolNames, 'skill', 'tavern_read_skill_reference', 'web_search', 'tavern_save_skill', ...cordisToolNames, 'tavern_user_profile_read', 'tavern_user_profile_save', 'tavern_user_profile_confirm', 'tavern_read_card', 'tavern_read_card_raw', 'tavern_search_card', 'tavern_replace_card_text', 'tavern_mvu_overview', 'tavern_apply_mvu', 'tavern_read_play_chat', 'tavern_read_script', 'tavern_recall_history', 'worldbook_search', 'tavern_read_worldbook', 'tavern_update_worldbook', 'tavern_read_preset', 'tavern_update_preset', 'tavern_read_regex_library', 'tavern_copy_card', 'tavern_update_card', 'tavern_restore_card', 'tavern_validate_card', 'tavern_test_response'])
+  const controlledToolNames = new Set([STORY_SUBMIT_TOOL_NAME, 'tavern_read_variables', ...CARD_MEMORY_TOOLS, 'bash', 'pwsh', ...dshFileToolNames, 'skill', 'tavern_read_skill_reference', 'web_search', 'tavern_save_skill', ...cordisToolNames, 'tavern_user_profile_read', 'tavern_user_profile_save', 'tavern_user_profile_confirm', 'tavern_read_card', 'tavern_read_card_raw', 'tavern_search_card', 'tavern_replace_card_text', 'tavern_mvu_overview', 'tavern_apply_mvu', 'tavern_read_play_chat', 'tavern_read_script', 'tavern_recall_history', 'worldbook_search', 'tavern_read_worldbook', 'tavern_update_worldbook', 'tavern_read_preset', 'tavern_update_preset', 'tavern_read_regex_library', 'tavern_copy_card', 'tavern_set_card_cover', 'tavern_export_card_png', 'tavern_update_card', 'tavern_restore_card', 'tavern_validate_card', 'tavern_test_response'])
   const foregroundStrategies = createForegroundOrchestrationStrategies({
     compatibility: {
       beforeTurn: async function (input) {
@@ -5851,6 +5887,8 @@ case 'getDisplayPreferences': { const settings = await readTavernSettings(); ret
       str,
       tools,
     })
+
+    registerCardCoverTools({ chatForSession, exportCardPng, fileResources, presentCardText, str, tools })
 
     registerPlayChatTool({
       chatForSession,
