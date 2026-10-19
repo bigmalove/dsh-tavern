@@ -86,13 +86,14 @@ export function projectRegenerationRequestMessages(messages) {
     if (isRegenerationInput(source[index])) { regenerationIndex = index; break }
   }
   if (regenerationIndex < 0) return source
-  let assistantIndex = -1
-  for (let index = regenerationIndex - 1; index >= 0; index--) {
-    if (source[index] && source[index].role === 'assistant') { assistantIndex = index; break }
-  }
-  if (assistantIndex < 0) return source
+  // The attempt replaces the input of the turn it re-samples. Anchor on that
+  // input — the last player message before the attempt — not on the newest
+  // assistant: a turn whose reply never landed (error, stop, rolled back) has no
+  // assistant of its own, and walking back from the previous turn's reply would
+  // then take the previous input and drop everything after it, erasing the whole
+  // transcript between the two turns.
   let playerIndex = -1
-  for (let index = assistantIndex - 1; index >= 0; index--) {
+  for (let index = regenerationIndex - 1; index >= 0; index--) {
     if (isOriginalPlayerInput(source[index])) { playerIndex = index; break }
   }
   if (playerIndex < 0) return source
