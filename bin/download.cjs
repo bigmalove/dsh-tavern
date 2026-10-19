@@ -155,11 +155,16 @@ function runtimeFiles(metadata) {
 
 // jsDelivr's nodes keep separate caches of the mutable @branch manifest, and a purge is often
 // throttled after a release: ask all of them and keep the newest (CI's release sequence).
+// GitHub serves the branch too, and its copy never lags behind a release, so a network that
+// reaches GitHub directly is not held hostage by a twelve-hour CDN cache.
 const JSDELIVR_NODES = ['cdn.jsdelivr.net', 'fastly.jsdelivr.net', 'gcore.jsdelivr.net']
 function manifestCandidates(metadataUrl, exact) {
   const url = new URL(metadataUrl)
   if (exact || url.hostname !== JSDELIVR_NODES[0] || !/@[^/]+\/dsh-tavern-runtime\.json$/.test(url.pathname)) return [metadataUrl]
-  return JSDELIVR_NODES.map(host => { const each = new URL(url); each.hostname = host; return each.href })
+  const candidates = JSDELIVR_NODES.map(host => { const each = new URL(url); each.hostname = host; return each.href })
+  const github = /^\/gh\/([^/]+)\/([^/@]+)@([^/]+)\/dsh-tavern-runtime\.json$/.exec(url.pathname)
+  if (github) candidates.push(`https://raw.githubusercontent.com/${github[1]}/${github[2]}/${github[3]}/dsh-tavern-runtime.json`)
+  return candidates
 }
 function compareVersions(left, right) {
   const parts = value => String(value || '').split(/[-+]/)[0].split('.').map(part => Number(part) || 0)
@@ -192,6 +197,13 @@ async function readManifest({ metadataUrl, exact, minVersion, stallMs, attempts,
 async function downloadRuntime({ metadataUrl, rootUrl, destination, installed, concurrency = 6, stallMs = 30000,
   budgetMs = 300000, attempts = 2, status = () => {}, fetch: request, targetCommit = '', minVersion = '', exactManifest = false } = {}) {
   const source = hostOf(rootUrl)
+  // jsDelivr is convenient but not the only copy: when the manifest came from jsDelivr
+  // syntax, the same commit is served verbatim by GitHub, so a throttled or slow CDN
+  // costs a retry instead of a failed install.
+  const repository = /^\/gh\/([^/]+)\/([^/@]+)\/?$/.exec(new URL(rootUrl).pathname)
+  const githubUrl = (revision, parts) => repository
+    ? `https://raw.githubusercontent.com/${repository[1]}/${repository[2]}/${revision}/${parts.map(encodeURIComponent).join('/')}`
+    : ''
   const metadata = await readManifest({ metadataUrl, exact: exactManifest, minVersion, stallMs, attempts, fetch: request, status })
   const files = runtimeFiles(metadata)
   // The @main manifest can lag (CDN cache, or CI not yet published). When the app
@@ -220,8 +232,10 @@ async function downloadRuntime({ metadataUrl, rootUrl, destination, installed, c
         } catch {}
       }
       if (!content) {
-        const url = `${rootUrl}@${metadata.revision}/${parts.map(encodeURIComponent).join('/')}`
-        content = (await download([url], { label: file.path, sha256: file.sha256, stallMs, attempts, signal, fetch: request,
+        const urls = [`${rootUrl}@${metadata.revision}/${parts.map(encodeURIComponent).join('/')}`]
+        const mirror = githubUrl(metadata.revision, parts)
+        if (mirror) urls.push(mirror)
+        content = (await download(urls, { label: file.path, sha256: file.sha256, stallMs, attempts: Math.max(attempts, urls.length), signal, fetch: request,
           onRetry: ({ attempt, attempts: total, reason, willRetry }) => status(`下载失败（${source}）：${file.path}，${reason}；尝试 ${attempt}/${total}${willRetry ? '，正在重试' : '，将切换备用方案'}。`),
         })).bytes
         received += content.length

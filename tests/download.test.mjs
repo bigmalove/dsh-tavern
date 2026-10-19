@@ -179,7 +179,11 @@ test('jsDelivr 运行清单：各节点取最新的发布序号；都比安装�
     const body = nodes[new URL(String(request.url || request)).hostname]
     return body ? new Response(JSON.stringify(body)) : new Response('missing', { status: 404 })
   }
-  assert.deepEqual(manifestCandidates(url).map(each => new URL(each).hostname), ['cdn.jsdelivr.net', 'fastly.jsdelivr.net', 'gcore.jsdelivr.net'])
+  // GitHub serves the same branch without a twelve-hour cache, so it is asked alongside
+  // the CDN nodes and wins whenever the CDN is stale.
+  assert.deepEqual(manifestCandidates(url).map(each => new URL(each).hostname),
+    ['cdn.jsdelivr.net', 'fastly.jsdelivr.net', 'gcore.jsdelivr.net', 'raw.githubusercontent.com'])
+  assert.equal(manifestCandidates(url).at(-1), 'https://raw.githubusercontent.com/flizzywine/dsh-tavern/main/dsh-tavern-runtime.json')
   assert.deepEqual(manifestCandidates(url, true), [url])
   assert.deepEqual(manifestCandidates('http://127.0.0.1:1/repo@main/dsh-tavern-runtime.json'), ['http://127.0.0.1:1/repo@main/dsh-tavern-runtime.json'])
 
@@ -188,6 +192,11 @@ test('jsDelivr 运行清单：各节点取最新的发布序号；都比安装�
     fetch: serveNodes({ 'cdn.jsdelivr.net': manifest('2.7.0', 90), 'fastly.jsdelivr.net': manifest('3.0.0', 120), 'gcore.jsdelivr.net': manifest('3.0.0', 110) }) })
   assert.equal(newest.releaseSequence, 120, '同一版本里也取发布序号最大的')
   assert.match(status.join('\n'), /fastly\.jsdelivr\.net/)
+
+  // A stale CDN is no longer fatal while GitHub answers: the newer manifest wins.
+  const viaGithub = await readManifest({ metadataUrl: url, minVersion: '3.0.0', stallMs: 1000, attempts: 1,
+    fetch: serveNodes({ 'cdn.jsdelivr.net': manifest('2.7.0', 90), 'raw.githubusercontent.com': manifest('3.0.0', 130) }) })
+  assert.equal(viaGithub.releaseSequence, 130)
 
   await assert.rejects(readManifest({ metadataUrl: url, minVersion: '3.0.0', stallMs: 1000, attempts: 1,
     fetch: serveNodes({ 'cdn.jsdelivr.net': manifest('2.7.0', 90), 'fastly.jsdelivr.net': manifest('2.7.0', 91) }) }),
