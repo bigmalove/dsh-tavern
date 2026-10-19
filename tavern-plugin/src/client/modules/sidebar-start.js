@@ -59,6 +59,49 @@ function tavernStartGroups(options, pluginGroups) {
 	return groups;
 }
 
+// 手机上顶栏一行只放得下几个图标：侧栏开关、标题、全屏，再加宿主右上角的角落按钮。
+// 规则定死为「最多 2 个快捷入口 + ⋮」，其余全部进 ⋮ 菜单——可预测，不会因为标题长短
+// 忽隐忽现。真的还压住宿主按钮（实测压盖 > 0）时再降到 1 个。
+// 导出自带下拉菜单，折进「更多」里点不到，所以优先保留。
+const TAVERN_HEADER_MOBILE_LIMIT = 2;
+function tavernHeaderMobileFold(ids, limit) {
+	const list = Array.isArray(ids) ? ids : [];
+	const max = Math.max(1, Number(limit) || TAVERN_HEADER_MOBILE_LIMIT);
+	if (list.length <= max) return [];
+	const keep = new Set();
+	if (list.includes("header:export")) keep.add("header:export");
+	for (const id of list) {
+		if (keep.size >= max) break;
+		keep.add(id);
+	}
+	return list.filter(id => !keep.has(id));
+}
+
+// 顶栏实际压盖多少像素：取这一排里最右那个还看得见的子元素的右边界，减去宿主角落
+// 按钮的左边界。容器本身被 flex 压窄了，子元素会溢出容器继续画——所以不能量容器。
+function tavernHeaderCollision(root, corner) {
+	if (!root || !corner) return 0
+	const right = Array.from(root.children).reduce(function (max, child) {
+		const rect = child.getBoundingClientRect()
+		return rect.width > 0 && rect.height > 0 ? Math.max(max, rect.right) : max
+	}, root.getBoundingClientRect().right)
+	return Math.round((right - corner.getBoundingClientRect().left) * 10) / 10
+}
+
+// 手机上保留几个快捷入口：默认最多 2 个（其余全进 ⋮），若实测标题被压到 48px 以下
+// （不到 3 个字，认不出是哪一局）再收一个。单调、只收不放，所以不会来回跳。
+// 不用「余量/压盖」推：按钮右对齐到预留边距，余量恒为 0；按行宽预算又会在
+// 标题与按钮数量之间互相追赶。
+function tavernHeaderMobileCapacity(shown, titleWidth, options) {
+	const min = Number(options && options.titleMin) > 0 ? Number(options.titleMin) : 48
+	const limit = Number(options && options.limit) > 0 ? Number(options.limit) : TAVERN_HEADER_MOBILE_LIMIT
+	const count = Math.max(1, Math.min(limit, Number(shown) || 1))
+	const width = Number(titleWidth) || 0
+	// width 为 0 表示还没量到（标题不存在），保持现状。
+	if (width > 0 && width < min && count > 1) return count - 1
+	return count
+}
+
 // How many trailing pinned pages no longer fit. Fixed buttons (酒馆状态, 导出)
 // stay: 导出 opens its own menu, and 酒馆状态 is the way back into the panel.
 function tavernHeaderFold(ids, widthOf, available, options) {

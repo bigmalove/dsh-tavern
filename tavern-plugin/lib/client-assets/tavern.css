@@ -2814,8 +2814,11 @@ body.dsh-tavern-shell-active [class*="_headerUtilities"]:has(.dsh-tavern-header-
     --dsh-play-z-header: 9;
   }
   body.dsh-tavern-shell-active [data-mobile-nav="frame"] > :first-child { padding-top: var(--dsh-play-top-inset) !important; }
-  /* 原生右栏入口使用 header.corner 插槽，回到同一行的弹性布局，无需测量悬浮按钮宽度。 */
-  body.dsh-tavern-shell-active [data-mobile-nav="frame"] [data-phase] header [data-conversation-header-corner] {
+  /* 宿主角落按钮留在流内。宿主给它 position:absolute，窄屏上会压住下面的标签栏
+     （实测 320px 压 39px、360px 压 1px）。注意这里**不能带 [data-phase]**：
+     真实 DOM 的 header 祖先里没有这个属性，带上就整条不命中（以前一直没生效）。
+     放进流内后，行宽本身把它算进去，utilities 也不会盖上来。 */
+  body.dsh-tavern-shell-active [data-mobile-nav="frame"] header [data-conversation-header-corner] {
     display: flex !important; position: static; margin: 0; flex: none;
   }
   body.dsh-tavern-shell-active [data-mobile-nav="frame"] header:has([class*="_headerUtilities"]) {
@@ -2824,7 +2827,9 @@ body.dsh-tavern-shell-active [class*="_headerUtilities"]:has(.dsh-tavern-header-
     background: var(--dsw-alias-bg-base);
   }
   body.dsh-tavern-shell-active [data-mobile-nav="frame"] header:has([class*="_headerUtilities"]) [class*="_titleRow"] {
-    min-height: 40px; padding-left: 40px; gap: 4px; align-items: center;
+    min-height: 40px; padding-left: 40px;
+    padding-right: var(--dsh-tavern-header-corner, 4px);
+    gap: 4px; align-items: center;
   }
   /* 标题那一格是 flex:1，默认 min-width:auto 等于 min-content（实测 200+），
      压不下去就整行溢出，最右边的 utilities 与角落按钮互相压住。让标题可截断。 */

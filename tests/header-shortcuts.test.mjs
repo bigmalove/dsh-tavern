@@ -174,6 +174,26 @@ test('shell 标记不依赖左侧栏挂载，移动端顶栏有独立兜底', ()
   assert.match(css, /display: flex !important; flex: 0 1 auto !important; min-width: 0 !important;/)
 })
 
+test('顶栏选择器不绑定 header 的父节点', () => {
+  // 0.2.x 的 header 不是 [data-phase] 的直接子元素（实测 [data-phase] > div > header），
+  // 也不是 data-slot 的直接子元素：旧写法 :is([data-phase] > header, …) 一条都不命中，
+  // 于是手机上的标签隐藏、单元格伸缩、宿主按钮隐藏整块失效 —— 顶栏按钮压到角落按钮上。
+  assert.doesNotMatch(css, /:is\(\[data-phase\] > header/)
+  assert.match(css, /header:has\(\[class\*="_headerUtilities"\]\)/)
+  // 标题必须能缩，否则 flex 行溢出，最右边的两格互相压住。
+  assert.match(css, /header:has\(\[class\*="_headerUtilities"\]\) \[class\*="_titleCluster"\] \{ min-width: 0; \}/)
+  assert.match(css, /header:has\(\[class\*="_headerUtilities"\]\) \[class\*="_crumb"\] \{\s*min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;/)
+})
+
+test('手机上顶栏强制纯图标，且不把强制值写回设置', () => {
+  // 带文字的按钮在 390px 上把顶栏撑出行宽，标签被挤到宿主角落按钮上。
+  assert.match(client, /function useTavernCompactHeader\(\)/)
+  assert.match(client, /const display = compact \? "icon" : configuredDisplay;/)
+  // 保存（拖动、移除）必须用用户自己配置的形态。
+  assert.match(client, /saveHeader\(\{ display: configuredDisplay, items: next \}\)/)
+  assert.match(client, /saveHeader\(\{ display: configuredDisplay, items: items\.filter/)
+})
+
 // 从 `function (props) {` 起按大括号配对取完整函数源码。
 function balancedLength(source) {
   let depth = 0
@@ -210,4 +230,47 @@ test('只折起一项且不比 ⋯ 宽时，直接显示它', () => {
   assert.deepEqual(Array.from(fold(['a', 'b', 'c'], width, 48, options)), ['b', 'c'])
   // 单项比 ⋯ 宽时照旧折起来（省下的宽度是真实的）。
   assert.deepEqual(Array.from(fold(['a', 'b'], () => 100, 48, options)), ['b'])
+})
+
+test("手机上最多保留两个快捷入口，其余进 ⋮ 菜单", () => {
+  const foldStart = client.indexOf("function tavernHeaderMobileFold(")
+  const source = client.slice(foldStart, foldStart + balancedLength(client.slice(foldStart)))
+  const fold = vm.runInNewContext("(" + source + ")", { TAVERN_HEADER_MOBILE_LIMIT: 2 })
+  // 两个以内不动。
+  assert.deepEqual(Array.from(fold(["dsh-tavern:status", "header:export"], 2)), [])
+  // 超过两个：保留导出 + 清单里第一个，其余全折。
+  assert.deepEqual(
+    Array.from(fold(["dsh-tavern:status", "header:export", "dsh-tavern:worldbooks", "dsh-tavern:cards"], 2)),
+    ["dsh-tavern:worldbooks", "dsh-tavern:cards"]
+  )
+  // 清单里没有导出时，按顺序保留前两个。
+  assert.deepEqual(Array.from(fold(["a", "b", "c"], 2)), ["c"])
+  // 上限至少保留 1 个；传 0 视为「用默认上限」，不会让整排消失。
+  assert.deepEqual(Array.from(fold(["a", "b"], 1)), ["b"])
+  assert.deepEqual(Array.from(fold(["a", "b"], 0)), [])
+})
+
+test("标题被压到 48px 以下时才再收一个，且只收不放", () => {
+  const capacityStart = client.indexOf("function tavernHeaderMobileCapacity(")
+  const source = client.slice(capacityStart, capacityStart + balancedLength(client.slice(capacityStart)))
+  const capacity = vm.runInNewContext("(" + source + ")", { TAVERN_HEADER_MOBILE_LIMIT: 2 })
+  // 标题还有 60px：保持 2 个。
+  assert.equal(capacity(2, 60, { limit: 2 }), 2)
+  // 标题只剩 30px：收一个。
+  assert.equal(capacity(2, 30, { limit: 2 }), 1)
+  // 已经只剩 1 个：不再往下收。
+  assert.equal(capacity(1, 20, { limit: 2 }), 1)
+  // 还没量到（宽度 0）时不改动。
+  assert.equal(capacity(2, 0, { limit: 2 }), 2)
+  // 上限不会超过设定值。
+  assert.equal(capacity(2, 400, { limit: 2 }), 2)
+})
+
+test("顶栏把实测压盖暴露成 data 属性，夹具可直接断言", () => {
+  assert.match(client, /"data-tavern-header-collision": collision/)
+  assert.match(client, /"data-tavern-header-limit": compact \? mobileLimit : ""/)
+  // 角落在流内时不能再用旧的 [data-phase] 前缀（真实 DOM 里没有这个属性，
+  // 整条规则会静默失效——这正是手机上压住标签栏与按钮的原因）。
+  assert.doesNotMatch(css, /\[data-mobile-nav="frame"\] \[data-phase\] header \[data-conversation-header-corner\]/)
+  assert.match(css, /\[data-mobile-nav="frame"\] header \[data-conversation-header-corner\] \{\s*display: flex !important; position: static;/)
 })
