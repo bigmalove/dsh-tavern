@@ -38,7 +38,9 @@ export function selectRegenerationTarget(chat, session, observe) {
       : msgs0[oldAssistantIndex - 1] === null || typeof msgs0[oldAssistantIndex - 1] !== 'object' ? 'previous-message-invalid' : 'previous-message-not-user')
     throw new Error('没有可重新生成的玩家输入与正文组合')
   }
-  const target = locateRegenerationSurface({ events: sessionEvents(session), nodes, turn: msgs0[oldAssistantIndex].turn })
+  const target = locateRegenerationSurface({ events: sessionEvents(session), nodes, turn: msgs0[oldAssistantIndex].turn,
+    // A projected reply may store the edit turn; its body still identifies it.
+    texts: [msgs0[oldAssistantIndex].text, msgs0[oldAssistantIndex].sourceText, msgs0[oldAssistantIndex].projectionText] })
   if (target === null) { report('native-target-missing'); throw Object.assign(new Error('原生消息流中找不到与当前剧情轮次对应的正文消息'), { code: 'NATIVE_TARGET_MISSING' }) }
   report('selected', target)
   const oldSeq = target.assistantSeq
@@ -269,7 +271,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
       const replacement = planRegenerationSurface({ events: sessionEvents(session), nodes: session.surface.nodes,
         oldAssistantSeq: oldSeq, eventStart })
       const projection = regenerationProjection(replacement, { turn: oldTurn, step: 1, message: { id: 'tavern-regen:' + operationId,
-        role: 'assistant', content: [{ type: 'text', text: body }], source: oldSource } }, operationId)
+        role: 'assistant', content: [{ type: 'text', text: body }], source: { ...oldSource, tavernStoryTurn: oldTurn } } }, operationId)
       // The persisted intent must only reference events already on disk.
       if (typeof sessions.flush === 'function') await sessions.flush(session)
       committedChat = await updateChat(latest.id, function (current) {
@@ -453,7 +455,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
       if (body === '') throw new Error('重新生成失败：模型返回空文本')
       const replacement = planRegenerationSurface({ events: sessionEvents(session), nodes: session.surface.nodes, oldAssistantSeq: oldSeq, eventStart })
       const projection = regenerationProjection(replacement, { turn: oldTurn, step: 1, message: { id: 'tavern-regen:' + operationId,
-        role: 'assistant', content: [{ type: 'text', text: body }], source: oldSource } }, operationId)
+        role: 'assistant', content: [{ type: 'text', text: body }], source: { ...oldSource, tavernStoryTurn: oldTurn } } }, operationId)
       if (typeof sessions.flush === 'function') await sessions.flush(session)
       if (latest.regenRecovery?.id !== operationId) throw new Error('重新生成操作已失效')
       // 2) The original floors around the new round. Floors changed since the

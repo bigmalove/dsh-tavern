@@ -277,13 +277,30 @@
 				if (hiddenStoryTurns.has(tailTurnOf(tail))) hideTurnTail(tail);
 			}
 		}
-			function apply(sessionId, turns, regeneratedDshTurns, replacingTurns) {
+		// 被替换掉的正文不会自己消失：宿主已经为那个原生回合画好了行，即使节点早已
+		// 从消息面移除，重渲染也会把它再画出来。replacingDshTurns 只管生成那一刻，
+		// regeneratedDshTurns 的键是剧情轮次、宿主行上是原生轮次，两边对不上。
+		// 这里按服务端从日志里算出的「曾被替换的正文所在原生回合」隐藏，只藏回复，
+		// 玩家输入永远留着。刷新后照样生效，因为它来自日志而不是内存标记。
+		function applySupersededDshTurns(turns) {
+			const set = new Set((Array.isArray(turns) ? turns : []).map(String));
+			if (set.size === 0) return;
+			const rows = root().querySelectorAll('[data-chat-turn]');
+			for (let i = 0; i < rows.length; i++) {
+				const row = rows[i];
+				if (!set.has(row.getAttribute("data-chat-turn"))) continue;
+				if (row.getAttribute("data-chat-flow-kind") === "user") continue;
+				hideRow(row);
+			}
+		}
+			function apply(sessionId, turns, regeneratedDshTurns, replacingTurns, supersededTurns) {
                 // Reconcile both directions: an older observer may have hidden a
                 // restored turn after the action's immediate DOM update.
                 restoreHiddenRows();
 				applySuppressedDshTurns(turns, regeneratedDshTurns);
 				applyReplacingDshTurns(replacingTurns);
 				applyRegeneratedDshTurns(regeneratedDshTurns);
+				applySupersededDshTurns(supersededTurns);
                 // Native rows can mount without their turn tail. Explicit ownership
                 // must remain authoritative during streaming and partial hydration.
                 const suppressed = new Set((Array.isArray(turns) ? turns : []).map(String));
@@ -297,7 +314,8 @@
                     // 正在被替换的那一楼只藏回复，玩家的输入永远留着。
                     if (replacing.has(turn) && kind === "user") continue;
                     if (suppressed.has(turn) && (!replacements.has(turn) || kind === "user")) hideRow(row);
-                    if (Object.prototype.hasOwnProperty.call(mappings, turn) && kind !== "user") hideRow(row);
+                    // mappings 的键是剧情轮次，宿主行上是原生轮次；用键去匹配这里的
+                    // turn 只会在两个编号碰巧相等时误藏，真正的替换由 superseded 负责。
                 }
 				applyHiddenTurns(sessionId);
 				applyRolledBackTurns(sessionId);
@@ -311,7 +329,7 @@
 				const adopted = view && view.adopted;
 				if (adopted && Number(adopted.hiddenTurn) > 0) forgetHiddenTurn(HIDDEN_TURNS_KEY, sessionId, Number(adopted.hiddenTurn));
 				if (adopted && Number(adopted.syntheticTurn) > 0) forgetHiddenTurn(HIDDEN_REGEN_USER_TURNS_KEY, sessionId, Number(adopted.syntheticTurn));
-				apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns, view && view.replacingDshTurns);
+				apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns, view && view.replacingDshTurns, view && view.supersededDshTurns);
 			}
             function restored(sessionId, view) {
                 const turn = Number(view && view.undoneRollback && view.undoneRollback.turn);
@@ -326,10 +344,10 @@
                     tail.style.display = "";
                     turnRowsBefore(tail, tail.getAttribute("data-chat-turn")).forEach(function (row) { row.style.display = ""; });
                 }
-                apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns, view && view.replacingDshTurns);
+                apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns, view && view.replacingDshTurns, view && view.supersededDshTurns);
             }
 			function rolledBack(sessionId, view) {
-				apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns, view && view.replacingDshTurns);
+				apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns, view && view.replacingDshTurns, view && view.supersededDshTurns);
 			}
 			return Object.freeze({ apply: apply, regenerated: regenerated, rolledBack: rolledBack, restored: restored });
 		}
