@@ -1048,7 +1048,9 @@
         function TavernConversationSettingsAction(props) {
             const owner = props.sessions.subagentAddress(props.sessionId)?.parentSessionId || props.sessionId;
             const mode = useTavernSessionMode(owner);
-            if (!isPlayMode(mode)) return null;
+            // 空 mode 是「会话列表还没加载」（发布者是左侧栏，手机上要打开抽屉才挂载），
+            // 不是「不是酒馆会话」；只有确定的非正文模式才隐藏。
+            if (mode && !isPlayMode(mode)) return null;
             return React.createElement("button", { type: "button", className: "dsh-tavern-btn dsh-tavern-header-settings", "aria-label": "酒馆状态", title: "查看本局酒馆状态", onClick: () => props.open(owner) },
                 React.createElement("svg", { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round", "aria-hidden": "true" },
                     React.createElement("path", { d: "M4 7h3m4 0h9M4 17h9m4 0h3" }),
@@ -1807,7 +1809,8 @@
                 function (props) {
                     const owner = ctx.sessions.subagentAddress(props.sessionId)?.parentSessionId || props.sessionId;
                     const mode = useTavernSessionMode(owner);
-                    if (!mode) return null;
+                    // 同上：空 mode 先照常渲染，否则手机上整排按钮一起消失。
+                    if (mode && !isPlayMode(mode)) return null;
                     return React.createElement(TavernHeaderItems, Object.assign({}, props, { ctx: ctx, sessions: ctx.sessions, openStatus: sessionId => openTavernSidebarTab(ctx, { type: "dsh-tavern:status" }, { sessionId }) }));
                 }
             )), "dsh-tavern: header items");
