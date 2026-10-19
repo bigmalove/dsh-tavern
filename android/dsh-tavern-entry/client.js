@@ -244,7 +244,7 @@ window.__ModuleLoader__.load({
 								react.createElement("span", { className: "dsh-tavern-entry-state" }, state.online === true ? "在线" : (state.online === false ? "未启动" : "检测中…"))),
 							react.createElement("button", { type: "button", className: "dsh-tavern-entry-btn dsh-tavern-entry-manage", disabled: updating, onClick: startUpdate }, updating ? "更新中…" : "更新/修复")
 						),
-						react.createElement("div", { className: "dsh-tavern-entry-message" }, "酒馆在应用内全屏打开；按系统返回键退出。保持 DSHA 运行。"),
+						react.createElement("div", { className: "dsh-tavern-entry-message" }, "酒馆在应用内全屏打开，窗口不带工具栏，返回键也不会退出。保持 DSHA 运行。"),
 						message || error ? react.createElement("div", { className: "dsh-tavern-entry-message" + (error || updateFailed ? " error" : "") }, error || message) : null
 					);
 				}
