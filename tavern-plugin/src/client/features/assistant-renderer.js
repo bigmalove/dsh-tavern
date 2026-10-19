@@ -642,20 +642,46 @@
 				const deleted = Boolean(finalSeq && deletedState.view && deletedState.view.deletedSeqs && deletedState.view.deletedSeqs[String(finalSeq)]);
 				const storyTurn = tavernStoryTurnForDshTurn(mapping.view, turn);
 				const currentView = liveTavernView.getSnapshot(props.sessionId).view;
-                const liveState = useLiveTavernView(props.sessionId, revision, tavernAssistantViewPaths(storyTurn, storyTurn > 0 && storyTurn === tavernLatestProjectionTurn(currentView)));
+                const liveState = useLiveTavernView(props.sessionId, revision, tavernAssistantViewPaths(storyTurn, storyTurn > 0 && storyTurn === tavernLatestProjectionTurn(currentView)).concat(turn === storyTurn ? [] : [["$projectionTurn", String(turn)], ["$projectionLatestTurn", String(turn)]]));
 				const sessionTransitioning = React.useSyncExternalStore(tavernSessionTransition.subscribe, tavernSessionTransition.getSnapshot, tavernSessionTransition.getSnapshot);
 				const tail = props.useTurnData("turn-tail");
 				// DSH draws one node per step. A turn with tool calls has several steps, but its story,
 				// pictures and receipts belong to the turn: only the step that closes it shows them;
 				// earlier steps keep their own (usually empty) text (#222).
 				const ownsTurn = !tail || !tail.closing || !data.finalNode || tail.closing.finalNode.seq === data.finalNode.seq;
-					const projection = settled && ownsTurn ? tavernProjectionForTurn(liveState.view, storyTurn) : null;
+				// 重新生成把正文写进新的原生回合：投影按消息自己的 turn 存，宿主画的那一行
+				// 也用同一个 turn，两者本来就对得上。剧情轮号只用于展示和楼层操作；拿它查
+				// 投影会在重生成后落空，本条消息于是退回渲染模型原文，卡片标签以纯文本露出。
+				// 顺序：原生 turn → 剧情 turn → 正文自己认领最近一条包含它的投影。
+				const nodeText = (Array.isArray(data.blocks) ? data.blocks : [])
+					.filter(function (block) { return block && block.kind === "text"; })
+					.map(function (block) { return String(block.text || ""); }).join("");
+				const projection = (function () {
+					if (!settled || !ownsTurn) return null;
+					const direct = tavernProjectionForTurn(liveState.view, turn) || tavernProjectionForTurn(liveState.view, storyTurn);
+					if (direct) return direct;
+					// 最后一道兜底：重生成留下的折叠副本可能挂着别的轮号（生成期回合），
+					// 投影里也没有它那一行。用正文本身认领——剥掉会被正则改写成卡片的
+					// think / options 段落后，叙事正文在展示文本里是原样保留的。
+					const cleaned = nodeText
+						.replace(/<think_nya~>[\s\S]*?<\/think_nya~?>/gi, "")
+						.replace(/<options>[\s\S]*?<\/options>/gi, "")
+						.replace(/<background>[\s\S]*?<\/background>/gi, "");
+					const probe = cleaned.trim().slice(0, 40);
+					if (probe.length < 20) return null;
+					for (let candidate = tavernLatestProjectionTurn(liveState.view); candidate >= 1; candidate -= 1) {
+						const row = tavernProjectionForTurn(liveState.view, candidate);
+						if (row && String(row.text || "").includes(probe)) return row;
+					}
+					return null;
+				})();
+				const projectionTurn = projection ? Number(projection.turn) || storyTurn : storyTurn;
 					const latestProjectionTurn = tavernLatestProjectionTurn(liveState.view);
 				// Render depth: only the latest rounds run a card's HTML interface (heavy status bars).
 				const displayPrefs = React.useSyncExternalStore(displayPreferences.subscribe, displayPreferences.snapshot, displayPreferences.snapshot);
 				const [renderRound, setRenderRound] = React.useState(false);
 				const renderDepth = displayPrefs && Number.isSafeInteger(displayPrefs.renderDepth) ? displayPrefs.renderDepth : 3;
-				const deferHtml = !renderRound && renderDepth > 0 && storyTurn > 0 && latestProjectionTurn - storyTurn >= renderDepth ? function () { setRenderRound(true); } : null;
+				const deferHtml = !renderRound && renderDepth > 0 && projectionTurn > 0 && latestProjectionTurn - projectionTurn >= renderDepth ? function () { setRenderRound(true); } : null;
                 React.useEffect(function () {
                     if(!historyNode.current || !currentView?.historyWindow || !ownsTurn || projection || storyTurn<=0 || storyTurn>=tavernLatestProjectionTurn(currentView))return;
                     const observer = new IntersectionObserver(entries=>{
