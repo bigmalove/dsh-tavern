@@ -2,13 +2,14 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import vm from 'node:vm'
+import { clientModuleStub } from './fixtures/client-module-stub.mjs'
 
 async function loadExports() {
   const source = await readFile(new URL('../tavern-plugin/lib/client.js', import.meta.url), 'utf8')
   let descriptor
   const sandbox = { window: { __ModuleLoader__: { load(value) { descriptor = value } } }, console }
   vm.runInNewContext(source, sandbox)
-  return descriptor.factory(function () { return {} })
+  return descriptor.factory(function () { return clientModuleStub })
 }
 
 const client = await loadExports()

@@ -1,4 +1,5 @@
 import { helperLoaderSource } from './fixtures/helper-loader-source.mjs'
+import { clientModuleStub } from './fixtures/client-module-stub.mjs'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
@@ -10,7 +11,7 @@ async function loadClient() {
   let descriptor
   const sandbox = { window: { __ModuleLoader__: { load(value) { descriptor = value } } }, console }
   vm.runInNewContext(clientSource, sandbox)
-  return descriptor.factory(function () { return {} })
+  return descriptor.factory(function () { return clientModuleStub })
 }
 
 const client = await loadClient()

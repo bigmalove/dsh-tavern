@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import vm from 'node:vm'
+import { clientModuleStub } from './fixtures/client-module-stub.mjs'
 
 const source = await readFile(new URL('../tavern-plugin/lib/client.js', import.meta.url), 'utf8')
 
@@ -22,7 +23,7 @@ function host() {
     __ModuleLoader__: { load(value) { descriptor = value } }
   }
   vm.runInNewContext(source, { window, console: { warn() {} } })
-  const client = descriptor.factory(() => ({}))
+  const client = descriptor.factory(() => clientModuleStub)
   return { window, client, timers, listeners, saved,
     runTimer() { const [key, timer] = timers.entries().next().value; timers.delete(key); return timer.run() },
     deliver(node, data, sender = node.contentWindow) { for (const run of listeners) run({ source: sender, data }) }

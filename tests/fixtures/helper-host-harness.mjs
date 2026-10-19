@@ -2,12 +2,20 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import vm from 'node:vm'
 import { TAVERN_COMPATIBILITY_CAPABILITIES } from '../../tavern-plugin/lib/domain/tavern-compatibility-diagnostics.js'
+import { clientModuleStub } from './client-module-stub.mjs'
 
 let descriptor
 vm.runInNewContext(await readFile(new URL('../../tavern-plugin/lib/client.js', import.meta.url), 'utf8'), {
   window: { __ModuleLoader__: { load(value) { descriptor = value } } }, console
 })
-export const helperClient = descriptor.factory(() => ({}))
+// 客户端在模块求值期就会定义 React 类组件（顶栏错误边界等），桩不能只是空对象：
+// 类字段需要 Component，其余宿主模块在加载期只被解构，给个惰性函数即可。
+const moduleStub = new Proxy({}, {
+  get: (target, key) => key === 'Component' || key === 'PureComponent'
+    ? class {}
+    : () => null
+})
+export const helperClient = descriptor.factory(() => moduleStub)
 
 export function helperHostHarness(context = {}, options = {}) {
   const scripts = options.scripts || [{ id: 'a', content: '' }, { id: 'b', content: '' }]
