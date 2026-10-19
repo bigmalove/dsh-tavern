@@ -82,10 +82,6 @@ window.__ModuleLoader__.load({
 		var exports = module.exports;
 		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 		let react = require("react");
-		// 全屏壳必须挂在 body 上：插槽位于手机侧栏抽屉内，抽屉带 transform，
-		// 会把 position:fixed 的包含块从视口换成抽屉（右侧露出 8% 遮罩缺口）。
-		let reactDom = null;
-		try { reactDom = require("react-dom"); } catch (_error) { reactDom = null; }
 
 		const CSS = `
 .dsh-tavern-embed { position:fixed; inset:0; z-index:2147483000; background:#14110d; display:flex; flex-direction:column; box-sizing:border-box; padding-top:env(safe-area-inset-top,0px); }
@@ -176,7 +172,33 @@ window.__ModuleLoader__.load({
 					const [error, setError] = react.useState("");
 					const [frame, setFrame] = react.useState("");
 					const frameRoot = react.useRef(null);
-					react.useEffect(function () { return installEmbeddedViewport(frameRoot.current); }, [frame]);
+					// 全屏壳不能是插槽的后代：这个插槽是手机侧栏抽屉的底部，抽屉靠
+					// transform 位移，会让 position:fixed 的包含块从视口变成抽屉
+					// （宽度被 92vw 截断，右侧露出遮罩缺口）。壳用原生节点直接挂到
+					// body，React 只负责侧栏按钮，层级与宽度都回到视口。
+					react.useEffect(function () {
+						if (!frame) return undefined;
+						const root = document.createElement("div");
+						root.className = "dsh-tavern-embed";
+						root.setAttribute("role", "dialog");
+						root.setAttribute("aria-modal", "true");
+						root.setAttribute("aria-label", "酒馆工作台");
+						const embedded = document.createElement("iframe");
+						embedded.title = "酒馆工作台";
+						embedded.referrerPolicy = "no-referrer";
+						embedded.setAttribute("allow", "clipboard-read; clipboard-write; fullscreen");
+						embedded.allowFullscreen = true;
+						embedded.src = frame;
+						root.appendChild(embedded);
+						document.body.appendChild(root);
+						frameRoot.current = root;
+						const release = installEmbeddedViewport(root);
+						return function () {
+							release();
+							frameRoot.current = null;
+							root.remove();
+						};
+					}, [frame]);
 					// 零控件、按返回键也不退出：DSHA 的返回键会先问页面（注入脚本找可见的
 					// dialog 并派发 Escape，说处理了就不回退、不 finish）。外壳带 role=dialog，
 					// 就等于「本次返回已被处理」；再叠一层历史守卫，万一走了原生 goBack，
@@ -231,17 +253,7 @@ window.__ModuleLoader__.load({
 							: updateFailed
 								? (state.update.error || "更新失败，请重试。")
 								: state.online === false ? "酒馆未启动，可点击更新/修复。" : "";
-					const shell = frame ? react.createElement("div", {
-					  className: "dsh-tavern-embed", ref: frameRoot,
-					  role: "dialog", "aria-modal": "true", "aria-label": "酒馆工作台"
-					},
-					  react.createElement("iframe", { title: "酒馆工作台", src: frame, referrerPolicy: "no-referrer", allow: "clipboard-read; clipboard-write; fullscreen", allowFullScreen: true })
-					) : null;
-					const shellLayer = shell && reactDom && typeof reactDom.createPortal === "function"
-						? reactDom.createPortal(shell, document.body)
-						: shell;
 					return react.createElement("div", null,
-						shellLayer,
 						react.createElement("div", { className: "dsh-tavern-entry-actions" },
 							react.createElement("button", {
 								type: "button", className: "dsh-tavern-entry-btn",

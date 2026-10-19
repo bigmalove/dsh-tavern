@@ -202,7 +202,11 @@ test('移动端实际样式：顶栏、键盘、候选、面板、编辑器与�
       assert.ok(!entry.includes(removed), `内嵌窗口不渲染 ${removed}`)
     }
     assert.ok(/role: "dialog", "aria-modal": "true"/.test(entry), '外壳声明为模态对话框，宿主返回键判定为已处理')
-    assert.ok(/reactDom\.createPortal\(shell, document\.body\)/.test(entry), '全屏壳挂到 body，不被侧栏抽屉的 transform 困住')
+    // 回归：侧栏插槽在手机抽屉里，抽屉带 transform 会成为 fixed 的包含块（宽度被截到
+    // 92vw，右侧露出遮罩缺口）。壳必须由原生节点直挂 body，不能是插槽的 React 子节点。
+    assert.ok(/document\.body\.appendChild\(root\)/.test(entry), '全屏壳挂到 body，不做侧栏抽屉的后代')
+    assert.ok(!/createPortal/.test(entry), '不依赖 react-dom：宿主不保证该模块可解析')
+    assert.ok(!/className: "dsh-tavern-embed"/.test(entry), '壳不在插槽的 React 树里渲染')
     assert.ok(!/onPopState\(\) \{ close\(\)/.test(entry), '返回键不再关闭窗口')
     assert.ok(/function onPopState\(\) \{ if \(!frameRoot\.current\) return; guard\(\)/.test(entry), '历史回退会被哨兵条目挡回')
     const style = entry.slice(entry.indexOf('const CSS = `') + 'const CSS = `'.length, entry.indexOf('`;', entry.indexOf('const CSS = `')))
