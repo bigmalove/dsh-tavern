@@ -2599,8 +2599,6 @@ body.dsh-tavern-shell-active [class*="_headerUtilities"]:has(.dsh-tavern-header-
 .dsh-tavern-header-items.is-icon :is(.dsh-tavern-header-page, .dsh-tavern-header-settings, .dsh-tavern-export-action, .dsh-tavern-header-more-button) {
   width: var(--dsh-tavern-header-button); padding: 0; gap: 0;
 }
-/* demo 里快捷入口与宿主按钮之间有一道细分隔线。 */
-.dsh-tavern-header-divider { flex: none; width: 1px; height: 18px; margin: 0 6px; background: var(--dsw-alias-border-l2); }
 .dsh-tavern-header-more { flex: none; }
 .dsh-tavern-header-more .dsh-tavern-more-menu { top: calc(100% + 6px); bottom: auto; }
 .dsh-tavern-header-context { z-index: 60; }
@@ -2775,7 +2773,6 @@ body.dsh-tavern-shell-active [class*="_headerUtilities"]:has(.dsh-tavern-header-
     border-radius: 7px; background: transparent; color: var(--dsw-alias-label-secondary);
   }
   .dsh-tavern-header-items { --dsh-tavern-header-button: 40px; }
-  .dsh-tavern-header-divider { display: none; }
   body.dsh-tavern-shell-active :is([data-phase] > header, [data-slot="conversation.session.header"] > header) [class*="_headerUtilities"] > :not(.dsh-tavern-header-settings):not(.dsh-tavern-export-menu):not(.dsh-tavern-header-items) { display: none; }
   /* utilities 也有 display:contents 插槽；保留插槽本身，隐藏已在抽屉提供的日志入口。 */
   body.dsh-tavern-shell-active [data-slot="conversation.session.header.utilities"] { display: contents !important; }
