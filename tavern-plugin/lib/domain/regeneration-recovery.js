@@ -1,6 +1,6 @@
 import { sessionEvents } from './session-events.js'
 import { inputKind, isNewTurnInput, storyPlayerInputs } from './session-turn-input.js'
-import { clearRegenerationAttemptSurface, regenerationAttemptTurns, locateRegenerationSurface, applyRegenerationProjection } from './rollback-surface.js'
+import { clearRegenerationAttemptSurface, regenerationAttemptTurns, locateRegenerationSurface, applyRegenerationProjection, restoreShadowedReply } from './rollback-surface.js'
 
 /** Recover an uncommitted replacement from its durable pre-rollback revision. */
 export function createRegenerationRecovery({ chats, sessions, timeline, isActive }) {
@@ -32,7 +32,7 @@ export function createRegenerationRecovery({ chats, sessions, timeline, isActive
     return attempt ? attempt.seq : events.length
   }
 
-  async function abort({ chatId, originalChat, session, eventStart, operationId }) {
+  async function abort({ chatId, originalChat, session, eventStart, operationId, shadow }) {
     // Hold the Chat store transaction across projection cleanup and flush. A
     // concurrent observer must not invalidate restoration after cleanup succeeds.
     return await chats.update(chatId, async current => {
@@ -48,6 +48,11 @@ export function createRegenerationRecovery({ chats, sessions, timeline, isActive
       const abortedTurns = regenerationAttemptTurns({ events, eventStart })
       // Retain the durable recovery point if the native flush fails.
       clearRegenerationAttemptSurface({ session, eventStart })
+      // A reroll emptied the previous reply before generating. Clearing the
+      // attempt never brings it back (replacements are not reversible), so put
+      // the saved body back here: the story is restored, the context must be too.
+      const shadowed = current.regenRecovery?.surfaceShadow || shadow
+      if (shadowed) restoreShadowedReply({ session, shadow: shadowed })
       if (typeof sessions.flush === 'function') await sessions.flush(session)
       const next = timeline.apply({ chat: current, intent: { kind: 'replacement.abort', restoreChat: originalChat } }).chat
       delete next.regenInProgress

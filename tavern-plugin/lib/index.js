@@ -5093,7 +5093,8 @@ export async function apply(ctx) {
       }
       case 'regenBody': {
         await reconcileStory(args && args.sessionId)
-        const view = await regenBody(args && args.chatId, args && args.guidance, args && args.sessionId)
+        // reroll: do not show the model the body it replaces; omitted keeps it for a guided rewrite.
+        const view = await regenBody(args && args.chatId, args && args.guidance, args && args.sessionId, { reroll: args && args.reroll === true })
         notifyPluginTimeline(args && args.sessionId, 'regenerate')
         return { view }
       }

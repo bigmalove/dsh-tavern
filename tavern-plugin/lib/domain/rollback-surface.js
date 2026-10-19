@@ -4,7 +4,7 @@ import { inputAttachments } from './player-input-content.js'
 import { isRescuedHistoryMessage } from './chat-history-rescue.js'
 import { replaceSessionSurface } from './session-surface-mutations.js'
 import { restoredSurfaceSeqs } from './surface-restoration.js'
-import { sessionEvents, surfaceReplacementRange } from './session-events.js'
+import { sessionEvents, surfaceReplacementRange, withSurfaceEditTurn } from './session-events.js'
 import { createSurfaceOwnership, planSurfaceRecovery, planSurfaceRange, SurfaceRecoveryError, OWNED } from './surface-recovery.js'
 import { randomUUID } from 'node:crypto'
 import { inputKind, isTurnInput, isNewTurnInput, isNewPlayerInput, isFailedTurnEnd } from './session-turn-input.js'
@@ -260,6 +260,51 @@ export function locateRegenerationSurface(input) {
     return Object.freeze({ assistantSeq: Number(nodes[index]), turn, source })
   }
   return null
+}
+
+/**
+ * A reroll must not hand the previous body back to the model. The save is
+ * already rolled back when this runs, but the native surface still holds the
+ * reply that was just written, and the next attempt would only be asked to
+ * rewrite it ("重新生成一次" then reads like "润色一次"). Replace that reply with
+ * an empty, model-sourced marker so the provider sees the story up to the
+ * player's input and nothing after it. The marker keeps the story turn in
+ * `tavernStoryTurn`: the round stays locatable, the committed body is projected
+ * onto the same position, and a repair from the save can rebuild it.
+ */
+export function shadowRegenerationReply({ session, agent, target }) {
+  const turn = Number(target && target.turn)
+  if (!Number.isSafeInteger(turn) || turn < 1) throw new Error('重新生成缺少有效的剧情轮次')
+  const source = object(target.source) || { kind: 'model' }
+  // The displaced reply is the restore point: a reroll that never produces a
+  // body puts this exact message back, and the client keeps showing the old body.
+  const displaced = eventAt(sessionEvents(session), target.assistantSeq)
+  const saved = object(displaced?.data?.message)
+  if (saved === null) throw new Error('找不到要替换的旧正文消息')
+  const message = {
+    id: typeof target.messageId === 'string' && target.messageId !== '' ? target.messageId : randomUUID(),
+    role: 'assistant',
+    content: [],
+    source: { ...source, tavernStoryTurn: turn }
+  }
+  withSurfaceEditTurn(session, agent, (editTurn, editStep) => replaceSessionSurface(session, 'assistant/message', {
+    turn: editTurn, step: editStep, message
+  }, { start: target.assistantSeq, end: target.assistantSeq, sourceEventSeqs: [target.assistantSeq] }))
+  const located = locateRegenerationSurface({ events: sessionEvents(session), nodes: session.surface?.nodes || [], turn })
+  if (located === null) throw new Error('重新生成没有把旧正文从模型上下文中移除')
+  return Object.freeze({ seq: located.assistantSeq, turn, message: Object.freeze(structuredClone(saved)) })
+}
+
+/** Put the shadowed reply back (a reroll that never produced a body). */
+export function restoreShadowedReply({ session, agent, shadow }) {
+  const saved = object(shadow)
+  if (!saved || !Number.isSafeInteger(Number(saved.seq)) || !object(saved.message)) return false
+  const nodes = Array.isArray(session?.surface?.nodes) ? session.surface.nodes : []
+  if (!nodes.map(Number).includes(Number(saved.seq))) return false
+  withSurfaceEditTurn(session, agent, (editTurn, editStep) => replaceSessionSurface(session, 'assistant/message', {
+    turn: editTurn, step: editStep, message: saved.message
+  }, { start: Number(saved.seq), end: Number(saved.seq), sourceEventSeqs: [Number(saved.seq)] }))
+  return true
 }
 
 // Failed turns have already left the model surface, but remain visible until

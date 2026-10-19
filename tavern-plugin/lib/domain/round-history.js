@@ -9,7 +9,7 @@ import { createRegenerationRecovery } from './regeneration-recovery.js'
 import { isDeepStrictEqual } from 'node:util'
 import { createScopedMessages, isScopedMessages } from './scoped-messages.js'
 import { diffJson } from './json-mutation.js'
-import { rollbackAvailability, clearFailedTurnSurface, locateRegenerationSurface, planRegenerationSurface, regenerationProjection, applyRegenerationProjection, failedTurnReplayAvailability, replayableFailedTurn } from './rollback-surface.js'
+import { rollbackAvailability, clearFailedTurnSurface, locateRegenerationSurface, planRegenerationSurface, regenerationProjection, applyRegenerationProjection, failedTurnReplayAvailability, replayableFailedTurn, shadowRegenerationReply } from './rollback-surface.js'
 import { assertRegenerationSourceCurrent, replaceLastRound } from './last-round-replacement.js'
 import { diagnosticIdentity, regenerationTargetDiagnostic } from './regeneration-diagnostics.js'
 
@@ -95,7 +95,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
     }
   }
 
-  async function regenerate(chatId, guidance, sessionId) {
+  async function regenerate(chatId, guidance, sessionId, options = {}) {
     if (sessionPatch && !sessionPatch.replacementAllowed()) throw new Error(sessionPatch.blockReason())
     // Identity only; each regeneration path reads the story it changes.
     const chat = str(chatId) === '' ? await (chats.stateForSession || chatForSession)(sessionId) : await (chats.readState || readChat)(chatId)
@@ -106,7 +106,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
     if (pendingReplays.has(chat.id)) throw new Error('正在重放失败回合，请等待完成')
     if (pendingRegenerations.has(chat.id) || pendingRollbacks.has(chat.id)) throw new Error('正文正在重新生成，请等待完成')
     pendingRegenerations.add(chat.id)
-    try { return await regenRecent(chat.id, guidance, sessionId) ?? await regenBody(chat.id, guidance, sessionId) }
+    try { return await regenRecent(chat.id, guidance, sessionId, options) ?? await regenBody(chat.id, guidance, sessionId, options) }
     finally { pendingRegenerations.delete(chat.id) }
   }
 
@@ -133,7 +133,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
     if (beforeChat === undefined) throw new Error('找不到剧情 checkpoint 对应的历史 Chat revision: ' + target.beforeRevision)
     return Object.assign({}, intent, { beforeChat })
   }
-  async function regenBody(chatId, guidance, sessionId) {
+  async function regenBody(chatId, guidance, sessionId, options = {}) {
     if (sessionPatch && !sessionPatch.replacementAllowed()) throw new Error(sessionPatch.blockReason())
     let chat = str(chatId) === '' ? await chatForSession(sessionId) : await readChat(chatId)
     if (chat === undefined) throw new Error('聊天不存在: ' + chatId)
@@ -164,7 +164,12 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
         catch { /* Recording failure must not affect regeneration or replace its error. */ }
       }
     }
-    const { eventStart, msgs0, oldAssistantIndex, oldSeq, oldTurn, oldSource } = selection
+    const { msgs0, oldAssistantIndex, oldTurn, oldSource } = selection
+    let { eventStart, oldSeq } = selection
+    // A reroll must not show the model the body it is replacing: the request would
+    // read as "here is the old version, rewrite it" instead of "write this round".
+    // Rewriting keeps the old body on purpose, for an edit with guidance.
+    const reroll = options.reroll === true
     // V3 hosts may reject assistant replacements. Check an isolated copy before
     // rolling back the Chat, cancelling settlement or paying for a new reply.
     if (session.header?.version >= 3) {
@@ -184,7 +189,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
     let originalChat = structuredClone(chat)
     const operationId = randomUUID()
     async function restoreFailedRegen() {
-      await regenerationRecovery.abort({ chatId: chat.id, originalChat, session, eventStart, operationId })
+      await regenerationRecovery.abort({ chatId: chat.id, originalChat, session, eventStart, operationId, shadow })
     }
     let legacyBefore = null
     if (storyTimeline.inspect({ chat }).checkpointCount === 0) {
@@ -231,6 +236,30 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
       if (!alreadyReplacing) next.replacingDshTurns = Array.from(new Set(replacingBefore.concat([oldTurn]))).sort(function (left, right) { return left - right })
       return next
     }, { source: 'rollback.regen' })
+    // A reroll removes the previous body from the model surface before the new
+    // input is sent. The attempt boundary moves past that edit, so the surface
+    // work this regeneration does is what the projection and the abort clean up;
+    // the displaced node itself is restored from `surfaceShadow` if it fails.
+    let shadow = null
+    if (reroll) {
+      try {
+        shadow = shadowRegenerationReply({ session, agent, target: { assistantSeq: oldSeq, turn: oldTurn, source: oldSource } })
+        eventStart = sessionEvents(session).length
+        oldSeq = shadow.seq
+        const saved = await updateChat(chat.id, function (current) {
+          if (!current || current.regenRecovery?.id !== operationId) throw new Error('重新生成操作已失效')
+          current.regenRecovery.eventStart = eventStart
+          current.regenRecovery.surfaceShadow = { seq: shadow.seq, turn: oldTurn, message: shadow.message }
+          return current
+        }, { source: 'foreground.regen-shadow' })
+        if (!saved) throw new Error('重新生成前的上下文清理未能保存')
+        if (typeof sessions.flush === 'function') await sessions.flush(session)
+      } catch (error) {
+        // The Chat is already rolled back here: undo it, or the story loses a round.
+        await restoreFailedRegen()
+        throw error
+      }
+    }
     const rolledMessageCount = (chat.messages || []).length
     const guide = str(guidance).trim()
     const syntheticText = originalUserText + (guide !== '' ? '\n\n【本轮补充要求】\n' + guide : '')
@@ -334,7 +363,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
   // original revision returns to its original value around the new round, as
   // replaceLastRound would build it. Undefined (before any visible effect) leaves
   // legacy checkpoints and unreadable revisions to the complete path.
-  async function regenRecent(chatId, guidance, sessionId) {
+  async function regenRecent(chatId, guidance, sessionId, options = {}) {
     if (sessionPatch && !sessionPatch.replacementAllowed()) throw new Error(sessionPatch.blockReason())
     if (![chats.readRecent, chats.patch, chats.changedSince, chats.rowsAt].every(fn => typeof fn === 'function')) return undefined
     let chat = await chats.readRecent(chatId)
@@ -378,7 +407,9 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
         catch { /* Recording failure must not affect regeneration or replace its error. */ }
       }
     }
-    const { eventStart, msgs0, oldAssistantIndex, oldSeq, oldTurn, oldSource } = selection
+    const { msgs0, oldAssistantIndex, oldTurn, oldSource } = selection
+    let { eventStart, oldSeq } = selection
+    const reroll = options.reroll === true
     if (!Object.hasOwn(msgs0, String(oldAssistantIndex - 1))) throw new Error('没有可重新生成的玩家输入与正文组合')
     if (session.header?.version >= 3) {
       const preview = session.constructor.fromRestore(session.id, structuredClone(sessionEvents(session)), structuredClone(session.header), session.inheritedEventCount, 'detached')
@@ -418,10 +449,29 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
     if (agent.phase?.kind === 'running') throw new Error('前台正在生成，请完成或停止后再重新生成')
     const rolledSaved = await chats.patch(chat.id, revision, rollbackChanges, { source: 'rollback.regen' })
     if (!rolledSaved) return undefined
+    // A reroll empties the previous body before generating (same reason as regenBody).
+    let shadow = null
     async function restoreFailedRegen() {
       // Rare error path: the complete abort restores the exact original revision.
       const originalChat = await readChatRevision(chat.id, revision)
-      await regenerationRecovery.abort({ chatId: chat.id, originalChat, session, eventStart, operationId })
+      await regenerationRecovery.abort({ chatId: chat.id, originalChat, session, eventStart, operationId, shadow })
+    }
+    if (reroll) {
+      try {
+        shadow = shadowRegenerationReply({ session, agent, target: { assistantSeq: oldSeq, turn: oldTurn, source: oldSource } })
+        eventStart = sessionEvents(session).length
+        oldSeq = shadow.seq
+        const shadowSaved = await chats.patch(chat.id, rolledSaved._storageRevision, [
+          { op: 'set', path: ['regenRecovery', 'eventStart'], value: eventStart },
+          { op: 'set', path: ['regenRecovery', 'surfaceShadow'], value: { seq: shadow.seq, turn: oldTurn, message: shadow.message } }
+        ], { source: 'foreground.regen-shadow' })
+        if (!shadowSaved) throw new Error('重新生成前的上下文清理未能保存')
+        if (typeof sessions.flush === 'function') await sessions.flush(session)
+      } catch (error) {
+        // The Chat is already rolled back here: undo it, or the story loses a round.
+        await restoreFailedRegen()
+        throw error
+      }
     }
     const guide = str(guidance).trim()
     const syntheticText = originalUserText + (guide !== '' ? '\n\n【本轮补充要求】\n' + guide : '')
