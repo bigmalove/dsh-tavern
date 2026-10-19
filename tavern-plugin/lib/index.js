@@ -1100,30 +1100,50 @@ export async function apply(ctx) {
   function chatForSession(sessionId) { return sessionChats.read(sessionId) }
   // A round regenerated before the projection published its own transcript copy
   // ends on a replacement node: the model sees the body, the page draws nothing,
-  // and the old turn is hidden — the round looks empty. Heal it on a view read
-  // whenever the surface tail has moved on since the last attempt.
+  // and the old turn is hidden — the round looks empty. Heal it on a view read.
+  //
+  // `sessions.get()` only answers for a session that is already open, which a
+  // plain view read never is, so the heal silently did nothing until the chat
+  // happened to be loaded by another route. Open it for the repair and let it go
+  // again: one handle, one write, no dependence on the page's own lifecycle.
   const healedTranscripts = new Map()
-  function healTranscriptCopyFor(sessionId) {
+  const healingTranscripts = new Set()
+  async function healTranscriptCopyFor(sessionId) {
     const key = str(sessionId)
-    if (key === '') return
+    if (key === '' || healingTranscripts.has(key)) return
     const agent = agentRegistry.get(key)
-    const session = agent?.session || sessionStore.get(key)
-    if (!session || agent?.phase?.kind === 'running') return
-    const tail = Array.isArray(session.surface?.nodes) ? session.surface.nodes.at(-1) : undefined
-    if (tail === undefined || healedTranscripts.get(key) === tail) return
-    healedTranscripts.set(key, tail)
+    if (agent?.phase?.kind === 'running') return
+    let session = agent?.session || sessionStore.get(key)
+    let handle = null
+    if (!session) {
+      if (typeof agentRegistry.resume !== 'function') return
+      healingTranscripts.add(key)
+      try {
+        handle = await agentRegistry.resume({ resumeSessionId: key })
+        session = handle?.agent?.session
+      } catch { session = null } finally {
+        healingTranscripts.delete(key)
+      }
+      if (!session) return
+    }
     try {
+      const tail = Array.isArray(session.surface?.nodes) ? session.surface.nodes.at(-1) : undefined
+      if (tail === undefined || healedTranscripts.get(key) === tail) return
+      healedTranscripts.set(key, tail)
       if (!ensureTranscriptCopy(session)) return
-      void sessionStore.flush(session).catch(error => {
-        console.warn('dsh-tavern: 补写可见正文落盘失败 ' + str(error?.message || error))
-      })
+      await sessionStore.flush(session)
     } catch (error) {
       console.warn('dsh-tavern: 补写可见正文失败 ' + str(error?.message || error))
+    } finally {
+      if (handle) { try { await handle.dispose?.() } catch { /* handle already gone */ } }
     }
   }
   function sessionStateForSession(sessionId) {
-    healTranscriptCopyFor(sessionId)
-    return requestPerformance.stage('readSessionState', () => sessionChats.readState(sessionId))
+    // Await the repair: the read that found the gap must return the healed view,
+    // or the page would need a second reload to show it.
+    return healTranscriptCopyFor(sessionId).then(
+      () => requestPerformance.stage('readSessionState', () => sessionChats.readState(sessionId)),
+      error => { console.warn('dsh-tavern: 补写可见正文失败 ' + str(error?.message || error)); return requestPerformance.stage('readSessionState', () => sessionChats.readState(sessionId)) })
   }
   function backgroundConfigForSession(sessionId) { return sessionChats.readBackgroundConfig(sessionId) }
   async function chatHeaderForSession(sessionId, fields) {
@@ -2174,9 +2194,16 @@ export async function apply(ctx) {
     }
     return Object.assign(cardPreparation.present({ card: card, as: 'view' }), { path: str(card.path || chat.cardPath) })
   }
-  async function cardUpdateStatus(chat) {
-    try { return await playCardSnapshots.updateStatus(chat, await readCard(chat.cardPath)) }
-    catch (error) { return {available:true,error:String(error.message || error)} }
+  // Automatic world book updates land here: any idle read of a playing session
+  // lets a library edit enter this game without the explicit reload button.
+  async function cardUpdateStatus(chat, context = {}) {
+    try {
+      const card = await readCard(chat.cardPath)
+      const synced = context.busy === true ? null
+        : await playCardSnapshots.autoSync(chat, card, { settings: context.settings })
+      // One library read now serves both the automatic refresh and the badge.
+      return await playCardSnapshots.updateStatus(chat, card, synced?.observed)
+    } catch (error) { return {available:true,error:String(error.message || error)} }
   }
   const liveCardUpdate = createLiveCardUpdate({readGlobals:readPromptTemplateGlobalVariables})
   ctx.effect(() => () => liveCardUpdate.dispose())
@@ -2235,7 +2262,9 @@ export async function apply(ctx) {
     const forkTurnsByMessageId = forkTurnsForChat(chat)
     const {inputSources,inputTemplateDisplays}=inputFieldsProjection.project(persistedProjection ? chat : {...chat,_storageRevision:undefined}, options.inputChanges)
     const cardUpdate = ['story', 'script'].includes(chat.mode || 'story') && chat.requestMode !== 'sillytavern'
-      ? await cardUpdateStatus(chat) : { available: false }
+      ? await cardUpdateStatus(chat, { busy: activity.busy || ['pending', 'running', 'waiting-runtime'].includes(chat.settleStatus)
+        || agentRegistry.get(chat.sessionId)?.phase?.kind === 'running', settings: runtimeSettings })
+      : { available: false }
     const helperEnabled = hasTavernScriptRuntime(chat, cardExtensions.helperScripts)
     const helperRuntime = helperEnabled
       ? projectTavernHelperScripts(cardExtensions.helperScripts, chat.tavernHelperScriptVariables)
@@ -2641,7 +2670,8 @@ export async function apply(ctx) {
     return await conversationInitialization.ensureOpening(sessionId)
   }
   const contextPlanner = createContextPlanner({ prompt: runtimePrompt, callModel: callModel, now: Date.now, logger: console })
-  const playCardSnapshots = createPlayCardSnapshots({ worldBooks, planner: contextPlanner, readCard: readChatCard, writeChat, captureSceneWorldbook, userPreferenceProfile })
+  const playCardSnapshots = createPlayCardSnapshots({ worldBooks, planner: contextPlanner, readCard: readChatCard, writeChat, updateChat,
+    settings: readTavernSettings, captureSceneWorldbook, userPreferenceProfile })
   const ensurePlayCardSnapshot = playCardSnapshots.ensure
   async function ensureNativeSystemPrefix(session, chat) {
     // Rebuilding the snapshot persists the complete Chat; a bounded history cannot.
@@ -4421,6 +4451,15 @@ export async function apply(ctx) {
     prefilterWorldbook: chatId => worldbookPrefilter.start(chatId),
     cancelPrefilter: chatId => worldbookPrefilter.cancel(chatId),
     waitReconcile: async sessionId => { await reconciling.get(str(sessionId))?.catch(() => {}) },
+    syncWorldBook: async function (chat) {
+      if (!['story', 'script'].includes(chat.mode || 'story')) return
+      try {
+        // The opening-window slice carries only task fields; the snapshot lives
+        // in the complete record that this turn is about to read anyway.
+        const full = chat.openingWorldbookSnapshot ? chat : await chatForSession(chat.sessionId)
+        if (full) await playCardSnapshots.autoSync(full, undefined, { busy: false })
+      } catch (error) { console.warn('dsh-tavern: 世界书自动更新失败，本轮沿用本局快照：', str(error && error.message || error)) }
+    },
     clearFailedTurns: async function (sessionId) {
       const mode = await turnOrchestrator.modeFor(sessionId)
       if (!['story', 'script'].includes(mode)) return 0

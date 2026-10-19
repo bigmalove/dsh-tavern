@@ -137,10 +137,6 @@ export function supersededRegenerationTurns({ events = [], nodes = [] } = {}) {
     // Only a regeneration writes a body for round N into a later turn; a seed or
     // repair rewrite carries no story turn and leaves the opening alone.
     if (!(Number(event.data?.message?.source?.tavernStoryTurn) > 0)) continue
-    // The chat view draws append-origin events only, so a replacement on its own
-    // is invisible: hiding the round it displaced would leave the page blank.
-    // Hide only when a copy of this body is actually drawable.
-    if (!transcriptDraws(events, visible, contentText(event.data?.message))) continue
     for (const seq of event.sourceEventSeqs || []) {
       const original = eventAt(events, seq)
       if (!original || original.type !== 'assistant/message') continue
@@ -578,8 +574,11 @@ export function ensureTranscriptCopy(session) {
   const events = sessionEvents(session)
   const textOfEvent = event => (event?.data?.message?.content || [])
     .filter(block => block?.type === 'text').map(block => block.text).join('')
-  // The newest body the log still holds, whatever node currently stands for it:
-  // a projection replace carries it, and so does a copy the repair later emptied.
+  // The body the chat view is missing right now is the newest one the log holds:
+  // the projection replace carries it, and so may a copy a later repair emptied.
+  // An older body is superseded by this one and must not be re-published, or the
+  // story would show every reroll at once.
+  const visible = new Set(nodes)
   let host
   let body = ''
   for (let index = events.length - 1; index >= 0; index--) {
@@ -593,12 +592,8 @@ export function ensureTranscriptCopy(session) {
   }
   if (!host) return false
   // Only a copy the transcript would actually draw counts as published: an
-  // append-origin node still on the surface. A shadowed copy, or a projection
-  // replace, is invisible to the chat view.
-  const visible = new Set(nodes)
-  const drawn = events.some(event => visible.has(Number(event?.seq)) &&
-    event.type === 'assistant/message' && event.surfaceOp === 'append' && textOfEvent(event) === body)
-  if (drawn) return false
+  // append-origin node still on the surface. A shadowed copy is invisible to it.
+  if (transcriptDraws(events, visible, body)) return false
   const copy = {
     ...host.data,
     message: {
