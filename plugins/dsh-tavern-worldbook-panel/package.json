@@ -1,0 +1,17 @@
+{
+  "name": "dsh-tavern-worldbook-panel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "顶栏世界书快捷面板：换书、开关条目、详情、大窗编辑、查找替换、常用条目与文件夹。",
+  "exports": {
+    ".": "./index.mjs",
+    "./client": "./client.js"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": ["dsh-tavern-plugin"]
+    }
+  }
+}
