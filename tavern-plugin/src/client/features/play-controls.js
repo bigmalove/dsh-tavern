@@ -1379,11 +1379,14 @@
 			// 单条删除后要藏掉宿主那条尾行（复制/分支/用时/时间）。
 			const deletedReplyTurns = suppressionState.view && Array.isArray(suppressionState.view.deletedReplyTurns) ? suppressionState.view.deletedReplyTurns : [];
 			const deletedReplyTurnsRevision = deletedReplyTurns.join(",");
+			// 正文已被替换掉、但宿主仍会画出来的原生回合（旧存档也要藏）。
+			const supersededDshTurns = suppressionState.view && Array.isArray(suppressionState.view.supersededDshTurns) ? suppressionState.view.supersededDshTurns : [];
+			const supersededDshTurnsRevision = supersededDshTurns.join(",");
 			React.useEffect(function () {
 				let frame = null;
 				function applyProjectionState() {
 					frame = null;
-					historyProjection.apply(props.sessionId, suppressedDshTurns, regeneratedDshTurns, deletedReplyTurns, replacingDshTurns);
+					historyProjection.apply(props.sessionId, suppressedDshTurns, regeneratedDshTurns, deletedReplyTurns, replacingDshTurns, supersededDshTurns);
 				}
 				function scheduleProjection() {
 					if (frame === null) frame = window.requestAnimationFrame(applyProjectionState);
@@ -1402,7 +1405,7 @@
 				});
 				observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-chat-flow-kind", "data-chat-turn", "data-turn-tail"] });
 				return function () { observer.disconnect(); if (frame !== null) window.cancelAnimationFrame(frame); };
-			}, [props.sessionId, latestMessageId, running, suppressedDshTurnsRevision, regeneratedDshTurnsRevision, deletedReplyTurnsRevision, replacingDshTurnsRevision]);
+			}, [props.sessionId, latestMessageId, running, suppressedDshTurnsRevision, regeneratedDshTurnsRevision, deletedReplyTurnsRevision, replacingDshTurnsRevision, supersededDshTurnsRevision]);
 			return null;
 		}
 		function CandidateQuestion(props) {
@@ -1618,6 +1621,53 @@
                 label);
         }
 
+        const TAVERN_HEADER_GEAR_PATH = "M12 15a3 3 0 1 0 0-6a3 3 0 1 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z";
+
+        // Width the shortcuts may use, read from the whole title row so it does
+        // not depend on how many buttons are folded right now: the row, minus the
+        // host's own buttons, minus a minimum share kept for the session title.
+        function tavernHeaderAvailableWidth(node) {
+            const row = node.closest("[class*=\"_titleRow\"]");
+            if (!row) return node.clientWidth;
+            const px = value => parseFloat(value) || 0;
+            const rowStyle = window.getComputedStyle(row);
+            let free = row.clientWidth - px(rowStyle.paddingLeft) - px(rowStyle.paddingRight);
+            const children = Array.from(row.children).filter(child => window.getComputedStyle(child).display !== "none");
+            free -= px(rowStyle.columnGap) * Math.max(0, children.length - 1);
+            for (const child of children) {
+                const style = window.getComputedStyle(child);
+                free -= px(style.marginLeft) + px(style.marginRight);
+                if (child.contains(node)) { free -= Math.max(0, child.offsetWidth - node.offsetWidth); continue; }
+                if (/_titleCluster/.test(String(child.className))) {
+                    // Everything in the cluster except the crumbs stays; the crumbs keep a minimum.
+                    const parts = Array.from(child.children).filter(part => window.getComputedStyle(part).display !== "none");
+                    free -= px(style.columnGap) * Math.max(0, parts.length - 1);
+                    for (const part of parts) if (!/_crumbs/.test(String(part.className))) free -= part.offsetWidth;
+                    free -= Math.min(160, row.clientWidth * 0.3);
+                    continue;
+                }
+                free -= child.offsetWidth;
+            }
+            return Math.max(0, free);
+        }
+
+        // The 顶栏设置 entry in the ⋯ and right-click menus: the settings page's own
+        // editor in a dialog, so it works without a host route to the settings page.
+        function TavernHeaderSettingsDialog(props) {
+            const h = React.createElement;
+            React.useEffect(function () {
+                function key(event) { if (event.key === "Escape") props.onClose(); }
+                document.addEventListener("keydown", key);
+                return function () { document.removeEventListener("keydown", key); };
+            }, [props.onClose]);
+            return require("react-dom").createPortal(h("div", { className: "dsh-tavern-header-dialog-backdrop", onPointerDown: function (event) { if (event.target === event.currentTarget) props.onClose(); } },
+                h("div", { className: "dsh-tavern-header-dialog dsh-tavern-global-settings", role: "dialog", "aria-modal": "true", "aria-label": "顶栏设置" },
+                    h("div", { className: "dsh-tavern-header-dialog-head" },
+                        h("strong", null, "顶栏设置"),
+                        h("button", { type: "button", className: "dsh-tavern-header-op", "aria-label": "关闭", title: "关闭", onClick: props.onClose }, "×")),
+                    h(HeaderItemsSettings))), document.body);
+        }
+
         // One slot for every top-bar shortcut. 酒馆状态 and 导出 keep their own
         // components (the export one owns a menu); pinned pages open their tab.
         function TavernHeaderItems(props) {
@@ -1630,6 +1680,8 @@
             const [folded, setFolded] = React.useState([]);
             const [context, setContext] = React.useState(null);
             const [more, setMore] = React.useState(null);
+            const [dialog, setDialog] = React.useState(false);
+            const closeDialog = React.useCallback(function () { setDialog(false); }, []);
             const host = React.useRef(null);
             const widths = React.useRef(new Map());
             const measuredDisplay = React.useRef("");
@@ -1676,16 +1728,22 @@
                     const gap = parseFloat(style.columnGap || style.gap) || 0;
                     const moreWidth = sample.offsetWidth + gap;
                     sample.remove();
-                    // The divider takes width the buttons cannot use.
+                    // The trailing divider takes width the buttons cannot use: its
+                    // margins plus the one gap before it. Hidden (mobile) costs nothing.
                     const divider = node.querySelector(".dsh-tavern-header-divider");
-                    const dividerWidth = divider ? divider.offsetWidth + (parseFloat(window.getComputedStyle(divider).marginLeft) || 0) + (parseFloat(window.getComputedStyle(divider).marginRight) || 0) + gap * 2 : 0;
-                    const next = tavernHeaderFold(visible, id => widths.current.get(id) || 0, Math.max(0, node.clientWidth - dividerWidth), { gap: gap, fixed: TAVERN_HEADER_NOT_FOLDED, moreWidth: moreWidth });
+                    const dividerStyle = divider && divider.offsetWidth ? window.getComputedStyle(divider) : null;
+                    const dividerWidth = dividerStyle ? divider.offsetWidth + (parseFloat(dividerStyle.marginLeft) || 0) + (parseFloat(dividerStyle.marginRight) || 0) + gap : 0;
+                    // ⋯ is always shown, so its width is never available to the buttons.
+                    const available = Math.max(0, tavernHeaderAvailableWidth(node) - dividerWidth - moreWidth);
+                    const next = tavernHeaderFold(visible, id => widths.current.get(id) || 0, available, { gap: gap, fixed: TAVERN_HEADER_NOT_FOLDED, moreWidth: 0 });
                     setFolded(current => current.length === next.length && current.every((id, index) => id === next[index]) ? current : next);
                 }
                 measure();
                 if (typeof ResizeObserver !== "function") return undefined;
                 const observer = new ResizeObserver(function () { cancelAnimationFrame(frame); frame = requestAnimationFrame(measure); });
                 observer.observe(node);
+                const row = node.closest("[class*=\"_titleRow\"]");
+                if (row) observer.observe(row);
                 return function () { observer.disconnect(); cancelAnimationFrame(frame); };
             }, [visible.join("|"), display, catalog]);
             React.useEffect(function () {
@@ -1731,16 +1789,21 @@
             const foldedEntries = folded.map(id => ({ id: id, label: titleOf(id) })).filter(entry => entry.id !== "header:export");
             return h("div", { ref: host, className: "dsh-tavern-header-items" + (display === "icon" ? " is-icon" : "") },
                 visible.map(item),
-                visible.length ? h("span", { className: "dsh-tavern-header-divider", "aria-hidden": "true" }) : null,
-                foldedEntries.length ? h("div", { className: "dsh-tavern-more-actions dsh-tavern-header-more" },
+                h("div", { className: "dsh-tavern-more-actions dsh-tavern-header-more" },
                     h("button", { type: "button", className: "dsh-tavern-btn dsh-tavern-header-more-button", "data-tavern-header-trigger": "more", "aria-label": "更多快捷入口", "aria-haspopup": "menu", "aria-expanded": Boolean(more), title: "更多快捷入口", onClick: function () { setContext(null); setMore(more ? null : { x: null, y: null }); } },
                         h("svg", { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2.4, strokeLinecap: "round", "aria-hidden": "true" }, h("path", { d: "M5 12h.01M12 12h.01M19 12h.01" }))),
                     more ? h("div", { className: "dsh-tavern-more-menu dsh-tavern-header-popup", role: "menu", "aria-label": "更多快捷入口" },
-                        foldedEntries.map(entry => h("button", { key: entry.id, type: "button", role: "menuitem", onClick: function () { setMore(null); activate(entry.id); } }, entry.label))) : null) : null,
-                context ? h("div", { className: "dsh-tavern-more-menu dsh-tavern-header-popup dsh-tavern-header-context", role: "menu", style: { position: "fixed", left: Math.min(context.x, (window.innerWidth || 1024) - 190) + "px", top: Math.min(context.y, (window.innerHeight || 768) - 140) + "px", right: "auto", bottom: "auto" } },
+                        foldedEntries.map(entry => h("button", { key: entry.id, type: "button", role: "menuitem", onClick: function () { setMore(null); activate(entry.id); } }, tavernStartIcon(entry.id, entries.get(entry.id), 15), entry.label)),
+                        foldedEntries.length ? h("div", { className: "dsh-tavern-header-menu-sep", role: "separator" }) : null,
+                        tavernHeaderMenuButton(h, "顶栏设置…", TAVERN_HEADER_GEAR_PATH, false, function () { setMore(null); setDialog(true); })) : null),
+                visible.length ? h("span", { className: "dsh-tavern-header-divider", "aria-hidden": "true" }) : null,
+                context ? h("div", { className: "dsh-tavern-more-menu dsh-tavern-header-popup dsh-tavern-header-context", role: "menu", style: { position: "fixed", left: Math.min(context.x, (window.innerWidth || 1024) - 190) + "px", top: Math.min(context.y, (window.innerHeight || 768) - 190) + "px", right: "auto", bottom: "auto" } },
                     tavernHeaderMenuButton(h, "左移", "M15 6l-6 6 6 6", items.indexOf(context.id) <= 0, function () { setContext(null); move(context.id, -1); }),
                     tavernHeaderMenuButton(h, "右移", "M9 6l6 6-6 6", items.indexOf(context.id) >= items.length - 1, function () { setContext(null); move(context.id, 1); }),
-                    tavernHeaderMenuButton(h, "移除", "M6 6l12 12M18 6L6 18", false, function () { setContext(null); remove(context.id); })) : null);
+                    tavernHeaderMenuButton(h, "移除", "M6 6l12 12M18 6L6 18", false, function () { setContext(null); remove(context.id); }),
+                    h("div", { className: "dsh-tavern-header-menu-sep", role: "separator" }),
+                    tavernHeaderMenuButton(h, "顶栏设置…", TAVERN_HEADER_GEAR_PATH, false, function () { setContext(null); setDialog(true); })) : null,
+                dialog ? h(TavernHeaderSettingsDialog, { onClose: closeDialog }) : null);
         }
 
 		function register(input) {
