@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "revision": "24123a620bf37e66956195b2645267504df36f01",
-  "releaseSequence": 745,
+  "revision": "e8b653d06743057d5702129bc2073036a068d7e7",
+  "releaseSequence": 746,
   "version": "3.0.0",
   "files": [
     {
@@ -2156,8 +2156,8 @@
     },
     {
       "path": "tavern-plugin/lib/domain/turn-orchestration.js",
-      "sha256": "5b8a744db675660330c5d9c4b389c35fada3e22bbb9b92d7f0de8ecdb8e00dca",
-      "size": 48645
+      "sha256": "35099752e239a245feaef73ff1acc459c085f1d2640fdb6e947ef7e29f686379",
+      "size": 48915
     },
     {
       "path": "tavern-plugin/lib/domain/uncommitted-rounds.js",
