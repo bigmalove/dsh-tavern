@@ -195,25 +195,121 @@ test('移动端实际样式：顶栏、键盘、候选、面板、编辑器与�
     assert.equal(await page.locator('.dsh-ig-card-toolbar').evaluate(el => getComputedStyle(el).opacity), '1', '触屏无需悬停即可操作图片')
   })
 
+  // 真实挂载入口组件再断言渲染结果：极简 React 只需要 useState/useRef/useEffect，
+  // 这样测的是「窗口里到底有没有控件、返回时会不会消失」，不是源码里写了什么。
+  await t.test('Android 内嵌外壳零控件、全屏铺满 iframe，返回键不退出', async () => {
+    await page.goto('about:blank'); await page.setViewportSize({ width: 360, height: 800 })
+    const entry = await readFile(new URL('../android/dsh-tavern-entry/client.js', import.meta.url), 'utf8')
+    const observed = await page.evaluate(async source => {
+      document.body.innerHTML = '<div id="root"></div>'
+      window.fetch = async url => ({
+        ok: true,
+        json: async () => String(url).endsWith('/embed') ? { url: 'about:blank' } : { online: true, update: { phase: 'idle' } }
+      })
+      const hooks = []
+      let cursor = 0
+      let render = () => {}
+      const react = {
+        useState(initial) {
+          const slot = cursor++
+          if (!(slot in hooks)) hooks[slot] = { value: typeof initial === 'function' ? initial() : initial }
+          return [hooks[slot].value, next => { hooks[slot].value = typeof next === 'function' ? next(hooks[slot].value) : next; render() }]
+        },
+        useRef(initial) {
+          const slot = cursor++
+          if (!(slot in hooks)) hooks[slot] = { value: { current: initial } }
+          return hooks[slot].value
+        },
+        useEffect(run, deps) {
+          const slot = cursor++
+          const previous = hooks[slot]
+          if (previous && deps && previous.deps && deps.every((value, index) => value === previous.deps[index])) return
+          if (previous && previous.cleanup) previous.cleanup()
+          const cleanup = run()
+          hooks[slot] = { deps, cleanup: typeof cleanup === 'function' ? cleanup : null }
+        },
+        createElement(type, props, ...children) { return { type, props: props || {}, children } }
+      }
+      function build(node) {
+        if (node === null || node === undefined || node === false) return document.createTextNode('')
+        if (typeof node === 'string' || typeof node === 'number') return document.createTextNode(String(node))
+        if (Array.isArray(node)) {
+          const fragment = document.createDocumentFragment()
+          node.forEach(child => fragment.append(build(child)))
+          return fragment
+        }
+        if (typeof node.type === 'function') return build(node.type(Object.assign({}, node.props, { children: node.children })))
+        const element = document.createElement(node.type)
+        for (const [key, value] of Object.entries(node.props)) {
+          if (key === 'className') element.className = value
+          else if (key === 'ref') value.current = element
+          else if (key.startsWith('on') && typeof value === 'function') element.addEventListener(key.slice(2).toLowerCase(), value)
+          else if (value !== null && value !== undefined && value !== false) element.setAttribute(key, String(value))
+        }
+        node.children.flat().forEach(child => element.append(build(child)))
+        return element
+      }
+      let component = null
+      render = () => { cursor = 0; document.getElementById('root').replaceChildren(build(react.createElement(component, {}))) }
+      window.__ModuleLoader__ = {
+        load: ({ factory }) => {
+          const exports = factory(() => react)
+          exports.apply({
+            slots: { inject: (_name, fn) => fn(), register: (_meta, value) => { component = value; return () => {} } },
+            effect: fn => fn()
+          })
+        }
+      }
+      new Function(source)()
+      render()
+      const open = [...document.querySelectorAll('button')].find(button => button.textContent.includes('酒馆工作台'))
+      open.click()
+      await new Promise(resolve => setTimeout(resolve, 60))
+      const shell = document.querySelector('.dsh-tavern-embed')
+      const frame = shell && shell.querySelector('iframe')
+      const report = {
+        mounted: Boolean(shell),
+        role: shell && shell.getAttribute('role'),
+        modal: shell && shell.getAttribute('aria-modal'),
+        controls: shell ? shell.querySelectorAll('button, [role="button"], a[href]').length : -1,
+        frameTop: frame && frame.getBoundingClientRect().top,
+        frameHeight: frame && frame.getBoundingClientRect().height,
+        viewport: innerHeight
+      }
+      // 原生返回兜底：canGoBack() 成立时会 goBack()，窗口必须留在原地。
+      history.back()
+      await new Promise(resolve => setTimeout(resolve, 150))
+      report.openAfterBack = Boolean(document.querySelector('.dsh-tavern-embed'))
+      return report
+    }, entry)
+    assert.equal(observed.mounted, true, '入口按钮能打开内嵌窗口')
+    assert.equal(observed.role, 'dialog', '外壳是模态对话框，DSHA 的返回键据此判定本次返回已处理')
+    assert.equal(observed.modal, 'true', '外壳声明 aria-modal')
+    assert.equal(observed.controls, 0, '窗口内没有任何可见控件')
+    assert.equal(observed.frameTop, 0, 'iframe 顶到屏幕边缘（没有工具栏占位）')
+    assert.ok(Math.abs(observed.frameHeight - observed.viewport) <= 1, 'iframe 占满可视高度')
+    assert.equal(observed.openAfterBack, true, '历史回退（原生返回兜底）后窗口仍在')
+  })
+
   await t.test('Android 内嵌外壳传递键盘后的可用高度给 iframe，关闭时释放监听', async () => {
     await page.goto('about:blank'); await page.setViewportSize({ width: 360, height: 800 })
     const entry = await readFile(new URL('../android/dsh-tavern-entry/client.js', import.meta.url), 'utf8')
     const style = entry.slice(entry.indexOf('const CSS = `') + 'const CSS = `'.length, entry.indexOf('`;', entry.indexOf('const CSS = `')))
     const controller = entry.slice(entry.indexOf('function installEmbeddedViewport('), entry.indexOf('function checkTavern('))
-    await page.setContent(`<style>body{margin:0}${style}</style><div class="dsh-tavern-embed"><div class="dsh-tavern-embed-bar"><span>酒馆工作台</span><button>刷新</button><button>直接打开</button><button>关闭</button></div><iframe title="酒馆工作台" srcdoc="<meta name=viewport content=width=device-width><body>测试会话</body>"></iframe></div>`)
+    await page.setContent(`<style>body{margin:0}${style}</style><div class="dsh-tavern-embed" role="dialog" aria-modal="true"><iframe title="酒馆工作台" srcdoc="<meta name=viewport content=width=device-width><body>测试会话</body>"></iframe></div>`)
     await page.evaluate(source => {
       window.testViewport = new EventTarget()
       Object.assign(window.testViewport, { height: 420, offsetTop: 30, scale: 1 })
       Object.defineProperty(window, 'visualViewport', { configurable: true, value: window.testViewport })
       window.releaseEmbedded = new Function(source + ';return installEmbeddedViewport')()(document.querySelector('.dsh-tavern-embed'))
     }, controller)
-    const frame = await box('iframe'), bar = await box('.dsh-tavern-embed-bar')
-    assert.equal(bar.y, 30)
-    assert.ok(Math.abs(frame.height + bar.height - 420) <= 1)
-    assert.ok(frame.y + frame.height <= 450)
+    const frame = await box('iframe')
+    assert.equal(frame.y, 30)
+    assert.ok(Math.abs(frame.height - 420) <= 1)
     await page.evaluate(() => { Object.assign(window.testViewport, { height: 800, offsetTop: 0 }); window.testViewport.dispatchEvent(new Event('resize')) })
     await settle()
     assert.equal((await box('.dsh-tavern-embed')).height, 800)
+    assert.ok(Math.abs((await box('iframe')).height - 800) <= 1)
     await page.evaluate(() => { window.releaseEmbedded(); window.testViewport.height = 300; window.testViewport.dispatchEvent(new Event('resize')) })
     await settle()
     assert.equal(await page.locator('.dsh-tavern-embed').evaluate(el => el.style.height), '')
