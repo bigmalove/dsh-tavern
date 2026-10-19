@@ -82,7 +82,7 @@ fail() { printf 'FAIL:%s\\n' "$1"; exit 1; }
   }
 })
 
-test('非适配版本宿主上字号补丁跳过（返回 null），不让整个安装回滚', async t => {
+test('宿主没有补丁要改的字号代码时跳过（返回 null），不让整个安装回滚', async t => {
   const { mkdtemp, writeFile, rm } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
   const { patchThemeFontLimit } = await import('../bin/theme-font-limit.mjs')

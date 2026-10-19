@@ -3,8 +3,8 @@
 			const h = React.createElement;
 			const builtIn = [
 				['本局', ['dsh-tavern:status', 'dsh-tavern:conversation-settings']],
-				['资料库', ['dsh-tavern:cards', 'dsh-tavern:worldbooks', 'dsh-tavern:presets', 'dsh-tavern:regex-library', 'dsh-tavern:resources', 'dsh-tavern:skills', 'dsh-tavern:system-prompts']],
-				['偏好', ['dsh-tavern:user-profile', 'dsh-tavern:guide-library', 'dsh-tavern:card-memory']]
+				['资料库', ['dsh-tavern:cards', 'dsh-tavern:worldbooks', 'dsh-tavern:regex-library', 'dsh-tavern:resources', 'dsh-tavern:skills']],
+				['偏好', ['dsh-tavern:presets', 'dsh-tavern:guide-library', 'dsh-tavern:card-memory']]
 			];
 			// Plugin groups (tavernUi.registerStartGroup) come after Tavern's own; a tab shows in the first group that claims it.
 			const claimed = new Set(builtIn.flatMap(group => group[1]));

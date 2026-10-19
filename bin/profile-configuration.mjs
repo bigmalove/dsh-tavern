@@ -7,6 +7,7 @@ import {
 import path from 'node:path'
 import { isMap, isScalar, isSeq, parseDocument } from 'yaml'
 import { createDurableFilePromotion } from '../tavern-plugin/lib/durable-file-promotion.js'
+import { hostLinePackages } from './dsh-compatibility.mjs'
 
 export const PROFILE_CONFIGURATION_VERSION = 1
 
@@ -82,6 +83,9 @@ export function mergeProfileManifest({ source, current = {}, pluginPath, dataRoo
       .map(name => [name, sourceDocument.devDependencies[name]]),
   )
   const sourceDependencies = { ...localDependencies, ...object(sourceDocument.dependencies) }
+  for (const [name, pinned] of Object.entries(hostLinePackages(dshVersion))) {
+    if (sourceDependencies[name] !== undefined) sourceDependencies[name] = pinned.version
+  }
   const currentDependencies = object(currentDocument.dependencies)
   const managedDependencies = sourceBundles.filter((name) => sourceDependencies[name] !== undefined)
   const previousManagedDependencies = uniqueStrings(currentTavern.managedDependencies).length > 0
@@ -128,13 +132,19 @@ const HOST_OPTIONAL_PACKAGES = ['dsh-pocket', 'dsh-web-mobile', '@dsh-external/d
 export function prepareProfileWorkspace(workspaceText, manifest) {
   const document = parseDocument(String(workspaceText || ''))
   if (document.errors.length > 0) throw new Error(`无法读取 pnpm workspace 配置：${document.errors[0].message}`)
+  // A host-line version replaces the adapted one, so its patch replaces the adapted patch.
+  const pinnedPackages = Object.entries(hostLinePackages(manifest.dshTavern?.dshVersion))
+  const versionSensitive = [...HOST_OPTIONAL_PACKAGES, ...pinnedPackages.map(([name]) => name)]
   for (const key of Object.keys(object(document.toJS()?.patchedDependencies))) {
-    const name = HOST_OPTIONAL_PACKAGES.find(item => key === item || key.startsWith(`${item}@`))
+    const name = versionSensitive.find(item => key === item || key.startsWith(`${item}@`))
     if (!name) continue
     // A user-installed layout may pin another version than the one patched.
     const version = key.slice(name.length + 1)
     const installed = manifest.dependencies?.[name]
     if (!installed || (version && installed !== version)) document.deleteIn(['patchedDependencies', key])
+  }
+  for (const [name, pinned] of pinnedPackages) {
+    if (pinned.patch && manifest.dependencies?.[name] === pinned.version) document.setIn(['patchedDependencies', `${name}@${pinned.version}`], pinned.patch)
   }
   return String(document)
 }

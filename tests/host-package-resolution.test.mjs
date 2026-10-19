@@ -9,14 +9,13 @@
 // （需要 Electron Node 的 asar 支持，纯 Node 下 app.asar 内路径恒不可解析，故那一组跳过）。
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { hostRequireCandidates, desktopLauncherEntry } from '../tavern-plugin/lib/domain/host-package-resolution.js'
-import { defaultHostRequire, installHostSessionPatch, PINNED_SHA256, SESSION_PATCH_VERSION } from '../tavern-plugin/lib/domain/host-session-patch.js'
+import { defaultHostRequire, installHostSessionPatch } from '../tavern-plugin/lib/domain/host-session-patch.js'
 import { installHostSubprocessPatch } from '../tavern-plugin/lib/domain/host-subprocess-patch.js'
 
 const pluginDirectory = dirname(fileURLToPath(new URL('../tavern-plugin/package.json', import.meta.url)))
@@ -107,15 +106,9 @@ test('desktopLauncherEntry 优先用宿主注入的入口，临时探针脚本�
   assert.equal(resolvable.at(-1).label, 'plugin-package')
 })
 
-test('0.2.0 桌面：会话补丁从 asar 宿主根解析，引脚文件逐字节命中', { skip: desktopSkip }, async () => {
+test('桌面：会话补丁从 asar 宿主根解析', { skip: desktopSkip }, async () => {
   const hostRequire = await defaultHostRequire(null, { env: desktopEnv, argv: desktopArgv })
   assert.match(hostRequire.resolve('@deepseek-ai/dsh-session/package.json'), /[\\/]app\.asar[\\/]dsh[\\/]node_modules[\\/]/)
-  const manifest = JSON.parse(readFileSync(hostRequire.resolve('@deepseek-ai/dsh-session/package.json'), 'utf8'))
-  assert.equal(manifest.version, SESSION_PATCH_VERSION)
-  for (const [name, allowed] of Object.entries(PINNED_SHA256)) {
-    const actual = createHash('sha256').update(readFileSync(hostRequire.resolve(name))).digest('hex')
-    assert.ok(allowed.includes(actual), `${name} 与 ${SESSION_PATCH_VERSION} 引脚表不一致：${actual}`)
-  }
 })
 
 test('同一性：宿主单例 instanceof asar 解析出的类，且重复解析落到同一份宿主包', { skip: desktopSkip }, async () => {
@@ -161,7 +154,7 @@ test('宿主包解析失败时 installHostSessionPatch 走 failed 而不是静�
   assert.match(failed.reason, /Cannot find module '@deepseek-ai\/dsh-session-persistence'/)
 })
 
-test('真机桌面：换用 asar 根后补丁走到版本闸，不再报「无法解析宿主 DSH 包」', { skip: desktopSkip }, async () => {
+test('真机桌面：换用 asar 根后不再报「无法解析宿主 DSH 包」', { skip: desktopSkip }, async () => {
   const require = await defaultHostRequire(null, { env: desktopEnv, argv: desktopArgv })
   const { Context } = await load(require.resolve('@deepseek-ai/cordis'))
   const { default: Jsonl } = await load(require.resolve('@deepseek-ai/dsh-session-persistence-jsonl'))
@@ -170,7 +163,7 @@ test('真机桌面：换用 asar 根后补丁走到版本闸，不再报「无�
     await ctx.plugin(Jsonl, { root: mkdtempSync(join(tmpdir(), 'tavern-asar-host-patch-')), compression: 'none' })
     // query 传 null：0.2.0 的 SessionQueryEngine 需要等价宿主实例，这里只验证解析阶段。
     const handle = await installHostSessionPatch({ hostRequire: require, persistence: ctx.sessionPersistence, query: null })
-    assert.equal(handle.hostVersion, SESSION_PATCH_VERSION)
+    assert.match(handle.hostVersion, /^\d+\.\d+\.\d+/)
     assert.doesNotMatch(handle.reason, /无法解析宿主 DSH 包/)
     assert.notEqual(handle.status, 'skipped')
   } finally {

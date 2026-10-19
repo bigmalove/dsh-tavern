@@ -142,19 +142,24 @@ export function applyNativeSurfaceRepair(session, chat, plan, { repairId }) {
     return mutator.append(type, data, type === 'assistant/message' ? { surfaceOp: 'append', sourceEventSeqs: [] } : { surfaceOp: 'append' })
   }
   const source = { kind: 'model', provider: 'dsh-tavern', model: 'native-repair' }
+  const storySource = turn => Number.isSafeInteger(Number(turn)) && Number(turn) > 0 ? { ...source, tavernStoryTurn: Number(turn) } : source
   const anchors = []
-  for (const [index, round] of plan.rounds.entries()) {
-    const id = `tavern-native-repair:${repairId}:${index}`
-    // Story turn, as a regenerate's projection writes it (story alignment reads it).
-    const turn = round.turn
-    const input = round.userText === null ? null : write('user/message', { id: id + ':input', role: 'user',
-      content: [{ type: 'text', text: round.userText }], source: { kind: 'user', repair: { id: repairId } } })
-    const reply = write('assistant/message', { turn, step: 1, message: { id: round.greeting ? nativeOpeningMessageId(chat.id) : id + ':reply',
-      role: 'assistant', content: [{ type: 'text', text: round.replyText }], source } })
-    anchors.push({ messageIndex: round.messageIndex, anchor: input ? roundAnchor(turn, input, reply) : null })
-  }
-  // A stale tail with nothing to write in its place: shadow it with an empty node.
-  if (pending) write('assistant/message', { turn: 0, step: 1, message: { id: `tavern-native-repair:${repairId}:empty`, role: 'assistant', content: [], source } })
+  // The repair runs between rounds, where no step is open: all its writes share one
+  // edit step. Each reply keeps its story turn in tavernStoryTurn (story alignment
+  // reads it), since its event carries the edit step's numbers.
+  mutator.editStep(() => {
+    for (const [index, round] of plan.rounds.entries()) {
+      const id = `tavern-native-repair:${repairId}:${index}`
+      const turn = round.turn
+      const input = round.userText === null ? null : write('user/message', { id: id + ':input', role: 'user',
+        content: [{ type: 'text', text: round.userText }], source: { kind: 'user', repair: { id: repairId } } })
+      const reply = write('assistant/message', { turn, step: 1, message: { id: round.greeting ? nativeOpeningMessageId(chat.id) : id + ':reply',
+        role: 'assistant', content: [{ type: 'text', text: round.replyText }], source: storySource(turn) } })
+      anchors.push({ messageIndex: round.messageIndex, anchor: input ? roundAnchor(turn, input, reply) : null })
+    }
+    // A stale tail with nothing to write in its place: shadow it with an empty node.
+    if (pending) write('assistant/message', { turn: 0, step: 1, message: { id: `tavern-native-repair:${repairId}:empty`, role: 'assistant', content: [], source } })
+  })
   return { applied: true, anchors }
 }
 

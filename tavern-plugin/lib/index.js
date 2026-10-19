@@ -63,7 +63,7 @@ import { rescueHistoryNotice } from './domain/chat-history-rescue.js'
 import { readHostCompatibility } from './domain/host-compatibility.js'
 import { installHostSessionPatch } from './domain/host-session-patch.js'
 import { installHostSubprocessPatch } from './domain/host-subprocess-patch.js'
-import { repairStoredSessionLog } from './domain/session-log-repair.js'
+import { installSessionLogAutoRepair, repairStoredSessionLog } from './domain/session-log-repair.js'
 import { measureForegroundPressure } from './domain/foreground-context-pressure.js'
 import { replaceSessionSurface } from './domain/session-surface-mutations.js'
 import { createPresetDiagnostics } from './domain/preset-diagnostics.js'
@@ -225,6 +225,7 @@ import { canonicalTavernSkillName, createTavernSkillModule } from './domain/tave
 import { readZipEntries, writeZipEntries } from './domain/zip-entries.js'
 import { createGameFootprint } from './domain/game-footprint.js'
 import { buildGameSave, collectSaveRevisions, readGameSave } from './domain/game-save.js'
+import { compressSaveImage } from './domain/save-image-compression.js'
 import { readFileSync } from 'node:fs'
 import { readdir, readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
@@ -248,7 +249,8 @@ import { createProfileDataStore } from './profile-data-store.js'
 import { createChatPersistence } from './domain/chat-persistence.js'
 import { createChatJournalStore } from './domain/chat-journal-store.js'
 import { createResourceGraph } from './domain/resource-graph.js'
-import { normalizeBackgroundTasks, applyTavernSettingsPatch, presentTavernSettings, resolveSystemPrompt } from './domain/tavern-settings.js'
+import { normalizeBackgroundTasks, applyTavernSettingsPatch, presentTavernSettings, resolveSystemPrompt, uniqueName } from './domain/tavern-settings.js'
+import { safeExportFileName, buildSettingsBundle, readSettingsBundle, SETTINGS_BUNDLE_PARTS } from './domain/settings-bundle.js'
 // Runtime reads go through runtimePrompt() so panel overrides apply; the raw
 // file catalog only supplies built-in defaults.
 import { prompt as promptFile, SYSTEM_PROMPT_DEFINITIONS, SYSTEM_PROMPT_NAMES } from './prompt-catalog.js'
@@ -277,6 +279,12 @@ export async function apply(ctx) {
     if (open) console.warn('dsh-tavern: 会话已经打开，旧档留到下次启动再升级')
     else saveUpgradePreparation = await prepareSaveUpgrade(resolveTavernDataRoot(), sessionPatch.loadSessionMigration)
   }
+  // Older Agents numbered a turn twice; the host then refuses the whole log on every
+  // read. Repair it where the read fails, so restoring after a restart heals it too.
+  ctx.effect(() => installSessionLogAutoRepair({
+    persistence,
+    repair: sessionId => repairStoredSessionLog(resolveTavernDataRoot(), sessionId, sessionPatch.loadSessionCatalog),
+  }))
   await clearLegacyTavernDefault(ctx.get('settings'))
   const llm = ctx.get('llm')
   const agentRegistry = ctx.get('agents')
@@ -444,15 +452,13 @@ export async function apply(ctx) {
       spec: 'dsh-tavern.system-prompts',
       version: 1,
       systemAppendEnabled: settings.systemAppendEnabled === true,
+      promptSets: settings.promptSets,
       prompts: SYSTEM_PROMPT_DEFINITIONS.map(function (definition) {
         return Object.assign({}, definition, byName[definition.name] || { text: promptFile(definition.name), customized: false })
       })
     }
   }
-  function importSystemPromptDocument(payload) {
-    const prepared = prepareTextImport(payload, '系统提示词文件为空')
-    let document
-    try { document = JSON.parse(prepared.text) } catch (error) { throw new Error('系统提示词 JSON 无效: ' + str(error && error.message || error)) }
+  function systemPromptSetFromDocument(document, fallbackName) {
     if (!document || document.spec !== 'dsh-tavern.system-prompts') throw new Error('不是 DSH Tavern 系统提示词文件')
     if (Number(document.version) !== 1) throw new Error('不支持的系统提示词版本: ' + String(document.version))
     const source = document.prompts && typeof document.prompts === 'object' && !Array.isArray(document.prompts) ? document.prompts : {}
@@ -460,9 +466,17 @@ export async function apply(ctx) {
     for (const name of SYSTEM_PROMPT_NAMES) {
       if (name === 'system-append' && source[name] === undefined) continue
       if (typeof source[name] !== 'string' || (source[name].trim() === '' && name !== 'system-append' && name !== 'card-system')) throw new Error('系统提示词文件缺少有效内容: ' + name)
-      values[name] = source[name]
+      if (source[name].length > 100000) throw new Error('系统提示词不能超过 100000 字符: ' + name)
+      // Store only what differs from this version's defaults, so later default updates still apply.
+      if (source[name].trim() !== promptFile(name).trim()) values[name] = source[name]
     }
-    return values
+    const name = typeof document.name === 'string' && document.name.trim() ? document.name.trim().slice(0, 80) : fallbackName
+    return { action: 'add', name, promptOverrides: values, systemAppendEnabled: document.systemAppendEnabled !== false }
+  }
+  function exportSystemPromptDocument(settings) {
+    const current = presentSystemPrompts(settings)
+    const active = settings.promptSets.sets.find(set => set.active)
+    return { spec: current.spec, version: current.version, name: active ? active.name : '系统提示词', systemAppendEnabled: current.systemAppendEnabled, prompts: Object.fromEntries(current.prompts.map(function (item) { return [item.name, item.text] })) }
   }
   const applicationUpdater = createApplicationUpdater({
     dataRoot,
@@ -846,6 +860,61 @@ export async function apply(ctx) {
   const presetLibrary = createPresetLibrary({ resources: fileResources, state: profileData, prepareImport: prepareTextImport })
   const { read: readPreset, readDocument: readPresetDocument, preview: previewPreset,
     import: importPreset, editor: presetEditor, runtime: runtimePresets } = presetLibrary
+  async function importPresetAsNew(preset) {
+    const base = str(preset.name).replace(/^.*[\\/]/, '').replace(/\.json$/i, '').trim() || '导入的预设'
+    for (let index = 1; index < 100; index += 1) {
+      try { return await importPreset({ name: (index === 1 ? base : base + ' (' + index + ')') + '.json', text: preset.text }) }
+      catch (error) { if (!/文件已存在/.test(str(error && error.message))) throw error }
+    }
+    throw new Error('同名预设过多，请先整理预设库')
+  }
+  async function exportSettingsBundle(args) {
+    const include = Object.assign({}, args && args.include)
+    if (!SETTINGS_BUNDLE_PARTS.some(part => include[part] === true)) throw new Error('请至少选择一项导出内容')
+    const parts = {}
+    if (include.preset === true) {
+      const path = str(args.presetPath) || (await presetLibrary.catalog()).activePresetPath
+      if (!path) throw new Error('没有选中的预设，无法导出')
+      parts.preset = await presetLibrary.export(path)
+    }
+    if (include.systemPrompts === true) parts.systemPrompts = exportSystemPromptDocument(await readTavernSettings())
+    if (include.userProfile === true) {
+      const library = await userPreferenceProfile.read()
+      const profile = await userPreferenceProfile.read(str(args.userProfileId) || library.defaultProfileId || library.profileId)
+      if (!profile.confirmed || !str(profile.confirmed.injectionText).trim()) throw new Error('该长期偏好还没有确认的内容，无法导出')
+      parts.userProfile = { name: profile.name, summary: profile.confirmed.summary, injectionText: profile.confirmed.injectionText }
+    }
+    const name = str(args && args.name).trim() || (parts.preset ? parts.preset.name.replace(/\.json$/i, '') : parts.systemPrompts ? parts.systemPrompts.name : parts.userProfile.name)
+    const bundle = buildSettingsBundle({ name, ...parts })
+    return { name: safeExportFileName(bundle.name, 'dsh-tavern-preset') + '.dshpreset.json', text: JSON.stringify(bundle, null, 2) + '\n' }
+  }
+  async function importSettingsBundle(args) {
+    const prepared = prepareTextImport(args && args.payload, '导入文件为空')
+    const parts = readSettingsBundle(prepared.text, prepared.name)
+    const include = Object.assign({ preset: true, systemPrompts: true, userProfile: true }, args && args.include)
+    // Parse everything first so a bad part does not leave a half-applied import.
+    const promptSet = parts.systemPrompts && include.systemPrompts !== false ? systemPromptSetFromDocument(parts.systemPrompts, parts.name) : null
+    const imported = {}
+    if (parts.preset && include.preset !== false) {
+      const preset = await importPresetAsNew(parts.preset)
+      const runnable = preset.valid === true && preset.recognized === true
+      if (runnable) await presetLibrary.select(preset.path)
+      imported.preset = { path: preset.path, title: preset.title || preset.path, selected: runnable }
+    }
+    if (promptSet) {
+      const settings = await updateTavernSettings({ promptSet })
+      imported.systemPrompts = { name: (settings.promptSets.sets.find(set => set.active) || {}).name || promptSet.name }
+    }
+    if (parts.userProfile && include.userProfile !== false) {
+      const library = await userPreferenceProfile.read()
+      const name = uniqueName(library.profiles.map(item => item.name), parts.userProfile.name || '导入的长期偏好')
+      const created = await userPreferenceProfile.manage({ action: 'create', name, content: parts.userProfile.injectionText, summary: parts.userProfile.summary })
+      await userPreferenceProfile.manage({ action: 'default', profileId: created.profileId })
+      imported.userProfile = { id: created.profileId, name }
+    }
+    if (Object.keys(imported).length === 0) throw new Error('没有选择要导入的内容')
+    return { kind: parts.kind, imported }
+  }
   let resourceGraph
   async function renameResource(resourcePath, name) { return await resourceGraph.rename(resourcePath, name) }
   async function deleteLibraryResource(resourcePath, expectedKind) {
@@ -1569,7 +1638,11 @@ export async function apply(ctx) {
       }
       const attachments = []
       for (const ref of media.values()) {
-        try { const image = await ctx.get('attachments').readImage(ref); attachments.push({ attachmentId: ref.attachmentId, mediaType: ref.mediaType, data: Buffer.from(image.data) }) }
+        try {
+          const image = await ctx.get('attachments').readImage(ref)
+          attachments.push(await compressSaveImage({ attachmentId: ref.attachmentId, mediaType: ref.mediaType, data: Buffer.from(image.data) }))
+          await new Promise(resolve => setImmediate(resolve))
+        }
         catch { /* A missing picture must not block the save; the game keeps its reference. */ }
       }
       if (scene) scene.attachments = attachments
@@ -4666,6 +4739,8 @@ export async function apply(ctx) {
       case 'deleteScript': return await deleteScript(args && (args.cardPath || args.path))
       case 'importSource': return { source: await importSource(args && args.payload) }
       case 'importPreset': return { preset: await importPreset(args && args.payload) }
+      case 'exportSettingsBundle': return await exportSettingsBundle(args)
+      case 'importSettingsBundle': return await importSettingsBundle(args)
       case 'updateCard': {
         const change = await updateCard(args && args.path, args && args.patch)
         return { card: change.card, changed: change.changed }
@@ -4771,11 +4846,10 @@ export async function apply(ctx) {
         return { systemPrompts: presentSystemPrompts(await updateTavernSettings({ systemPrompt: { name, text: args && args.text } })) }
       }
       case 'resetSystemPrompts': return { systemPrompts: presentSystemPrompts(await updateTavernSettings({ resetSystemPrompts: SYSTEM_PROMPT_NAMES })) }
-      case 'importSystemPrompts': return { systemPrompts: presentSystemPrompts(await updateTavernSettings({ systemPrompts: importSystemPromptDocument(args && args.payload) })) }
-      case 'exportSystemPrompts': {
-        const current = presentSystemPrompts(await readTavernSettings())
-        const document = { spec: current.spec, version: current.version, prompts: Object.fromEntries(current.prompts.map(function (item) { return [item.name, item.text] })) }
-        return { name: 'dsh-tavern-system-prompts.json', text: JSON.stringify(document, null, 2) + '\n' }
+      case 'manageSystemPromptSet': {
+        const action = str(args && args.action)
+        if (!['create', 'duplicate', 'select', 'rename', 'delete'].includes(action)) throw new Error('未知的系统提示词方案操作')
+        return { systemPrompts: presentSystemPrompts(await updateTavernSettings({ promptSet: { action, id: args.id, name: args.name } })) }
       }
       case 'listSessions': {
         const settings = await readTavernSettings()
@@ -4794,7 +4868,6 @@ export async function apply(ctx) {
       case 'markConversationOpened': return await conversationRegistry.touch(args && args.sessionId, Date.now())
       // A log the host cannot open is repaired on demand: the client retries the open
       // once after this reports a rewrite, and untouched logs cost one read.
-      case 'repairSessionLog': return await repairStoredSessionLog(resolveTavernDataRoot(), str(args && args.sessionId), sessionPatch.loadSessionCatalog)
       case 'listMobileCardImports': return await mobileCardImport.list()
       case 'importMobileCard': {
         const archive = await mobileCardImport.archive(args && args.id)

@@ -2,11 +2,17 @@ import { access, copyFile, readdir, readFile, rename, stat, writeFile } from 'no
 import path from 'node:path'
 import { parseSessionLog, encodeCurrentGeneration } from './session-log-codec.js'
 
-// DSH refuses a whole log when a turn/start reuses the number of an already closed
-// turn ("turn/start does not open the expected turn"), so the card history row can
-// never be opened again. A live Agent that never learned its reserved opening turn
-// numbered its next turn that way. Renumbering the turns in order repairs exactly
-// that and leaves every other byte of the log alone.
+// DSH refuses a whole log for two kinds of damage older Tavern versions wrote, and
+// the session can then never be opened again:
+// - a turn/start reusing the number of a closed turn ("turn/start does not open the
+//   expected turn"): a live Agent never learned its reserved opening turn. Turns are
+//   renumbered in order.
+// - a reply written after its step closed ("assistant/message does not match an open
+//   turn and step", #247). Settlement wrote the copy just before opening the edit
+//   step for its replacement: the two rows swap places. Native repair wrote whole
+//   rounds after the last turn ended: that tail is dropped, it only copied the save
+//   and the next reconcile writes it again.
+// Neither inserts a row or moves an earlier event, so anchors into the log stay valid.
 const TURN_REPAIR_SUFFIX = '.bak-tavern-turnrepair'
 const SESSION_ID = /^[a-zA-Z0-9_-]+$/
 
@@ -33,8 +39,12 @@ export function repairCurrentSessionBuffer(buffer, catalog) {
   if (parsed.header?.version !== version) return refuse('不是当前版本会话日志')
   const healthy = openCurrentSession(catalog, parsed.header, parsed.events)
   if (healthy.ok) return { ok: true, changed: false, artifact: healthy.artifact, reason: '会话日志可以打开' }
-  const events = parsed.events.map(event => structuredClone(event))
-  if (!assignTurnNumbers(events)) return refuse(healthy.reason)
+  let events = parsed.events.map(event => structuredClone(event))
+  const renumbered = assignTurnNumbers(events)
+  const placed = placeStrayReplies(events)
+  if (placed === null) return refuse(healthy.reason)
+  events = placed.events
+  if (!renumbered && !placed.changed) return refuse(healthy.reason)
   const repaired = openCurrentSession(catalog, parsed.header, events)
   if (!repaired.ok) return refuse(repaired.reason)
   return { ok: true, changed: true, artifact: repaired.artifact, reason: healthy.reason }
@@ -96,6 +106,46 @@ export async function repairStoredSessionLog(dataRoot, sessionId, loadCatalog) {
   return { ok: result.ok, repaired: Boolean(result.ok && result.changed), reason: result.reason, file }
 }
 
+/**
+ * Repair a stored log at the moment the host fails to read it. DSH reads a log only
+ * when something needs its contents (history pane, resume, query), and those reads
+ * report corruption asynchronously, never through the UI call that switched to the
+ * session, so the repair has to sit on the persistence read itself. Each failing
+ * session is repaired at most once at a time and retried once; a log the repair
+ * cannot fix keeps failing with the host's original error.
+ */
+export function installSessionLogAutoRepair({ persistence, repair }) {
+  if (typeof persistence?.open !== 'function' || typeof repair !== 'function') return () => {}
+  const original = persistence.open
+  const ownOpen = Object.hasOwn(persistence, 'open')
+  const pending = new Map()
+  const unrepairable = new Set()
+  function repairOnce(id) {
+    if (!pending.has(id)) {
+      pending.set(id, Promise.resolve().then(() => repair(id)).then(result => Boolean(result?.repaired), () => false).finally(() => pending.delete(id)))
+    }
+    return pending.get(id)
+  }
+  const open = async function (id, access, options) {
+    try {
+      return await original.call(this, id, access, options)
+    } catch (error) {
+      if (error?.name !== 'SessionPersistenceCorruptionError' || options?.signal?.aborted || unrepairable.has(id)) throw error
+      if (!await repairOnce(id)) {
+        unrepairable.add(id)
+        throw error
+      }
+      return await original.call(this, id, access, options)
+    }
+  }
+  persistence.open = open
+  return () => {
+    if (persistence.open !== open) return
+    if (ownOpen) persistence.open = original
+    else delete persistence.open
+  }
+}
+
 function assignTurnNumbers(events) {
   let next = 1
   let changed = false
@@ -118,6 +168,59 @@ function assignTurnNumbers(events) {
     }
   }
   return changed
+}
+
+const NEEDS_STEP = new Set(['assistant/message', 'tool/result'])
+
+// Seq references a stored row may carry: replacement ranges and their sources.
+function remapSeqs(events, from, to) {
+  const map = seq => seq === from ? to : seq === to ? from : seq
+  for (const event of events) {
+    const op = event.surfaceOp
+    if (op && typeof op === 'object') {
+      for (const key of ['startSeq', 'endSeq', 'start', 'end']) if (Number.isSafeInteger(op[key])) op[key] = map(op[key])
+    }
+    if (Array.isArray(event.sourceEventSeqs)) event.sourceEventSeqs = event.sourceEventSeqs.map(map)
+    if (Array.isArray(event.data?.tavernRestoredSurfaceSeqs)) event.data.tavernRestoredSurfaceSeqs = event.data.tavernRestoredSurfaceSeqs.map(map)
+  }
+}
+
+/** Move replies written outside an open step into place; null when one cannot be. */
+function placeStrayReplies(input) {
+  let events = input
+  let changed = false
+  let turn = null
+  let step = null
+  for (let index = 0; index < events.length; index += 1) {
+    const event = events[index]
+    if (event.type === 'turn/start') { turn = event.data?.turn ?? null; step = null; continue }
+    if (event.type === 'turn/end') { turn = null; step = null; continue }
+    if (event.type === 'step/start') { step = event.data?.step ?? null; continue }
+    if (event.type === 'step/end') { step = null; continue }
+    if (!NEEDS_STEP.has(event.type)) continue
+    if (turn !== null && step !== null) {
+      if (event.data?.turn !== turn || event.data?.step !== step) { event.data = { ...event.data, turn, step }; changed = true }
+      continue
+    }
+    const next = events[index + 1]
+    if (turn !== null && next?.type === 'step/start' && next.data?.turn === turn) {
+      // The reply belongs to the step opened right after it: swap the two rows.
+      const [reply, opening] = [event.seq, next.seq]
+      events[index] = { ...next, seq: reply }
+      events[index + 1] = { ...event, seq: opening, data: { ...event.data, turn, step: next.data.step } }
+      remapSeqs(events, reply, opening)
+      changed = true
+      index -= 1
+      continue
+    }
+    if (events.slice(index + 1).some(row => row.type === 'turn/start')) return null
+    // Rounds written after the last turn ended: keep the log up to that turn's end.
+    const lastEnd = events.findLastIndex((row, position) => position < index && row.type === 'turn/end')
+    if (lastEnd < 0) return null
+    events = events.slice(0, lastEnd + 1)
+    return { events, changed: true }
+  }
+  return { events, changed }
 }
 
 function refuse(reason) {

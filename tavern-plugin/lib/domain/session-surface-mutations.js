@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util'
-import { appendSessionEvent, openTurnStep, sessionEvents, sessionEventData, surfaceReplacementRange, withSurfaceEditStep } from './session-events.js'
+import { appendSessionEvent, openTurnStep, sessionEvents, sessionEventData, surfaceReplacementRange } from './session-events.js'
 import { agentForSession } from './agent-lookup.js'
 
 /** Commit a replacement against the current surface, never the raw history.
@@ -19,13 +19,24 @@ export function replaceSessionSurface(session, type, data, { start, end, sourceE
 export function createSessionSurfaceMutator(session, events = sessionEvents(session)) {
   const bySeq = new Map()
   const replacements = new Map()
-  // Which turn and step are open, kept up to date from this batch's own appends, so a
-  // replacement never copies the whole log again (restoring n messages stays O(n)).
-  // A dedicated edit step (withSurfaceEditStep) opens and closes again inside one write.
+  // Which turn and step are open, and the highest turn and step numbers used, kept up
+  // to date from this batch's own appends, so a write never copies the whole log
+  // again (restoring n messages stays O(n)).
   let open = openTurnStep(events)
-  let anyTurn = events.some(event => event.type === 'turn/start')
+  let anyTurn = false
+  let lastTurn = 0
+  const lastStep = new Map()
+  function count(event) {
+    if (event.type === 'turn/start') { anyTurn = true; lastTurn = Math.max(lastTurn, Number(event.data?.turn) || 0) }
+    else if (event.type === 'step/start') {
+      const turn = event.data?.turn
+      lastStep.set(turn, Math.max(lastStep.get(turn) || 0, Number(event.data?.step) || 0))
+    }
+  }
+  events.forEach(count)
   function track(event) {
-    if (event.type === 'turn/start') { open = { turn: event.data?.turn ?? null, step: null }; anyTurn = true }
+    count(event)
+    if (event.type === 'turn/start') open = { turn: event.data?.turn ?? null, step: null }
     else if (event.type === 'turn/end') open = { turn: null, step: null }
     else if (event.type === 'step/start') open = { ...open, step: event.data?.step ?? null }
     else if (event.type === 'step/end') open = { ...open, step: null }
@@ -41,26 +52,51 @@ export function createSessionSurfaceMutator(session, events = sessionEvents(sess
     ids.get(id).push(event)
   }
   events.forEach(remember)
-  function append(type, data, intent) {
+  function write(type, data, intent) {
     const event = appendSessionEvent(session, type, data, intent)
     const stored = typeof event === 'number' ? (session.eventAt?.(event) ?? session.events?.[event]) : event
     remember(stored)
     if (stored) track(stored)
     return event
   }
-  // Released V4 requires assistant/tool surface events to sit inside the open
-  // turn and step and carry that step's numbers; a rewrite of an older round
-  // otherwise stops the whole archive from loading ("does not match an open
-  // turn and step"). Such a write gets a step of its own, and its retry must
-  // still match although the step number may differ between attempts.
+  // Released V4 accepts an assistant or tool event only inside the open turn and
+  // step, carrying that step's numbers; anything else stops the whole archive from
+  // loading ("does not match an open turn and step"). Writes after a round closed
+  // (settlement, repair, restore) therefore go into an edit step of their own: in
+  // the open turn when there is one, otherwise in an edit turn published as used.
+  const needsStep = type => type === 'assistant/message' || type === 'tool/result'
+  const misplaced = (type, data) => needsStep(type) && anyTurn
+    && (open.turn === null || open.step === null || data.turn !== open.turn || data.step !== open.step)
+  function editStep(body) {
+    if (open.turn !== null && open.step !== null) return body(open.turn, open.step)
+    const turn = open.turn ?? lastTurn + 1
+    const opensTurn = open.turn === null
+    const step = opensTurn ? 1 : (lastStep.get(turn) || 0) + 1
+    if (opensTurn) write('turn/start', { turn })
+    write('step/start', { turn, step })
+    try {
+      return body(turn, step)
+    } finally {
+      write('step/end', { turn, step })
+      if (opensTurn) {
+        write('turn/end', { turn, reason: { kind: 'completed' } })
+        const agent = agentForSession(session)
+        if (agent?.phase?.kind === 'idle') agent.phase.lastTurn = Math.max(Number(agent.phase.lastTurn) || 0, turn)
+      }
+    }
+  }
+  function append(type, data, intent) {
+    if (!misplaced(type, data)) return write(type, data, intent)
+    return editStep((turn, step) => write(type, { ...data, turn, step }, intent))
+  }
+  // A relocated write's retry must still match although its step number may differ
+  // between attempts.
   const sameWithoutPlacement = (left, right) => isDeepStrictEqual(
     { ...left, turn: null, step: null }, { ...right, turn: null, step: null })
   function replace(type, data, { start, end, sourceEventSeqs }) {
     const id = type === 'assistant/message' || type === 'tool/result' ? data.message?.id : data.id
     const normalized = sessionEventData(session, type, data)
-    const adoptsStep = (type === 'assistant/message' || type === 'tool/result')
-      && anyTurn
-      && (open.turn === null || open.step === null || data.turn !== open.turn || data.step !== open.step)
+    const adoptsStep = misplaced(type, data)
     if (id) {
       const prior = (replacements.get(type)?.get(id) || []).find(event => isDeepStrictEqual(event.sourceEventSeqs, sourceEventSeqs))
       if (prior) {
@@ -81,17 +117,14 @@ export function createSessionSurfaceMutator(session, events = sessionEvents(sess
     const referenced = new Set(Array.isArray(sourceEventSeqs) ? sourceEventSeqs : [])
     if (!Array.isArray(sourceEventSeqs) || targets.some(seq => !referenced.has(seq)) ||
         sourceEventSeqs.some(seq => !Number.isSafeInteger(seq) || !bySeq.has(seq))) throw new Error('消息替换缺少有效的来源引用')
-    // An open step already accepts the caller's placement. Between rounds there is
-    // none: released V4 then refuses the event and the whole archive stops
-    // loading, so give the write a step of its own.
-    if (!adoptsStep) return append(type, data, {
+    if (!adoptsStep) return write(type, data, {
       surfaceOp: { op: 'replace', start, end }, sourceEventSeqs
     })
-    return withSurfaceEditStep(session, agentForSession(session), (turn, step) => append(type, { ...data, turn, step }, {
+    return editStep((turn, step) => write(type, { ...data, turn, step }, {
       surfaceOp: { op: 'replace', start, end }, sourceEventSeqs
     }))
   }
-  return { append, replace }
+  return { append, replace, editStep }
 }
 
 // Accounting and mutation validation live together; the meter only adapts transport.

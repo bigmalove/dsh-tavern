@@ -68,7 +68,7 @@ function desktopShimCommandFile(dsh, env, platform) {
   try { return resolveCommandFile(dsh, env, platform) } catch { return null }
 }
 
-function resolveHostAnchor({ dsh, host = 'cli', env = process.env, execPath = process.execPath, platform = process.platform }) {
+export function resolveHostAnchor({ dsh, host = 'cli', env = process.env, execPath = process.execPath, platform = process.platform }) {
   let anchor
   if (host === 'desktop') {
     // UI updates outlive the current Host process. Preserve the already-loaded

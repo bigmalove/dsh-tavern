@@ -1,27 +1,48 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { accessSync, cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { createHash } from 'node:crypto'
+import { accessSync, cpSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { pathToFileURL } from 'node:url'
 import vm from 'node:vm'
 
-import { installHostSessionPatch, PINNED_SHA256, SESSION_PATCH_VERSION, SESSION_PATCH_VERSIONS } from '../tavern-plugin/lib/domain/host-session-patch.js'
+import { installHostSessionPatch } from '../tavern-plugin/lib/domain/host-session-patch.js'
 
-// 0.2.0-rc.2 适配：本用例的宿主路径由环境变量给出（内容决定版本），断言跟随
-// SESSION_PATCH_VERSION 与模块自己的引脚表，不再另抄一份 0.1.5-rc.2 的哈希/字符串。
+// 宿主路径由环境变量给出；补丁不分版本，同一组用例对任何 DSH 版本都适用。
 const runtime = process.env.TAVERN_DSH_RUNTIME || process.env.TAVERN_DSH_015_RUNTIME || '/tmp/tavern-session-patch-npm-015.jv9SRv'
 const runtimeReady = (() => { try { accessSync(join(runtime, 'package.json')); return true } catch { return false } })()
 
-test(`${SESSION_PATCH_VERSION} 补丁允许替换，未打补丁的读取仍拒绝，官方文件不变`, { skip: !runtimeReady }, async () => {
+// 0.2.1 exports the plugin's apply() at the top level, 0.2.0 as the default export.
+const jsonlPlugin = loaded => typeof loaded.apply === 'function' ? loaded : loaded.default
+
+// A runtime where only `copies` are real copies (free to edit) and every other
+// package is a symlink to the original, so a test never duplicates the whole host.
+async function overlayRuntime(copies) {
+  const work = await mkdtemp(join(tmpdir(), 'tavern-overlay-runtime-'))
+  cpSync(join(runtime, 'package.json'), join(work, 'package.json'))
+  const link = (relative) => {
+    const from = join(runtime, 'node_modules', relative)
+    const to = join(work, 'node_modules', relative)
+    if (copies.includes(relative)) cpSync(from, to, { recursive: true, dereference: true })
+    else symlinkSync(from, to)
+  }
+  mkdirSync(join(work, 'node_modules'))
+  for (const entry of readdirSync(join(runtime, 'node_modules'))) {
+    if (!entry.startsWith('@')) { link(entry); continue }
+    mkdirSync(join(work, 'node_modules', entry))
+    for (const child of readdirSync(join(runtime, 'node_modules', entry))) link(entry + '/' + child)
+  }
+  return work
+}
+
+test('补丁允许替换，未打补丁的读取仍拒绝，锚点漂移时明确失败', { skip: !runtimeReady }, async () => {
   const hostRequire = createRequire(join(runtime, 'package.json'))
   const load = name => import(pathToFileURL(hostRequire.resolve(name)).href)
   const { Context } = await load('@deepseek-ai/cordis')
   const { Session } = await load('@deepseek-ai/dsh-session')
-  const Jsonl = await load('@deepseek-ai/dsh-session-persistence-jsonl')
+  const Jsonl = jsonlPlugin(await load('@deepseek-ai/dsh-session-persistence-jsonl'))
   const { SessionQueryEngine } = await load('@deepseek-ai/dsh-session-query')
   const root = await mkdtemp(join(tmpdir(), 'tavern-host-patch-'))
   const blocked = new Context()
@@ -36,13 +57,13 @@ test(`${SESSION_PATCH_VERSION} 补丁允许替换，未打补丁的读取仍拒�
   const ctx = new Context()
   await ctx.plugin(Jsonl, { root: join(root, 'ready'), compression: 'none' }).await()
   const query = new SessionQueryEngine(ctx)
-  const mismatched = await installHostSessionPatch({
-    hostRequire: { resolve: name => name.endsWith('/surface') ? fileURLToPath(import.meta.url) : hostRequire.resolve(name) },
-    persistence: ctx.sessionPersistence,
-    query,
-  })
+  const drifted = await overlayRuntime(['@deepseek-ai/dsh-session'])
+  const driftedRequire = createRequire(join(drifted, 'package.json'))
+  const surfacePath = driftedRequire.resolve('@deepseek-ai/dsh-session/surface')
+  writeFileSync(surfacePath, readFileSync(surfacePath, 'utf8').replace("event.type === 'assistant/message' && raw !== undefined", "event.type === 'assistant/message' && undefined !== raw"))
+  const mismatched = await installHostSessionPatch({ hostRequire: driftedRequire, persistence: ctx.sessionPersistence, query })
   assert.equal(mismatched.status, 'failed')
-  assert.match(mismatched.reason, /补丁清单不一致/)
+  assert.match(mismatched.reason, /补丁锚点已变化/)
 
   const installed = await installHostSessionPatch({ hostRequire, persistence: ctx.sessionPersistence, query })
   assert.equal(installed.status, 'ready')
@@ -86,20 +107,7 @@ test(`${SESSION_PATCH_VERSION} 补丁允许替换，未打补丁的读取仍拒�
   await assert.rejects(() => stream.readPage({}, edited.seq), /cannot carry sourceEventSeqs/)
   client.SessionEventStream.prototype.readPage = patched.SessionEventStream.prototype.readPage
   assert.equal((await stream.readPage({}, edited.seq)).records[0].event.type, 'assistant/message')
-  const surfaceHash = createHash('sha256').update(readFileSync(hostRequire.resolve('@deepseek-ai/dsh-session/surface'))).digest('hex')
-  assert.ok(PINNED_SHA256['@deepseek-ai/dsh-session/surface'].includes(surfaceHash),
-    `宿主 surface 文件不在 ${SESSION_PATCH_VERSION} 引脚表内：${surfaceHash}`)
   await ctx.fiber.dispose()
-})
-
-test('补丁放行版本跟随允许清单；列表外的版本 skipped，不碰宿主文件', async () => {
-  const policy = JSON.parse(readFileSync(new URL('../config/dsh-compatibility.json', import.meta.url), 'utf8'))
-  for (const version of [SESSION_PATCH_VERSION, ...policy.allowedDshVersions]) assert.ok(SESSION_PATCH_VERSIONS.includes(version), version)
-  const root = await mkdtemp(join(tmpdir(), 'tavern-host-patch-version-'))
-  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-session', version: '0.0.0-unverified' }))
-  const handle = await installHostSessionPatch({ hostRequire: { resolve: name => name.endsWith('/package.json') ? join(root, 'package.json') : assert.fail('列表外版本不应解析宿主文件 ' + name) } })
-  assert.equal(handle.status, 'skipped')
-  assert.equal(handle.view().ready, false)
 })
 
 test('issue #74: patched persistence rewrites dynamic import("koffi") to a file URL', () => {
@@ -113,14 +121,10 @@ test('issue #74: patched persistence rewrites dynamic import("koffi") to a file 
   assert.match(modified, /\bimport\("file:\/\/\/resolved\/koffi\/index\.js"\)/)
 })
 
-// 0.2.0-rc.2 适配：本用例用 0.1.5-rc2 的 DSHA 打包改写合成样本，并断言那两个变体哈希
-// （8e7cc1aa… / d387931d…）被引脚表接受。0.2.0 引脚表只含官方 npm 字节——目前没有
-// 0.2.0 的 DSHA/Android 构建可供审计，合成样本也不再被接受，因此暂时显式跳过；
-// 拿到 0.2.0 DSHA 构建后把它的两个变体哈希补进 host-session-patch.js 的 PINNED_SHA256，
-// 再把这里的位置参数改成实际的运行时目录即可重新启用。
-test('DSHA v0.1.5-rc2 改写的两份宿主文件仍可安装补丁并完成替换', { skip: !runtimeReady || 'DSHA 0.2.0 打包变体尚未审计，0.1.5-rc2 合成样本不再被 0.2.0 引脚接受' }, async () => {
-  const work = await mkdtemp(join(tmpdir(), 'tavern-dsha-runtime-'))
-  cpSync(runtime, work, { recursive: true })
+// DSHA 会改写部分宿主文件（这里按 0.1.5-rc2 的改法合成）。补丁不校验文件指纹，
+// 只要锚点仍在、自检通过就能装上。
+test('DSHA 改写过的宿主文件仍可安装补丁并完成替换', { skip: !runtimeReady }, async () => {
+  const work = await overlayRuntime(['@deepseek-ai/dsh-session-format-v2-to-v3', '@deepseek-ai/dsh-session-persistence-jsonl'])
   const formatPath = join(work, 'node_modules/@deepseek-ai/dsh-session-format-v2-to-v3/lib/index.js')
   const jsonlPath = join(work, 'node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js')
   const format = readFileSync(formatPath, 'utf8')
@@ -133,10 +137,6 @@ test('DSHA v0.1.5-rc2 改写的两份宿主文件仍可安装补丁并完成替�
   const fields = importLine[1].split(',').map(item => item.trim()).filter(item => item && item !== 'link')
   writeFileSync(jsonlPath, jsonl.replace(importLine[0],
     '/* DSHA_ATOMIC_PUBLISH_V1 */\nimport { publishSessionExclusive as link } from "dsha-runtime-fs";\nimport { ' + fields.join(', ') + ' } from "node:fs/promises";'))
-  assert.equal(createHash('sha256').update(readFileSync(formatPath)).digest('hex'),
-    '8e7cc1aab2eef1099cbca390dd04c4a8ff3e6b3f64bd9e34e2357630b5e65af5')
-  assert.equal(createHash('sha256').update(readFileSync(jsonlPath)).digest('hex'),
-    'd387931d4ae848152411ec5f152064108b899bd9b5bd813c540afa2274703998')
   for (const [name, source] of [
     ['dsha-session-compat', 'export function wrapDshaLegacyStage(stage) { return stage }\n'],
     ['dsha-runtime-fs', 'import { link } from "node:fs/promises";\nexport const publishExclusive = link;\nexport function publishSessionExclusive(source, target) { return link(source, target) }\n'],
@@ -150,7 +150,7 @@ test('DSHA v0.1.5-rc2 改写的两份宿主文件仍可安装补丁并完成替�
   const load = name => import(pathToFileURL(hostRequire.resolve(name)).href)
   const { Context } = await load('@deepseek-ai/cordis')
   const { Session } = await load('@deepseek-ai/dsh-session')
-  const Jsonl = await load('@deepseek-ai/dsh-session-persistence-jsonl')
+  const Jsonl = jsonlPlugin(await load('@deepseek-ai/dsh-session-persistence-jsonl'))
   const { SessionQueryEngine } = await load('@deepseek-ai/dsh-session-query')
   const root = await mkdtemp(join(tmpdir(), 'tavern-dsha-host-'))
   const ctx = new Context()
@@ -168,6 +168,8 @@ test('DSHA v0.1.5-rc2 改写的两份宿主文件仍可安装补丁并完成替�
   const old = session.append('assistant/message', assistant('original'), { surfaceOp: 'append' })
   session.append('step/end', { turn: 1, step: 1 })
   session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+  session.append('turn/start', { turn: 2 })
+  session.append('step/start', { turn: 2, step: 1 })
   session.append('assistant/message', { ...assistant('edited'), turn: 2 }, { surfaceOp: { op: 'replace', startSeq: old.seq, endSeq: old.seq }, sourceEventSeqs: [old.seq] })
   session.append('step/end', { turn: 2, step: 1 })
   session.append('turn/end', { turn: 2, reason: { kind: 'completed' } })

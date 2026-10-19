@@ -13,12 +13,14 @@ import { stopService } from './service-lifecycle.mjs'
 import { installCliRuntime, migrateCliHome } from './cli-runtime.mjs'
 import { extractDshVersion, assertCompatibleDshVersion, dshCompatibilityNotice } from './dsh-compatibility.mjs'
 import { patchThemeFontLimit } from './theme-font-limit.mjs'
+import { patchChatAnswerStep } from './chat-answer-step-patch.mjs'
 import { installPluginDependencies, resolveHostDependencies } from './plugin-dependencies.mjs'
 import { isAsarPath } from './desktop-host-paths.mjs'
 import { migrateLegacyTavernData, resolveTavernDataRoot } from '../tavern-plugin/lib/domain/tavern-data.js'
 import { ensureUserExtensions } from '../tavern-plugin/lib/domain/user-extensions.js'
 import { beginProfileConfigurationUpdate, loadProfileManifest, mergeProfileManifest, prepareProfilePatch, prepareProfileWorkspace, syncProfileDependencyPatches } from './profile-configuration.mjs'
 import { ensureSidebarDefaults } from './launcher-settings.mjs'
+import { assertProfileBundlesLoad } from './profile-bundle-check.mjs'
 import { INSTALL_HOSTS, SOURCE_ROOT, DSH_ROOT, LEGACY_DSH_ROOT, CLI_RUNTIME_ROOT, RUNTIME_HOST, PROFILE_DIR, LOG_DIR, SCRIPT_PATH, PROFILE, RELEASE_FILE, DEFAULT_COMMIT_URL, REQUIRED_SOURCE_FILES, findDshCommand, pinnedDesktopDsh, requireCommand, run, runInstallCommand, runInstallDsh } from './launcher-environment.mjs'
 
 // Own installation transaction and legacy-source discovery. Desktop never installs a CLI shim.
@@ -280,7 +282,7 @@ async function installProfileOwned(host, { attemptId, runInstall, runDsh }) {
     }
     if (host === 'desktop') {
       bridge = beginDesktopProfileInstallation({ home: DSH_ROOT, sourceRoot: SOURCE_ROOT })
-      console.log(`Profile 完整备份：${bridge.backup}`)
+      if (bridge) console.log(`Profile 完整备份：${bridge.backup}`)
     }
     mkdirSync(PROFILE_DIR, { recursive: true })
     mkdirSync(LOG_DIR, { recursive: true })
@@ -315,7 +317,11 @@ async function installProfileOwned(host, { attemptId, runInstall, runDsh }) {
       // Its previous lockfile is not the source repository's frozen lockfile.
       await runInstall('pnpm', ['install', '--no-frozen-lockfile'], { cwd: PROFILE_DIR })
       if (host === 'desktop') await runInstall('node', [path.join(SOURCE_ROOT, 'bin', 'validate-desktop-profile.mjs')], { label: '验证桌面版配置', timeoutMs: 60_000 })
-      else await runDsh(dsh, ['--profile', PROFILE, '--dump-config'], { host, timeoutMs: 60_000 })
+      else {
+        await runDsh(dsh, ['--profile', PROFILE, '--dump-config'], { host, timeoutMs: 60_000 })
+        // --dump-config passes even when DSH would skip a bundle at boot; the desktop validator already checks this.
+        await assertProfileBundlesLoad({ dsh, host, profileDir: PROFILE_DIR, managedBundles: configuration.manifest.dshTavern.managedBundles })
+      }
       // --dump-config never imports the plugin; a partial node_modules would only fail after restart.
       assertRuntimeDependencies(SOURCE_ROOT)
       ensureSidebarDefaults()
@@ -326,8 +332,16 @@ async function installProfileOwned(host, { attemptId, runInstall, runDsh }) {
       if (isAsarPath(theme.directory)) console.log('0.2.0 桌面把 dsh-client-ui-theme 放在 app.asar 内（只读归档），字号上限补丁跳过；界面字号仍以宿主上限为准。')
       else {
         const patched = patchThemeFontLimit(theme.directory)
-        if (patched === null) console.log('当前 DSH 版本未验证字号补丁，已跳过；界面字号仍以宿主上限为准。')
+        if (patched === null) console.log('当前 DSH 的字号设置与补丁不符，已跳过；界面字号仍以宿主上限为准。')
         else if (patched) console.log('已将 DSH 原有字号上限放宽到 32px。')
+      }
+      const [chat] = resolveHostDependencies({ dsh, host, requiredExports: { '@deepseek-ai/dsh-client-ui-chat': null } })
+      // Same as the font patch: an asar host is read-only and a mismatch is skipped, never rolled back.
+      if (isAsarPath(chat.directory)) console.log('桌面版的对话界面在 app.asar 内（只读归档），回复步骤补丁跳过；整理过正文的回合在折叠模式下可能被收起，可改用「完全展开」。')
+      else {
+        const patched = patchChatAnswerStep(chat.directory)
+        if (patched === null) console.log('当前 DSH 的对话界面与回复步骤补丁不符，已跳过。')
+        else if (patched) console.log('已修正 DSH 对话界面：整理过正文的回合不再被当作过程收起。')
       }
       if (bridge) {
         await runInstall('node', [path.join(SOURCE_ROOT, 'bin', 'validate-desktop-profile.mjs'), bridge.desktopStage], { label: '验证原版 Desktop 切换入口', timeoutMs: 60_000 })

@@ -50,9 +50,13 @@ function recover(journalFile, journal) {
   }
   journal.phase = 'rolled-back'; save(journalFile, journal)
 }
+// Returns null when desktop already links to tavern: an update then rewrites the tavern profile in place,
+// as in-app updates do while the desktop is running. Only the first bridging needs the desktop closed.
 export function beginDesktopProfileInstallation({ home, sourceRoot, checkStopped = () => assertDesktopStopped([home], { requireGuiClosed: true }) }) {
-  checkStopped()
   const profiles = path.join(home, 'profiles'), live = path.join(profiles, 'desktop'), tavern = path.join(profiles, 'tavern')
+  const interrupted = (() => { try { return JSON.parse(readFileSync(path.join(home, 'profile-bridge', 'install.json'), 'utf8')).phase === 'preparing' } catch { return false } })()
+  if (!interrupted && present(live) && lstatSync(live).isSymbolicLink() && present(tavern) && realpathSync(live) === realpathSync(tavern)) return null
+  checkStopped()
   const state = path.join(home, 'profile-bridge')
   mkdirSync(state, { recursive: true })
   if (existsSync(path.join(state, 'pending'))) throw Error('有未完成的 profile 切换，请先检查 profile-bridge/pending。')

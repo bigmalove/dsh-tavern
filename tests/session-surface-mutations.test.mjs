@@ -113,3 +113,71 @@ test('正文编辑写在已结束回合之后，存档仍满足 released V4 的�
     assertReleasedV4Relationships({ header, events: written, inheritedEventCount: 0 }, new Set(written.map(event => event.type)))
   }
 })
+
+// issue #247: settlement and native repair appended replies after their round closed.
+test('回合结束后的追加、正文提交折叠与原生上下文修复都写进编辑步骤，存档满足 released V4 的回合约束', { skip: !process.env.DSH_BOOT_MODULE, timeout: 30000 }, async () => {
+  const { pathToFileURL } = await import('node:url')
+  const { sessionEvents } = await import('../tavern-plugin/lib/domain/session-events.js')
+  const { createSessionSurfaceMutator } = await import('../tavern-plugin/lib/domain/session-surface-mutations.js')
+  const { foldStorySubmission } = await import('../tavern-plugin/lib/domain/story-tool-submission.js')
+  const { applyNativeSurfaceRepair } = await import('../tavern-plugin/lib/domain/native-surface-repair.js')
+  const { storyEventTurn } = await import('../tavern-plugin/lib/domain/session-upgrade-references.js')
+  const { assertReleasedV4Relationships } = await import(
+    new URL('../../dsh-session-format-v3-to-v4/lib/index.js', pathToFileURL(process.env.DSH_BOOT_MODULE)))
+  const header = { type: 'session', version: 4, id: 'late-write-fixture', createdAt: 1, cwd: '/tmp', isSeeded: false, delegationDepth: 0, agentPreset: 'tavern' }
+  const model = { kind: 'model', provider: 'fixture', model: 'fixture' }
+  function played({ closeTurn }) {
+    const events = []
+    const session = { header, id: header.id, events, surface: { nodes: [] }, append(type, eventData, options = {}) {
+      const event = { seq: events.length, type, data: eventData, ...options }
+      events.push(event)
+      if (options.surfaceOp?.op === 'replace') {
+        const start = this.surface.nodes.indexOf(options.surfaceOp.start)
+        this.surface.nodes.splice(start, this.surface.nodes.indexOf(options.surfaceOp.end) - start + 1, event.seq)
+      } else if (options.surfaceOp === 'append') this.surface.nodes.push(event.seq)
+      return event
+    } }
+    session.append('turn/start', { turn: 1 })
+    session.append('step/start', { turn: 1, step: 1 })
+    session.append('user/message', { id: 'u1', role: 'user', content: [{ type: 'text', text: '问' }], source: { kind: 'user' } }, { surfaceOp: 'append' })
+    const call = session.append('assistant/message', { turn: 1, step: 1, message: { id: 'a1', role: 'assistant', content: [{ type: 'tool-call', id: 'c1', name: 'submit_story', arguments: '{}' }], source: model } }, { surfaceOp: 'append' })
+    session.append('tool/call', { turn: 1, step: 1, callId: 'c1', name: 'submit_story', arguments: '{}' })
+    const receipt = session.append('tool/result', { turn: 1, step: 1, message: { role: 'tool', toolCallId: 'c1', toolName: 'submit_story', content: [{ type: 'text', text: '已提交' }], source: { kind: 'tool' } } }, { surfaceOp: 'append' })
+    session.append('step/end', { turn: 1, step: 1 })
+    if (closeTurn) session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    return { session, call, receipt }
+  }
+  const valid = session => {
+    const written = sessionEvents(session)
+    assertReleasedV4Relationships({ header, events: written, inheritedEventCount: 0 }, new Set(written.map(event => event.type)))
+  }
+
+  // Settlement folds a submission while the turn is still open but its step closed.
+  {
+    const { session, call, receipt } = played({ closeTurn: false })
+    foldStorySubmission(session, { event: call, index: call.seq, receiptIndex: receipt.seq }, '正文')
+    valid(session)
+    const steps = sessionEvents(session).filter(event => event.type === 'step/start')
+    assert.equal(steps.length, 2, 'the copy and its replacement share one edit step')
+  }
+  // A plain late append, between rounds.
+  {
+    const { session } = played({ closeTurn: true })
+    createSessionSurfaceMutator(session).append('assistant/message', { turn: 1, step: 1, message: { id: 'late', role: 'assistant', content: [{ type: 'text', text: '迟到' }], source: model } }, { surfaceOp: 'append', sourceEventSeqs: [] })
+    valid(session)
+  }
+  // Native repair writes two older rounds back after the last round ended.
+  {
+    const { session } = played({ closeTurn: true })
+    const plan = { status: 'tail', keep: session.surface.nodes.length, checkpoint: -1, rounds: [
+      { turn: 34, messageIndex: 1, userText: '行动34', replyText: '正文34' },
+      { turn: 35, messageIndex: 3, userText: '行动35', replyText: '正文35' },
+    ] }
+    const result = applyNativeSurfaceRepair(session, { id: 'chat' }, plan, { repairId: 'r1' })
+    valid(session)
+    assert.equal(sessionEvents(session).filter(event => event.type === 'turn/start').length, 2, 'all repair writes share one edit turn')
+    const replies = sessionEvents(session).filter(event => event.data?.message?.source?.model === 'native-repair')
+    assert.deepEqual(replies.map(storyEventTurn), [34, 35], 'each reply keeps its story turn')
+    assert.deepEqual(result.anchors.map(item => item.anchor.turn), [34, 35])
+  }
+})

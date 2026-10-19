@@ -575,7 +575,8 @@ export function createApplicationUpdater(options) {
     if (managed) throw new Error(`此酒馆由 DSH 插件管理器安装。请关闭酒馆后在终端运行：${managed.updateCommand}，然后重新启动 tavern Profile。`)
     // A Git checkout is the developer's: the updater would install a separate copy (or replace this one
     // and drop its .git), never update what is running. Checking for updates still works.
-    if (await stat(path.join(sourceRoot, '.git')).then(() => true, () => false)) {
+    // Android is the exception: android/setup.sh installs a Git checkout and android/update.sh fast-forwards it.
+    if (await host() !== 'android' && await stat(path.join(sourceRoot, '.git')).then(() => true, () => false)) {
       throw new Error(`此酒馆从 Git 仓库运行（${sourceRoot}），应用内更新不会更新它。请在仓库里用 git pull 更新，然后重新启动酒馆。`)
     }
     const identity = await localIdentity(true)

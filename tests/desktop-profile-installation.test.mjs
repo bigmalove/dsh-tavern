@@ -32,7 +32,10 @@ test('首次安装、还原原版、重复安装均保留原版配置和存档',
   assert.ok(JSON.parse(readFileSync(path.join(r.desktop, 'package.json'))).dsh.profile.bundles.includes('dsh-profile-bridge'))
   const again = prepare(r); again.finish(); again.commit()
   assert.equal(realpathSync(r.desktop), realpathSync(r.tavern))
-  const update = prepare(r); update.finish(); update.commit()
+  // Already bridged: in-app updates run with the desktop open, so no profile switch and no stop check.
+  const update = beginDesktopProfileInstallation({ ...r, checkStopped() { throw Error('不应要求退出桌面') } })
+  assert.equal(update, null)
+  assert.equal(realpathSync(r.desktop), realpathSync(r.tavern))
   assert.equal(readFileSync(path.join(r.home, 'profile-data/tavern/data/story'), 'utf8'), '正文与历史')
 })
 test('安装或切换后失败都完整恢复之前的 tavern 和 desktop', t => {

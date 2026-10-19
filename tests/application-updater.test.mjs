@@ -322,5 +322,9 @@ test('从 Git 仓库运行时不启动应用内更新，提示用 git pull；检
     await mkdir(path.join(root, '.git'), { recursive: true })
     const updater = createApplicationUpdater({ dataRoot: path.join(root, 'data'), sourceRoot: root, runtimeHost: 'cli', ...verifiedUpdate })
     await assert.rejects(updater.start(), /Git 仓库运行.*git pull/)
+    // Android installs are Git checkouts by design; android/update.sh updates them in place.
+    const android = createApplicationUpdater({ dataRoot: path.join(root, 'data-android'), sourceRoot: root, runtimeHost: 'android',
+      ...verifiedUpdate, fetchLatestCommit: async () => knownIdentity.currentCommit })
+    assert.equal((await android.start()).phase, 'up-to-date')
   } finally { await rm(root, { recursive: true, force: true }) }
 })

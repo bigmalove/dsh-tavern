@@ -8,6 +8,14 @@ export const { adaptedDshVersion, recommendedDesktopVersion, desktopReleasesUrl,
 export const allowedDshVersions = compatibility.allowedDshVersions || [adaptedDshVersion]
 if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(adaptedDshVersion)) throw new Error('DSH 适配版本配置无效')
 
+// Bundles whose peer range follows the host line (dsh-better-sidebar 0.28 needs
+// ^0.2.1, 0.26 needs ^0.2.0). DSH silently skips a bundle with unmet peers, so
+// every allowed host line other than the adapted one names its versions here.
+export function hostLinePackages(dshVersion) {
+  const line = String(dshVersion || '').match(/^\d+\.\d+\.\d+/)?.[0]
+  return (line && compatibility.hostLinePackages?.[line]) || {}
+}
+
 export function extractDshVersion(output) {
   const match = String(output || '').match(/\b(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\b/)
   if (!match) throw new Error('无法识别当前 DSH 版本。')
