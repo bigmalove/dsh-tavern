@@ -2,7 +2,7 @@ import { storyEventTurn } from './session-upgrade-references.js'
 import { isCompactionCheckpoint } from './compaction-checkpoint.js'
 import { inputAttachments } from './player-input-content.js'
 import { isRescuedHistoryMessage } from './chat-history-rescue.js'
-import { replaceSessionSurface } from './session-surface-mutations.js'
+import { createSessionSurfaceMutator, replaceSessionSurface } from './session-surface-mutations.js'
 import { restoredSurfaceSeqs } from './surface-restoration.js'
 import { sessionEvents, surfaceReplacementRange } from './session-events.js'
 import { createSurfaceOwnership, planSurfaceRecovery, planSurfaceRange, SurfaceRecoveryError, OWNED } from './surface-recovery.js'
@@ -482,10 +482,59 @@ export function regenerationProjection(replacement, data, operationId) {
   }
 }
 
-/** Idempotent: each replacement reuses its id and sources, so a retry after a crash writes nothing twice. */
+/**
+ * Idempotent: each replacement reuses its id and sources, so a retry after a crash writes nothing twice.
+ *
+ * A tool-submitted round has no streamed answer of its own: its body only ever
+ * existed as a replacement copy, and the human transcript renders append-origin
+ * events ("replacement copies stay model-only"). Regenerating such a round hides
+ * the old turn and leaves the new one empty — the body is nowhere on screen.
+ * Give it a transcript copy first, then shadow the whole range including that
+ * copy, exactly like the fold does for a live submission.
+ */
 export function applyRegenerationProjection(session, projection) {
-  replaceSessionSurface(session, 'assistant/message', projection.data, projection.range)
-  for (const cleanup of projection.cleanups || []) replaceSessionSurface(session, 'user/message', cleanup.data, cleanup.range)
+  const fromSubmission = projection.data?.message?.source?.model === 'reply-projection'
+  const blocks = Array.isArray(projection.data?.message?.content) ? projection.data.message.content : []
+  const body = blocks.filter(block => block?.type === 'text').map(block => block.text).join('')
+  // A fold that won the race already appended this body into the attempt's turn;
+  // appending a second copy would show the round twice.
+  const shown = fromSubmission && body !== ''
+    ? sessionEvents(session).find(event => event?.type === 'assistant/message' && event.surfaceOp === 'append' &&
+        Number(event.seq) > Number(projection.range?.end) &&
+        (event.data?.message?.content || []).some(block => block?.type === 'text' && block.text === body))
+    : undefined
+  const nodes = Array.isArray(session?.surface?.nodes) ? session.surface.nodes.map(Number) : []
+  const replaceCleanups = () => {
+    for (const cleanup of projection.cleanups || []) replaceSessionSurface(session, 'user/message', cleanup.data, cleanup.range)
+  }
+  if (!fromSubmission) {
+    replaceSessionSurface(session, 'assistant/message', projection.data, projection.range)
+    replaceCleanups()
+    return
+  }
+  // Retry after a crash: the copy is on the surface already, and the old range
+  // may already be shadowed. Nothing left to write then.
+  const copySeq = shown ? Number(shown.seq) : -1
+  const from = nodes.indexOf(Number(projection.range?.start))
+  if (from < 0) {
+    if (copySeq < 0) replaceSessionSurface(session, 'assistant/message', projection.data, projection.range)
+    replaceCleanups()
+    return
+  }
+  const surface = createSessionSurfaceMutator(session)
+  surface.editStep(() => {
+    const shownSeq = copySeq >= 0
+      ? copySeq
+      : Number((entry => (typeof entry === 'number' ? entry : entry.seq))(surface.append('assistant/message', projection.data, { surfaceOp: 'append' })))
+    const to = session.surface.nodes.map(Number).indexOf(shownSeq)
+    if (to < from) return
+    surface.replace('assistant/message', projection.data, {
+      start: projection.range.start,
+      end: shownSeq,
+      sourceEventSeqs: session.surface.nodes.slice(from, to + 1).map(Number),
+    })
+  })
+  replaceCleanups()
 }
 
 /** Turns cut off without ending (the server stopped mid-reply) whose nodes the model still sees. */
