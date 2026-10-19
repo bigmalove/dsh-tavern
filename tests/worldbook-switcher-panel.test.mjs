@@ -88,14 +88,6 @@ test('世界书切换器面板：渲染、开关、详情、删除与配置', as
 	assert.equal(feature.strategyOf({ constant: true }), 'constant')
 	assert.equal(feature.strategyOf({ vectorized: true }), 'vectorized')
 	assert.equal(feature.strategyOf({ selective: true }), 'selective')
-	assert.equal(feature.positionValue({ position: 1 }), 'after_char')
-	assert.equal(feature.positionValue({ position: 4 }), 'at_depth')
-	assert.equal(feature.positionValue({ position: 'after_example_messages' }), 'after_example')
-	assert.equal(feature.positionValue({ position: 'before_char' }), 'before_char')
-	assert.equal(feature.positionPatch('after_char'), 1)
-	assert.equal(feature.positionPatch('at_depth'), 4)
-	assert.equal(feature.positionPatch('outlet'), 7)
-	assert.equal(feature.positionPatch('不认识的'), 0)
 	assert.equal(feature.panelHeight(12, false, 720), 520)
 	const wide = feature.columnWidths({ available: 1264, all: true, frequent: true, pane: true })
 	assert.equal(wide.widths.main, 300)
@@ -144,32 +136,59 @@ test('世界书切换器面板：渲染、开关、详情、删除与配置', as
 	assert.ok(query('.dsh-tavern-wbsw-detail'), '点击条目应打开详情')
 	assert.equal(queryAll('.dsh-tavern-wbsw-strategy-btn').length, 3)
 	assert.equal(query('.dsh-tavern-wbsw-content').readOnly, true)
-	assert.equal(queryAll('.dsh-tavern-wbsw-field select option').length, 8, '插入位置应与 ST 一致有八项')
-	assert.deepEqual(queryAll('.dsh-tavern-wbsw-field select option').map(option => option.textContent), ['角色定义前', '角色定义后', '示例消息前', '示例消息后', '作者注释前', '作者注释后', '指定深度', 'Outlet'])
-	assert.equal(query('.dsh-tavern-wbsw-field-depth input').disabled, true, '非“指定深度”时深度不可编辑')
+	// 详情只给 dsh-tavern 真读的字段，不摆 ST 的插入位置/深度。
+	assert.ok(!query('.dsh-tavern-wbsw-detail').textContent.includes('插入位置'), '不应出现 ST 的插入位置')
+	assert.ok(!query('.dsh-tavern-wbsw-detail').textContent.includes('深度'), '不应出现 ST 的深度')
+	const labels = queryAll('.dsh-tavern-wbsw-detail .dsh-tavern-wbsw-field > span').map(node => node.textContent)
+	assert.deepEqual(labels, ['排序', '扫描消息', '二级条件'])
+	assert.equal(queryAll('.dsh-tavern-wbsw-detail .dsh-tavern-wbsw-field select option').length, 4, '二级条件四档')
 	await act(async () => { queryAll('.dsh-tavern-wbsw-strategy-btn')[2].click() })
 	await tick()
 	const strategyCall = calls.filter(call => call[0] === 'updateWorldBook').pop()
 	assert.equal(strategyCall[1].update.operations[0].patch.vectorized, true)
 
-	// 插入位置：选“指定深度”写 4，深度随之可用；再选“示例消息前”写 5。
-	const positionSelect = query('.dsh-tavern-wbsw-detail select')
+	// 排序：改完失焦即写入 order。
+	const orderInput = queryAll('.dsh-tavern-wbsw-detail .dsh-tavern-wbsw-field input')[0]
 	await act(async () => {
-		positionSelect.value = 'at_depth'
-		positionSelect.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+		setInput.call(orderInput, '250')
+		orderInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+	})
+	await act(async () => { orderInput.dispatchEvent(new dom.window.FocusEvent('focusout', { bubbles: true })) })
+	await tick()
+	const orderCall = calls.filter(call => call[0] === 'updateWorldBook').pop()
+	assert.equal(orderCall[1].update.operations[0].patch.order, 250, '排序应写入 order')
+	assert.match(query('.dsh-tavern-wbsw-feedback').textContent, /排序已改为 250/)
+
+	// 扫描消息数：填 5 写 scanDepth，清空写回 null（跟随世界书）。
+	const scanInput = queryAll('.dsh-tavern-wbsw-detail .dsh-tavern-wbsw-field input')[1]
+	assert.equal(scanInput.placeholder, '跟随 2', '占位符应显示世界书默认值')
+	await act(async () => {
+		setInput.call(scanInput, '5')
+		scanInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+	})
+	await act(async () => { scanInput.dispatchEvent(new dom.window.FocusEvent('focusout', { bubbles: true })) })
+	await tick()
+	assert.equal(calls.filter(call => call[0] === 'updateWorldBook').pop()[1].update.operations[0].patch.scanDepth, 5)
+	await act(async () => {
+		setInput.call(scanInput, '')
+		scanInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+	})
+	await act(async () => { scanInput.dispatchEvent(new dom.window.FocusEvent('focusout', { bubbles: true })) })
+	await tick()
+	assert.equal(calls.filter(call => call[0] === 'updateWorldBook').pop()[1].update.operations[0].patch.scanDepth, null, '清空应恢复跟随世界书')
+
+	// 二级条件：仅关键词触发时可用。
+	const logicSelect = query('.dsh-tavern-wbsw-detail .dsh-tavern-wbsw-field select')
+	assert.equal(logicSelect.disabled, true, '常驻/向量化时二级条件不可编辑')
+	await act(async () => { queryAll('.dsh-tavern-wbsw-strategy-btn')[1].click() })
+	await tick()
+	assert.equal(query('.dsh-tavern-wbsw-detail .dsh-tavern-wbsw-field select').disabled, false, '关键词触发时二级条件可编辑')
+	await act(async () => {
+		query('.dsh-tavern-wbsw-detail .dsh-tavern-wbsw-field select').value = '3'
+		query('.dsh-tavern-wbsw-detail .dsh-tavern-wbsw-field select').dispatchEvent(new dom.window.Event('change', { bubbles: true }))
 	})
 	await tick()
-	const atDepthCall = calls.filter(call => call[0] === 'updateWorldBook').pop()
-	assert.equal(atDepthCall[1].update.operations[0].patch.position, 4)
-	assert.equal(query('.dsh-tavern-wbsw-field-depth input').disabled, false, '选“指定深度”后深度应可编辑')
-	await act(async () => {
-		query('.dsh-tavern-wbsw-detail select').value = 'before_example'
-		query('.dsh-tavern-wbsw-detail select').dispatchEvent(new dom.window.Event('change', { bubbles: true }))
-	})
-	await tick()
-	const beforeExampleCall = calls.filter(call => call[0] === 'updateWorldBook').pop()
-	assert.equal(beforeExampleCall[1].update.operations[0].patch.position, 5)
-	assert.equal(query('.dsh-tavern-wbsw-field-depth input').disabled, true)
+	assert.equal(calls.filter(call => call[0] === 'updateWorldBook').pop()[1].update.operations[0].patch.selectiveLogic, 3)
 
 	// 两段式删除。
 	await act(async () => { query('.dsh-tavern-wbsw-detail .dsh-tavern-wbsw-danger').click() })

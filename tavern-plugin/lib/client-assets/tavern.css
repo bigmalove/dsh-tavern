@@ -3258,8 +3258,9 @@ body.dsh-tavern-shell-active [data-turn-tail][data-actions-reveal="hover"]:has(.
 .dsh-tavern-wbsw-fields { display: flex; align-items: flex-end; gap: 8px; }
 .dsh-tavern-wbsw-field { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; color: var(--dsw-alias-label-secondary); font-size: 10px; }
 .dsh-tavern-wbsw-field select, .dsh-tavern-wbsw-field input { height: 28px; min-width: 0; padding: 0 7px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; outline: none; background: var(--dsw-specific-input-major); color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; }
-.dsh-tavern-wbsw-field-depth { flex: none; width: 76px; }
-.dsh-tavern-wbsw-field-depth.is-idle input { opacity: .55; }
+.dsh-tavern-wbsw-field-narrow { flex: none; width: 78px; }
+.dsh-tavern-wbsw-field.is-idle > span { opacity: .55; }
+.dsh-tavern-wbsw-field.is-idle input, .dsh-tavern-wbsw-field.is-idle select { opacity: .55; }
 .dsh-tavern-wbsw-feedback { min-height: 16px; color: var(--dsw-alias-label-tertiary); font-size: 10px; }
 .dsh-tavern-wbsw-section-title { margin-top: 2px; color: var(--dsw-alias-label-secondary); font-size: 10px; font-weight: 700; letter-spacing: .04em; }
 .dsh-tavern-wbsw-toggles { display: grid; gap: 2px; padding: 4px 8px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; }

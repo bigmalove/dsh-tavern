@@ -19,33 +19,6 @@ const WBSW_STRATEGIES = Object.freeze([
 	{ value: "selective", label: "关键词触发（绿）", color: "#10b981", glyph: "◉" },
 	{ value: "vectorized", label: "向量化（紫）", color: "#a855f7", glyph: "◆" }
 ]);
-// 与 SillyTavern 世界书一致的八个插入位置；存回去用它的数字编码，
-// 内置（人物卡）格式也写进 extensions.position，导出时能原样带回 ST。
-const WBSW_POSITIONS = Object.freeze([
-	{ value: "before_char", label: "角色定义前", code: 0 },
-	{ value: "after_char", label: "角色定义后", code: 1 },
-	{ value: "before_example", label: "示例消息前", code: 5 },
-	{ value: "after_example", label: "示例消息后", code: 6 },
-	{ value: "before_author_note", label: "作者注释前", code: 2 },
-	{ value: "after_author_note", label: "作者注释后", code: 3 },
-	{ value: "at_depth", label: "指定深度", code: 4 },
-	{ value: "outlet", label: "Outlet", code: 7 }
-]);
-// ST 曾用过的字符串名，读旧存档时也要认得。
-const WBSW_POSITION_ALIASES = Object.freeze({
-	before_char: "before_char",
-	before_character_definition: "before_char",
-	after_char: "after_char",
-	after_character_definition: "after_char",
-	before_example: "before_example",
-	before_example_messages: "before_example",
-	after_example: "after_example",
-	after_example_messages: "after_example",
-	before_author_note: "before_author_note",
-	after_author_note: "after_author_note",
-	at_depth: "at_depth",
-	outlet: "outlet"
-});
 const WBSW_USAGE_LIMIT = 400;
 
 function wbConfigVisible(value) {
@@ -226,29 +199,6 @@ function wbStrategyPatch(strategy) {
 	if (strategy === "constant") return { constant: true, selective: false, vectorized: false };
 	if (strategy === "vectorized") return { constant: false, selective: false, vectorized: true };
 	return { constant: false, selective: true, vectorized: false };
-}
-
-function wbPositionValue(entry) {
-	const raw = entry && entry.position;
-	if (typeof raw === "number" || /^-?\d+$/.test(String(raw ?? "").trim())) {
-		const code = Number(raw);
-		const match = WBSW_POSITIONS.find(option => option.code === code);
-		return match ? match.value : "before_char";
-	}
-	const name = String(raw || "").trim();
-	return WBSW_POSITION_ALIASES[name] || "before_char";
-}
-
-// 两种格式都写数字：ST 独立世界书的 position 是数字，人物卡内置走 extensions.position，
-// 域层的 standaloneEntryFromEmbedded 也是按数字读的。
-function wbPositionPatch(value) {
-	const match = WBSW_POSITIONS.find(option => option.value === value);
-	return match ? match.code : 0;
-}
-
-function wbPositionLabel(value) {
-	const match = WBSW_POSITIONS.find(option => option.value === value);
-	return match ? match.label : "角色定义前";
 }
 
 function createWorldBookSwitcherFeatureModule() {
@@ -552,17 +502,18 @@ function createWorldBookSwitcherFeatureModule() {
 		const entry = props.entry;
 		const visible = props.visible || WBSW_DEFAULT_VISIBLE;
 		const [strategy, setStrategy] = React.useState(wbStrategyOf(entry));
-		const [position, setPosition] = React.useState(wbPositionValue(entry));
-		const [depth, setDepth] = React.useState(String(entry.depth ?? 4));
+		const [order, setOrder] = React.useState(String(entry.order ?? 100));
+		const [scanDepth, setScanDepth] = React.useState(entry.scanDepth === null || entry.scanDepth === undefined ? "" : String(entry.scanDepth));
+		const [logic, setLogic] = React.useState(Number(entry.selectiveLogic) || 0);
 		const [feedback, setFeedback] = React.useState("");
 		const [busy, setBusy] = React.useState(false);
-		const depthActive = position === "at_depth";
 		React.useEffect(function () {
 			setStrategy(wbStrategyOf(props.entry));
-			setPosition(wbPositionValue(props.entry));
-			setDepth(String(props.entry.depth ?? 4));
+			setOrder(String(props.entry.order ?? 100));
+			setScanDepth(props.entry.scanDepth === null || props.entry.scanDepth === undefined ? "" : String(props.entry.scanDepth));
+			setLogic(Number(props.entry.selectiveLogic) || 0);
 			setFeedback("");
-		}, [props.bookKey, props.entry.ref, props.entry.depth, props.entry.position, props.entry.constant, props.entry.vectorized]);
+		}, [props.bookKey, props.entry.ref, props.entry.order, props.entry.scanDepth, props.entry.selectiveLogic, props.entry.constant, props.entry.vectorized]);
 		async function persist(patch, message) {
 			if (busy) return;
 			setBusy(true); setFeedback("");
@@ -578,11 +529,25 @@ function createWorldBookSwitcherFeatureModule() {
 			setStrategy(next);
 			void persist(wbStrategyPatch(next), "已切换触发策略");
 		}
-		function choosePosition(next) {
-			if (next === position) return;
-			setPosition(next);
-			void persist({ position: wbPositionPatch(next) }, "已更新插入位置：" + wbPositionLabel(next));
+		function commitOrder() {
+			const next = Number.parseInt(order, 10);
+			if (!Number.isInteger(next)) { setOrder(String(entry.order ?? 100)); return; }
+			if (next === Number(entry.order ?? 100)) return;
+			void persist({ order: next }, "排序已改为 " + next);
 		}
+		function commitScanDepth() {
+			const raw = String(scanDepth).trim();
+			if (raw === "") {
+				if (entry.scanDepth === null || entry.scanDepth === undefined) return;
+				void persist({ scanDepth: null }, "已跟随世界书默认扫描深度");
+				return;
+			}
+			const next = Number.parseInt(raw, 10);
+			if (!Number.isInteger(next) || next < 0 || next > 1000) { setScanDepth(entry.scanDepth === null || entry.scanDepth === undefined ? "" : String(entry.scanDepth)); return; }
+			if (next === Number(entry.scanDepth)) return;
+			void persist({ scanDepth: next }, "改为扫描最近 " + next + " 条消息");
+		}
+		const keywordMode = strategy === "selective";
 		return h("div", { className: "dsh-tavern-wbsw-column dsh-tavern-wbsw-detail" },
 			h("div", { className: "dsh-tavern-wbsw-head" },
 				h("span", { className: "dsh-tavern-wbsw-title", title: wbRowLabel(entry) }, wbRowLabel(entry)),
@@ -604,22 +569,36 @@ function createWorldBookSwitcherFeatureModule() {
 					}, option.glyph);
 				})),
 				h("div", { className: "dsh-tavern-wbsw-fields" },
-					h("label", { className: "dsh-tavern-wbsw-field" }, h("span", null, "插入位置"),
-						h("select", { value: position, disabled: busy, onChange: function (event) { choosePosition(event.target.value); } },
-							WBSW_POSITIONS.map(function (option) { return h("option", { key: option.value, value: option.value }, option.label); }))),
-					h("label", { className: "dsh-tavern-wbsw-field dsh-tavern-wbsw-field-depth" + (depthActive ? "" : " is-idle") }, h("span", null, "深度"),
+					h("label", { className: "dsh-tavern-wbsw-field dsh-tavern-wbsw-field-narrow" }, h("span", null, "排序"),
 						h("input", {
-							type: "number", step: 1, inputMode: "numeric", value: depth,
-							disabled: busy || !depthActive,
-							title: depthActive ? "插入到倒数第 N 条消息之前" : "选择“指定深度”后才生效",
-							onChange: function (event) { setDepth(event.target.value); },
-							onBlur: function () {
-								const next = Number.parseInt(depth, 10);
-								if (!Number.isInteger(next) || next < 0) { setDepth(String(entry.depth ?? 4)); return; }
-								if (next !== Number(entry.depth ?? 4)) void persist({ depth: next }, "已更新深度");
-							},
+							type: "number", step: 1, inputMode: "numeric", value: order, disabled: busy,
+							title: "越大越优先入选；预算用完就停在这一条之后",
+							onChange: function (event) { setOrder(event.target.value); },
+							onBlur: commitOrder,
 							onKeyDown: function (event) { if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); } }
-						}))),
+						})),
+					h("label", { className: "dsh-tavern-wbsw-field dsh-tavern-wbsw-field-narrow" + (busy ? " is-idle" : "") }, h("span", null, "扫描消息"),
+						h("input", {
+							type: "number", min: 0, max: 1000, step: 1, inputMode: "numeric", value: scanDepth, disabled: busy,
+							placeholder: "跟随 " + (props.scanDepthFallback ?? 2),
+							title: "关键词只在最近 N 条消息里找；留空跟随世界书默认值",
+							onChange: function (event) { setScanDepth(event.target.value); },
+							onBlur: commitScanDepth,
+							onKeyDown: function (event) { if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); } }
+						})),
+					h("label", { className: "dsh-tavern-wbsw-field" + (keywordMode ? "" : " is-idle") }, h("span", null, "二级条件"),
+						h("select", {
+							value: logic, disabled: busy || !keywordMode,
+							title: keywordMode ? "主触发词命中后再看二级触发词" : "仅关键词触发时生效",
+							onChange: function (event) {
+								const next = Number(event.target.value) || 0;
+								setLogic(next);
+								void persist({ selectiveLogic: next }, "已更新二级条件");
+							}
+						}, ["至少一个命中", "不全部命中", "全部不命中", "全部命中"].map(function (label, value) {
+							return h("option", { key: value, value: value }, label);
+						})))),
+				h("p", { className: "dsh-tavern-wbsw-hint" }, "常驻不看触发词、不占预算；关键词条目按排序从大到小入选，共用世界书 Token 预算，注入后 10 回合内不再自动召回。"),
 				h("div", { className: "dsh-tavern-wbsw-feedback", role: "status" }, feedback)));
 	}
 
@@ -1402,8 +1381,10 @@ function createWorldBookSwitcherFeatureModule() {
 					h("div", { className: "dsh-tavern-wbsw-empty" }, "正在读取条目…"));
 			}
 			return h(WbDetailPane, {
-				entry: detailEntry, format: detailRecord.view ? detailRecord.view.format : "",
+				entry: detailEntry,
 				bookName: detailRecord.view ? detailRecord.view.displayName : "", bookKey: pane.bookKey,
+				// 世界书级的默认扫描深度：条目留空时用它。
+				scanDepthFallback: detailRecord.view ? detailRecord.view.scanDepth : 2,
 				visible: config.visibleElements, backLabel: backLabel,
 				onPatch: function (patchValue) { return patchEntryOf(pane.bookKey, detailEntry, patchValue); },
 				onDelete: function () { void removeEntry(pane.bookKey, detailEntry); },
@@ -1589,8 +1570,6 @@ function createWorldBookSwitcherFeatureModule() {
 		sourceOfKey: wbSourceOfKey,
 		strategyOf: wbStrategyOf,
 		strategyPatch: wbStrategyPatch,
-		positionValue: wbPositionValue,
-		positionPatch: wbPositionPatch,
 		panelHeight: wbPanelHeight,
 		columnWidths: wbColumnWidths,
 		rowLabel: wbRowLabel
