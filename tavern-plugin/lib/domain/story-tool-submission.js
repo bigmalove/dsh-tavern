@@ -12,9 +12,9 @@ export const STORY_SUBMIT_PROMPT = [
   '</output_method>'
 ].join('\n')
 
-/** A global switch (Tavern settings); it applies to play sessions. */
+/** A global switch (Tavern settings); it applies to story and script play only. */
 export function storyToolCallEnabled(chat, enabled) {
-  return enabled === true && !!chat && (!chat.mode || ['story', 'script'].includes(chat.mode))
+  return enabled === true && !!chat && (!chat.mode || chat.mode === 'story' || chat.mode === 'script')
 }
 
 function validContent(content) {
@@ -41,10 +41,6 @@ export function storySubmissionForTurn(session, turn) {
   }
   const messages = new Map()
   const calls = new Map()
-  // Any non-error receipt for this call proves the submission succeeded; the body
-  // comes from the call's own arguments, so a host that reformats the receipt
-  // cannot hide a submission.
-  const receipts = new Map()
   for (let index = start + 1; index < events.length; index++) {
     const event = events[index]
     const data = event?.data
@@ -59,26 +55,13 @@ export function storySubmissionForTurn(session, turn) {
       if (model && model.block.arguments === data.arguments) calls.set(data.callId, model)
     }
     if (event.type !== 'tool/result' || data.error || (visible && !visible.has(Number(event.seq ?? index)))) continue
-    // The receipt arrives as its own `role: 'tool'` message on 0.2.1 and as a
-    // `tool-result` block on older logs; both name the call that was submitted.
-    for (const result of toolResultsOf(data.message)) {
-      if (result.isError) continue
-      const model = calls.get(result.toolCallId)
+    for (const block of toolResultsOf(data.message)) {
+      if (block.isError) continue
+      const model = calls.get(block.toolCallId)
       if (!model) continue
-      receipts.set(result.toolCallId, { receiptIndex: Number(event.seq ?? index), model })
-    }
-  }
-  for (const [callId, receipt] of receipts) {
-    let content
-    try { content = validContent(JSON.parse(receipt.model.block.arguments).content) } catch { continue }
-    return {
-      index: receipt.model.index,
-      receiptIndex: receipt.receiptIndex,
-      event: receipt.model.event,
-      text: content.trim(),
-      content,
-      toolCallId: callId,
-      storyToolSubmission: true
+      let content
+      try { content = validContent(JSON.parse(model.block.arguments).content) } catch { continue }
+      return { index: model.index, receiptIndex: Number(event.seq ?? index), event: model.event, text: content.trim(), content, toolCallId: block.toolCallId, storyToolSubmission: true }
     }
   }
   return null
