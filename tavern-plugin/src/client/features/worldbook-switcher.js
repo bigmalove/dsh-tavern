@@ -14,10 +14,11 @@ const WBSW_DEFAULT_VISIBLE = Object.freeze({
 	viewDetail: true,
 	bottomSearch: true
 });
+// 只有常驻与关键词两档：召回只看 constant，剩下的必然走关键词匹配
+// （worldbook-activation.js）。vectorized 字段能存但没人读，不摆这个开关。
 const WBSW_STRATEGIES = Object.freeze([
 	{ value: "constant", label: "常驻（蓝）", color: "#3b82f6", glyph: "●" },
-	{ value: "selective", label: "关键词触发（绿）", color: "#10b981", glyph: "◉" },
-	{ value: "vectorized", label: "向量化（紫）", color: "#a855f7", glyph: "◆" }
+	{ value: "selective", label: "关键词触发（绿）", color: "#10b981", glyph: "◉" }
 ]);
 const WBSW_USAGE_LIMIT = 400;
 
@@ -191,13 +192,13 @@ function wbGroupRows(rows, config) {
 
 function wbStrategyOf(entry) {
 	if (entry && entry.constant === true) return "constant";
-	if (entry && entry.vectorized === true) return "vectorized";
 	return "selective";
 }
 
+// 切换时顺手把历史遗留的 vectorized 写回 false：这个字段不参与召回，
+// 留着 true 只会让人以为它在起作用。
 function wbStrategyPatch(strategy) {
 	if (strategy === "constant") return { constant: true, selective: false, vectorized: false };
-	if (strategy === "vectorized") return { constant: false, selective: false, vectorized: true };
 	return { constant: false, selective: true, vectorized: false };
 }
 
@@ -513,7 +514,7 @@ function createWorldBookSwitcherFeatureModule() {
 			setScanDepth(props.entry.scanDepth === null || props.entry.scanDepth === undefined ? "" : String(props.entry.scanDepth));
 			setLogic(Number(props.entry.selectiveLogic) || 0);
 			setFeedback("");
-		}, [props.bookKey, props.entry.ref, props.entry.order, props.entry.scanDepth, props.entry.selectiveLogic, props.entry.constant, props.entry.vectorized]);
+		}, [props.bookKey, props.entry.ref, props.entry.order, props.entry.scanDepth, props.entry.selectiveLogic, props.entry.constant]);
 		async function persist(patch, message) {
 			if (busy) return;
 			setBusy(true); setFeedback("");
@@ -593,7 +594,9 @@ function createWorldBookSwitcherFeatureModule() {
 							onChange: function (event) {
 								const next = Number(event.target.value) || 0;
 								setLogic(next);
-								void persist({ selectiveLogic: next }, "已更新二级条件");
+								// 二级条件只在 selective 为真时参与匹配；老条目可能带着 selective:false，
+								// 只写 selectiveLogic 会变成一个改完不生效的开关。
+								void persist({ selective: true, selectiveLogic: next }, "已更新二级条件");
 							}
 						}, ["至少一个命中", "不全部命中", "全部不命中", "全部命中"].map(function (label, value) {
 							return h("option", { key: value, value: value }, label);

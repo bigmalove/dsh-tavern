@@ -86,7 +86,8 @@ test('世界书切换器面板：渲染、开关、详情、删除与配置', as
 	assert.equal(feature.sourceKey({ kind: 'card', cardPath: 'cards/a.png' }), 'card:cards/a.png')
 	assert.equal(feature.sourceKey({ kind: 'standalone', path: 'worldbooks/a.json' }), 'standalone:worldbooks/a.json')
 	assert.equal(feature.strategyOf({ constant: true }), 'constant')
-	assert.equal(feature.strategyOf({ vectorized: true }), 'vectorized')
+	// 召回不读 vectorized，历史遗留的 true 一律按关键词触发显示。
+	assert.equal(feature.strategyOf({ vectorized: true }), 'selective')
 	assert.equal(feature.strategyOf({ selective: true }), 'selective')
 	assert.equal(feature.panelHeight(12, false, 720), 520)
 	const wide = feature.columnWidths({ available: 1264, all: true, frequent: true, pane: true })
@@ -130,11 +131,11 @@ test('世界书切换器面板：渲染、开关、详情、删除与配置', as
 	assert.equal(updateCall[1].update.operations[0].patch.enabled, false)
 	assert.equal(current.entries.find(entry => entry.ref === 'entry:0').enabled, false)
 
-	// 详情：只读正文、三个策略按钮、八个插入位置。
+	// 详情：只读正文、两个策略按钮、三个可写字段。
 	await act(async () => { query('.dsh-tavern-wbsw-main .dsh-tavern-wbsw-row').click() })
 	await tick()
 	assert.ok(query('.dsh-tavern-wbsw-detail'), '点击条目应打开详情')
-	assert.equal(queryAll('.dsh-tavern-wbsw-strategy-btn').length, 3)
+	assert.equal(queryAll('.dsh-tavern-wbsw-strategy-btn').length, 2, '只留常驻与关键词两档')
 	assert.equal(query('.dsh-tavern-wbsw-content').readOnly, true)
 	// 详情只给 dsh-tavern 真读的字段，不摆 ST 的插入位置/深度。
 	assert.ok(!query('.dsh-tavern-wbsw-detail').textContent.includes('插入位置'), '不应出现 ST 的插入位置')
@@ -142,10 +143,18 @@ test('世界书切换器面板：渲染、开关、详情、删除与配置', as
 	const labels = queryAll('.dsh-tavern-wbsw-detail .dsh-tavern-wbsw-field > span').map(node => node.textContent)
 	assert.deepEqual(labels, ['排序', '扫描消息', '二级条件'])
 	assert.equal(queryAll('.dsh-tavern-wbsw-detail .dsh-tavern-wbsw-field select option').length, 4, '二级条件四档')
-	await act(async () => { queryAll('.dsh-tavern-wbsw-strategy-btn')[2].click() })
+	await act(async () => { queryAll('.dsh-tavern-wbsw-strategy-btn')[1].click() })
 	await tick()
 	const strategyCall = calls.filter(call => call[0] === 'updateWorldBook').pop()
-	assert.equal(strategyCall[1].update.operations[0].patch.vectorized, true)
+	assert.equal(strategyCall[1].update.operations[0].patch.selective, true)
+	assert.equal(strategyCall[1].update.operations[0].patch.constant, false)
+	// 历史遗留的 vectorized 在切换时写回 false，不留下“看着像开了”的字段。
+	assert.equal(strategyCall[1].update.operations[0].patch.vectorized, false)
+	await act(async () => { queryAll('.dsh-tavern-wbsw-strategy-btn')[0].click() })
+	await tick()
+	const backToConstant = calls.filter(call => call[0] === 'updateWorldBook').pop()
+	assert.equal(backToConstant[1].update.operations[0].patch.constant, true)
+	assert.equal(backToConstant[1].update.operations[0].patch.selective, false)
 
 	// 排序：改完失焦即写入 order。
 	const orderInput = queryAll('.dsh-tavern-wbsw-detail .dsh-tavern-wbsw-field input')[0]
