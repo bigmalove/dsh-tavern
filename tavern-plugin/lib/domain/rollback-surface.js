@@ -491,15 +491,22 @@ export function regenerationProjection(replacement, data, operationId) {
  * the old turn and leaves the new one empty — the body is nowhere on screen.
  * Give it a transcript copy first, then shadow the whole range including that
  * copy, exactly like the fold does for a live submission.
+ *
+ * The projection inherits the replaced reply's `source`, so ownership cannot be
+ * read off the message. The shape can: an ordinary round ends its range on the
+ * model's own streamed reply (an `append` node), while a tool round ends it on
+ * the fold's replacement copy — a node the transcript never draws.
  */
 export function applyRegenerationProjection(session, projection) {
-  const fromSubmission = projection.data?.message?.source?.model === 'reply-projection'
+  const events = sessionEvents(session)
   const blocks = Array.isArray(projection.data?.message?.content) ? projection.data.message.content : []
   const body = blocks.filter(block => block?.type === 'text').map(block => block.text).join('')
+  const endEvent = events.find(event => Number(event?.seq) === Number(projection.range?.end))
+  const needsTranscriptCopy = body !== '' && endEvent?.type === 'assistant/message' && endEvent.surfaceOp !== 'append'
   // A fold that won the race already appended this body into the attempt's turn;
   // appending a second copy would show the round twice.
-  const shown = fromSubmission && body !== ''
-    ? sessionEvents(session).find(event => event?.type === 'assistant/message' && event.surfaceOp === 'append' &&
+  const shown = needsTranscriptCopy
+    ? events.find(event => event?.type === 'assistant/message' && event.surfaceOp === 'append' &&
         Number(event.seq) > Number(projection.range?.end) &&
         (event.data?.message?.content || []).some(block => block?.type === 'text' && block.text === body))
     : undefined
@@ -507,7 +514,7 @@ export function applyRegenerationProjection(session, projection) {
   const replaceCleanups = () => {
     for (const cleanup of projection.cleanups || []) replaceSessionSurface(session, 'user/message', cleanup.data, cleanup.range)
   }
-  if (!fromSubmission) {
+  if (!needsTranscriptCopy) {
     replaceSessionSurface(session, 'assistant/message', projection.data, projection.range)
     replaceCleanups()
     return
@@ -535,6 +542,47 @@ export function applyRegenerationProjection(session, projection) {
     })
   })
   replaceCleanups()
+}
+
+/**
+ * Give an already-projected round the transcript copy it never got.
+ *
+ * Rounds regenerated before the projection wrote its own copy end on a
+ * replacement node: the model sees the body, the transcript has nothing to
+ * draw, and the old turn is hidden — the round is blank on screen while the
+ * trajectory still lists it. The body is in the log; re-publish it as an
+ * append-origin message so the page has something to render.
+ *
+ * Only the current surface tail qualifies: an older replacement is already
+ * superseded and would duplicate a newer round.
+ */
+export function ensureTranscriptCopy(session) {
+  if (!session || typeof session.append !== 'function') return false
+  const nodes = Array.isArray(session.surface?.nodes) ? session.surface.nodes.map(Number) : []
+  if (!nodes.length) return false
+  const events = sessionEvents(session)
+  const bySeq = new Map(events.map(event => [Number(event?.seq), event]))
+  const tail = bySeq.get(nodes.at(-1))
+  if (!tail || tail.type !== 'assistant/message' || tail.surfaceOp === 'append') return false
+  const blocks = Array.isArray(tail.data?.message?.content) ? tail.data.message.content : []
+  const body = blocks.filter(block => block?.type === 'text').map(block => block.text).join('')
+  if (body.trim() === '') return false
+  const drawn = events.some(event => event?.type === 'assistant/message' && event.surfaceOp === 'append' &&
+    (event.data?.message?.content || []).some(block => block?.type === 'text' && block.text === body))
+  if (drawn) return false
+  const copy = {
+    ...tail.data,
+    message: {
+      ...tail.data.message,
+      id: 'tavern-transcript:' + randomUUID(),
+      content: blocks.map(block => ({ ...block })),
+    },
+  }
+  const surface = createSessionSurfaceMutator(session)
+  surface.editStep(() => {
+    surface.append('assistant/message', copy, { surfaceOp: 'append' })
+  })
+  return true
 }
 
 /** Turns cut off without ending (the server stopped mid-reply) whose nodes the model still sees. */

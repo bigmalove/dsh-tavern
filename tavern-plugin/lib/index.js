@@ -197,7 +197,7 @@ import { createPhoneChat } from './domain/phone-chat.js'
 import { createPresetLibrary } from './domain/preset-library.js'
 import { applyConversationPresetToCurrent } from './domain/conversation-preset-application.js'
 import { createForegroundOrchestrationStrategies } from './domain/foreground-orchestration-strategies.js'
-import { clearFailedTurnSurface, rollbackAvailability, reshadowRolledBackRounds, interruptedSurfaceTurns } from './domain/rollback-surface.js'
+import { clearFailedTurnSurface, rollbackAvailability, reshadowRolledBackRounds, interruptedSurfaceTurns, ensureTranscriptCopy } from './domain/rollback-surface.js'
 import { assistantResultForTurn } from './domain/session-turn-result.js'
 import { createStorySubmissionTool, foldStorySubmission, STORY_SUBMIT_TOOL_NAME } from './domain/story-tool-submission.js'
 import { forkTurnsByMessageId as forkTargetsFromSession, floorsIndex as floorsIndexFromChat } from './domain/conversation-fork-targets.js'
@@ -1098,7 +1098,29 @@ export async function apply(ctx) {
     }
   })
   function chatForSession(sessionId) { return sessionChats.read(sessionId) }
+  // A round regenerated before the projection published its own transcript copy
+  // ends on a replacement node: the model sees the body, the page draws nothing,
+  // and the old turn is hidden — the round looks empty. Heal it once per process,
+  // on the first view read of that chat, whenever the agent is idle.
+  const healedTranscripts = new Set()
+  function healTranscriptCopyFor(sessionId) {
+    const key = str(sessionId)
+    if (key === '' || healedTranscripts.has(key)) return
+    const agent = agentRegistry.get(key)
+    const session = agent?.session || sessionStore.get(key)
+    if (!session || agent?.phase?.kind === 'running') return
+    healedTranscripts.add(key)
+    try {
+      if (!ensureTranscriptCopy(session)) return
+      void sessionStore.flush(session).catch(error => {
+        console.warn('dsh-tavern: 补写可见正文落盘失败 ' + str(error?.message || error))
+      })
+    } catch (error) {
+      console.warn('dsh-tavern: 补写可见正文失败 ' + str(error?.message || error))
+    }
+  }
   function sessionStateForSession(sessionId) {
+    healTranscriptCopyFor(sessionId)
     return requestPerformance.stage('readSessionState', () => sessionChats.readState(sessionId))
   }
   function backgroundConfigForSession(sessionId) { return sessionChats.readBackgroundConfig(sessionId) }
