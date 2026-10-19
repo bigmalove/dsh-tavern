@@ -197,7 +197,7 @@ import { createPhoneChat } from './domain/phone-chat.js'
 import { createPresetLibrary } from './domain/preset-library.js'
 import { applyConversationPresetToCurrent } from './domain/conversation-preset-application.js'
 import { createForegroundOrchestrationStrategies } from './domain/foreground-orchestration-strategies.js'
-import { clearFailedTurnSurface, rollbackAvailability, reshadowRolledBackRounds, interruptedSurfaceTurns, ensureTranscriptCopy } from './domain/rollback-surface.js'
+import { clearFailedTurnSurface, rollbackAvailability, reshadowRolledBackRounds, interruptedSurfaceTurns } from './domain/rollback-surface.js'
 import { assistantResultForTurn } from './domain/session-turn-result.js'
 import { createStorySubmissionTool, foldStorySubmission, STORY_SUBMIT_TOOL_NAME } from './domain/story-tool-submission.js'
 import { forkTurnsByMessageId as forkTargetsFromSession, floorsIndex as floorsIndexFromChat } from './domain/conversation-fork-targets.js'
@@ -1098,52 +1098,8 @@ export async function apply(ctx) {
     }
   })
   function chatForSession(sessionId) { return sessionChats.read(sessionId) }
-  // A round regenerated before the projection published its own transcript copy
-  // ends on a replacement node: the model sees the body, the page draws nothing,
-  // and the old turn is hidden — the round looks empty. Heal it on a view read.
-  //
-  // `sessions.get()` only answers for a session that is already open, which a
-  // plain view read never is, so the heal silently did nothing until the chat
-  // happened to be loaded by another route. Open it for the repair and let it go
-  // again: one handle, one write, no dependence on the page's own lifecycle.
-  const healedTranscripts = new Map()
-  const healingTranscripts = new Set()
-  async function healTranscriptCopyFor(sessionId) {
-    const key = str(sessionId)
-    if (key === '' || healingTranscripts.has(key)) return
-    const agent = agentRegistry.get(key)
-    if (agent?.phase?.kind === 'running') return
-    let session = agent?.session || sessionStore.get(key)
-    let handle = null
-    if (!session) {
-      if (typeof agentRegistry.resume !== 'function') return
-      healingTranscripts.add(key)
-      try {
-        handle = await agentRegistry.resume({ resumeSessionId: key })
-        session = handle?.agent?.session
-      } catch { session = null } finally {
-        healingTranscripts.delete(key)
-      }
-      if (!session) return
-    }
-    try {
-      const tail = Array.isArray(session.surface?.nodes) ? session.surface.nodes.at(-1) : undefined
-      if (tail === undefined || healedTranscripts.get(key) === tail) return
-      healedTranscripts.set(key, tail)
-      if (!ensureTranscriptCopy(session)) return
-      await sessionStore.flush(session)
-    } catch (error) {
-      console.warn('dsh-tavern: 补写可见正文失败 ' + str(error?.message || error))
-    } finally {
-      if (handle) { try { await handle.dispose?.() } catch { /* handle already gone */ } }
-    }
-  }
   function sessionStateForSession(sessionId) {
-    // Await the repair: the read that found the gap must return the healed view,
-    // or the page would need a second reload to show it.
-    return healTranscriptCopyFor(sessionId).then(
-      () => requestPerformance.stage('readSessionState', () => sessionChats.readState(sessionId)),
-      error => { console.warn('dsh-tavern: 补写可见正文失败 ' + str(error?.message || error)); return requestPerformance.stage('readSessionState', () => sessionChats.readState(sessionId)) })
+    return requestPerformance.stage('readSessionState', () => sessionChats.readState(sessionId))
   }
   function backgroundConfigForSession(sessionId) { return sessionChats.readBackgroundConfig(sessionId) }
   async function chatHeaderForSession(sessionId, fields) {

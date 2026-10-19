@@ -112,13 +112,6 @@ export function regenerationAttemptTurns(input) {
   return modelTurns(events, events.filter(event => event && belongs(event.seq) === OWNED).map(event => event.seq))
 }
 
-/** Whether the chat view can draw this body: an append-origin event carries it. */
-function transcriptDraws(events, body) {
-  if (body === '') return false
-  return events.some(event => event?.type === 'assistant/message' && event.surfaceOp === 'append' &&
-    contentText(event.data?.message) === body)
-}
-
 // A replaced reply does not disappear from the page by itself: the host keeps
 // drawing the row it already built for that native turn, even though the node is
 // gone from the surface. `replacingDshTurns` only covers the moment of
@@ -585,60 +578,6 @@ export function applyRegenerationProjection(session, projection) {
     })
   })
   replaceCleanups()
-}
-
-/**
- * Give an already-projected round the transcript copy it never got.
- *
- * Rounds regenerated before the projection wrote its own copy end on a
- * replacement node: the model sees the body, the transcript has nothing to
- * draw, and the old turn is hidden — the round is blank on screen while the
- * trajectory still lists it. The body is in the log; re-publish it as an
- * append-origin message so the page has something to render.
- *
- * Only the current surface tail qualifies: an older replacement is already
- * superseded and would duplicate a newer round.
- */
-export function ensureTranscriptCopy(session) {
-  if (!session || typeof session.append !== 'function') return false
-  const nodes = Array.isArray(session.surface?.nodes) ? session.surface.nodes.map(Number) : []
-  if (!nodes.length) return false
-  const events = sessionEvents(session)
-  const textOfEvent = event => (event?.data?.message?.content || [])
-    .filter(block => block?.type === 'text').map(block => block.text).join('')
-  // The body the chat view is missing right now is the newest one the log holds:
-  // the projection replace carries it, and so may a copy a later repair emptied.
-  // An older body is superseded by this one and must not be re-published, or the
-  // story would show every reroll at once.
-  const visible = new Set(nodes)
-  let host
-  let body = ''
-  for (let index = events.length - 1; index >= 0; index--) {
-    const event = events[index]
-    if (event?.type !== 'assistant/message') continue
-    const text = textOfEvent(event)
-    if (text.trim() === '') continue
-    host = event
-    body = text
-    break
-  }
-  if (!host) return false
-  // Only a copy the transcript would actually draw counts as published: an
-  // append-origin node still on the surface. A shadowed copy is invisible to it.
-  if (transcriptDraws(events, body)) return false
-  const copy = {
-    ...host.data,
-    message: {
-      ...host.data.message,
-      id: 'tavern-transcript:' + randomUUID(),
-      content: (host.data.message.content || []).map(block => ({ ...block })),
-    },
-  }
-  const surface = createSessionSurfaceMutator(session)
-  surface.editStep(() => {
-    surface.append('assistant/message', copy, { surfaceOp: 'append' })
-  })
-  return true
 }
 
 /** Turns cut off without ending (the server stopped mid-reply) whose nodes the model still sees. */

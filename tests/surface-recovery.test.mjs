@@ -126,40 +126,6 @@ test('工具正文折叠成一条正文后，重新生成能整轮替换', async
   assert.ok(!plan.shadowedSeqs.includes(fresh.receipt.seq))
 })
 
-// 重新生成一个「正文走工具调用」的回合时，折叠可能输给写入句柄而缺席：那一轮就没有
-// 任何 append 正文。宿主的人类对话视图只渲染 append 来源的事件（替换副本只给模型），
-// 于是旧轮被隐藏、新轮空着 —— 正文两边都看不见。投影必须自己补一份 append。
-// 旧版本投影过的回合只有替换节点：模型看得到，页面画不出来。打开对话时按当前表面
-// 尾部补一条 append，历史存档不用重新生成也能显示；已画过的正文不重复补。
-test('表面尾部只有替换正文时，按尾部补一条可见正文且不重复', async () => {
-  const { ensureTranscriptCopy } = await import('../tavern-plugin/lib/domain/rollback-surface.js')
-  const session = Session.create('transcript-copy')
-  appendSessionEvent(session, 'turn/start', { turn: 1 })
-  appendSessionEvent(session, 'user/message', user('input-1'), { surfaceOp: 'append' })
-  const streamed = appendSessionEvent(session, 'assistant/message', body('reply', 1), { surfaceOp: 'append' })
-  appendSessionEvent(session, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
-  // 一次普通重新生成：新的正文只以替换形式落盘。
-  appendSessionEvent(session, 'turn/start', { turn: 2 })
-  appendSessionEvent(session, 'assistant/message', {
-    turn: 1, step: 1,
-    message: { id: 'tavern-regen:op', role: 'assistant', content: [{ type: 'text', text: '重写后的正文' }], source: { kind: 'model', provider: 'test', model: 'test' } },
-  }, { surfaceOp: { op: 'replace', startSeq: streamed.seq, endSeq: streamed.seq }, sourceEventSeqs: [streamed.seq] })
-  appendSessionEvent(session, 'turn/end', { turn: 2, reason: { kind: 'completed' } })
-  assert.equal(ensureTranscriptCopy(session), true)
-  const copies = sessionEvents(session).filter(event => event.type === 'assistant/message' && event.surfaceOp === 'append' &&
-    (event.data.message.content || []).some(block => block.type === 'text' && block.text === '重写后的正文'))
-  assert.equal(copies.length, 1)
-  // 再读一次不再追加。
-  assert.equal(ensureTranscriptCopy(session), false)
-  assert.equal(sessionEvents(session).filter(event => event.type === 'assistant/message' && event.surfaceOp === 'append').length, 2)
-  // 尾部本来就是 append（模型自己流出来的）时什么都不做。
-  const plain = Session.create('transcript-copy-plain')
-  appendSessionEvent(plain, 'turn/start', { turn: 1 })
-  appendSessionEvent(plain, 'assistant/message', body('normal', 1), { surfaceOp: 'append' })
-  appendSessionEvent(plain, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
-  assert.equal(ensureTranscriptCopy(plain), false)
-})
-
 test('工具回合的重新生成投影补一条可见正文，重试不重复', async () => {
   const { foldStorySubmission } = await import('../tavern-plugin/lib/domain/story-tool-submission.js')
   const { applyRegenerationProjection } = await import('../tavern-plugin/lib/domain/rollback-surface.js')
