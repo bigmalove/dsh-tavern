@@ -1,9 +1,94 @@
 {
   "schemaVersion": 2,
-  "revision": "ba59228cc059dd0b6cf885e1e063b2e45da11f52",
-  "releaseSequence": 759,
+  "revision": "beffc8a9e4774c6d614594e4ca70a72efdc53acb",
+  "releaseSequence": 760,
   "version": "3.0.0",
   "files": [
+    {
+      "path": "android/apk/build-web-compat.mjs",
+      "sha256": "0b87d567f2ed40fcef2216ed4c299baf3c8f23841ab7c3094819584bf0f96c86",
+      "size": 2152
+    },
+    {
+      "path": "android/apk/build.sh",
+      "sha256": "5d0febc7b107b6b4d6fcc960b5b12cccdc63d14ee3ea25781735c8bf3b1309ad",
+      "size": 1921
+    },
+    {
+      "path": "android/apk/prepare.py",
+      "sha256": "d91edcac42ba8fd3835a61c4c9b9b4f1d8ffd2ab39a9c98811215ef8df9740a1",
+      "size": 8420
+    },
+    {
+      "path": "android/apk/README.md",
+      "sha256": "832bbed7a5d559a62f13bbf915b61721407d142115f437f4eec8c1c333b4119d",
+      "size": 1867
+    },
+    {
+      "path": "android/apk/TavernBootstrap.java",
+      "sha256": "16e42e033df3e4ea6f5438f2d2b91af5f208a106fe28103292aeda4071f3d413",
+      "size": 2247
+    },
+    {
+      "path": "android/apk/TavernWebProcessTest.java",
+      "sha256": "370fe54d11b9089e91a9587080166c9d981f21238cdbccaf3820e18a6854b252",
+      "size": 792
+    },
+    {
+      "path": "android/configure-profiles.mjs",
+      "sha256": "23b78d064d24a7dd79a3b7b0b10088a0ab0784e6d4972701f2c77f707e423bef",
+      "size": 3521
+    },
+    {
+      "path": "android/dsh-tavern-entry/client.js",
+      "sha256": "12a4ee3f78a8958bb848ad23ff97dc6aafd2e2e9239d16dec46ecd7fd7c714fe",
+      "size": 13197
+    },
+    {
+      "path": "android/dsh-tavern-entry/cordis.patch.yml",
+      "sha256": "79e62cdb3aa0a726d5f520e04c483ffe56cc06a964a81004cbdb034b83e008e6",
+      "size": 290
+    },
+    {
+      "path": "android/dsh-tavern-entry/embedded-proxy.mjs",
+      "sha256": "5dc1d921632228c2006912ecc3cbd250683d4ce4bce223f700d41d1da5acbf8e",
+      "size": 6717
+    },
+    {
+      "path": "android/dsh-tavern-entry/index.js",
+      "sha256": "29f5c4262fe43997a819982b888cd45a2ccc0ffb5c97433b3bcef33c81f68d1f",
+      "size": 8301
+    },
+    {
+      "path": "android/dsh-tavern-entry/package.json",
+      "sha256": "78c714f03c1e84ba0ebc742a970065f5c45c01da4ad574064815f00bee1b2e79",
+      "size": 536
+    },
+    {
+      "path": "android/install.sh",
+      "sha256": "15bfa99eeb107f6f85106ca92af875f59d47c9e9bae4d1425cbe3a045ac52b89",
+      "size": 6625
+    },
+    {
+      "path": "android/LICENSE",
+      "sha256": "06dcddbb6908a0c6dd4a9e8ec822eea41d5a460a53089fecccc8a68049e99241",
+      "size": 1056
+    },
+    {
+      "path": "android/README.md",
+      "sha256": "627c59911b044d240faf7d16c401826471c8309773851484fa5aac1d4cbede9e",
+      "size": 2222
+    },
+    {
+      "path": "android/setup.sh",
+      "sha256": "bd3b0d8a13a1099f399151acfa3729b51aff59f2423a6b48f6eb9de65a0b8316",
+      "size": 9099
+    },
+    {
+      "path": "android/update.sh",
+      "sha256": "00ea233fb071eea9827a7c7f29a067fd4c0c766cf6c49ac75f71b8d5f6bcacc5",
+      "size": 489
+    },
     {
       "path": "bin/application-update.mjs",
       "sha256": "d6b3fe6b44972c40632d8e4380129e0a90ab38ed91475e393043b9c1dbca19c7",
@@ -456,8 +541,8 @@
     },
     {
       "path": "tavern-plugin/lib/application-updater.js",
-      "sha256": "bc785f6034daa560622588a47b8a1ed0f5a17449fa2ef6a6478c0613dd3096fc",
-      "size": 41388
+      "sha256": "bc791f905ff01516eef6e0cd06b633f444d1a4a77d6ae9a992ac65c2b3e7df3a",
+      "size": 43413
     },
     {
       "path": "tavern-plugin/lib/background-agent-runner.js",
