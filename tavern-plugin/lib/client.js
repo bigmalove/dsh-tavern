@@ -17810,6 +17810,9 @@ async function runTavernTouchDiagnostics(host, onStatus) {
                     group("新游戏默认", "开局时继承，开局后可在本局设置中单独修改。",
                         state.settings ? h(GlobalPlayDefaults, { settings: state.settings }) : null,
                         h(TavernConversationWritingSkills, { globalDefaults: true })),
+                    group("游戏内容", "进行中的游戏也按这些设置采用最新内容。",
+                        state.settings ? h(SettingSwitch, { settings: state.settings, name: "worldbookAutoSync", title: "世界书自动更新",
+                            description: "人物卡绑定的世界书一改，进行中的游戏下一轮就用最新内容，不必再点「重新加载人物卡和世界书」。旧存档第一次仍需点一次；人物卡本身、开场变量和变量结构也仍需手动重新加载；本局脚本写进世界书的内容会被这次更新覆盖。" }) : null),
                     group("显示与交互", "",
                         state.settings ? h(SettingSwitch, { settings: state.settings, name: "autoOpenStatusPanel", title: "进入游戏时打开酒馆状态",
                             description: "进入或切换到一局游戏时，右侧面板自动展开并显示本局设置和酒馆状态。关闭后右侧面板保持你上次的样子。" }) : null,
@@ -24322,7 +24325,8 @@ const worldBookSwitcherFeature = createWorldBookSwitcherFeatureModule();
             const [folded, setFolded] = React.useState([]);
             // 手机上先按上限排，量到还压着宿主角落按钮就再折一项。
             const [mobileLimit, setMobileLimit] = React.useState(TAVERN_HEADER_MOBILE_LIMIT);
-            const [collision, setCollision] = React.useState(0);
+            // 预算（像素）：一行里留给快捷入口的宽度，实测后写进 data 属性供夹具断言。
+            const [mobileBudget, setMobileBudget] = React.useState(null);
             const [context, setContext] = React.useState(null);
             const [more, setMore] = React.useState(null);
             const [dialog, setDialog] = React.useState(false);
@@ -24395,17 +24399,20 @@ const worldBookSwitcherFeature = createWorldBookSwitcherFeatureModule();
                 if (row) observer.observe(row);
                 return function () { observer.disconnect(); cancelAnimationFrame(frame); };
             }, [visible.join("|"), display, catalog, compact, mobileLimit]);
-            // 折叠之后实测：先把宿主角落按钮的实际占位写进 CSS 变量（顶栏右侧
-            // 预留这么多），再看标题还剩多少。可上可下：空间富余时会把折起的
-            // 按钮放回来，不会像单向收紧那样一旦挤过就永久只剩一个。
+            // 折叠之后实测：先把宿主角落按钮的实际占位写进 CSS 变量（顶栏右侧预留），
+            // 再用一次固定预算算出「还能放几个」。预算只依赖标题行内容盒左边、角落按钮
+            // 左边界和全屏按钮宽度，与当前保留数量、标题实际宽度都无关，所以不会振荡。
             const [measureNonce, setMeasureNonce] = React.useState(0);
+            
             React.useLayoutEffect(function () {
-                if (!compact) { setCollision(0); return undefined; }
+                if (!compact) { setMobileBudget(null); return undefined; }
                 let frame = window.requestAnimationFrame(function () {
                     const node = host.current;
-                    const corner = document.querySelector("[data-conversation-header-corner]");
                     const header = node && node.closest("header");
                     if (!node || !header) return;
+                    // 只在当前顶栏里找：页面里可能同时挂着桌面/移动两套 header，
+                    // 用 document 查会量到另一套的角落按钮。
+                    const corner = header.querySelector("[data-conversation-header-corner]");
                     // 角落按钮若是绝对定位（宿主默认），行内不会算它，要在右侧预留；
                     // 若已被我们放回流内（本项目的移动端规则），它自己占宽度，只留个间距。
                     let reserve = 4;
@@ -24418,14 +24425,25 @@ const worldBookSwitcherFeature = createWorldBookSwitcherFeatureModule();
                         }
                     }
                     header.style.setProperty("--dsh-tavern-header-corner", reserve + "px");
-                    // 刚写的 padding 还没进布局，这一刻量出来的是「改之前」的压盖值。
-                    // 等下一帧再判定，否则第一次测量必然读到改前的压盖。
+                    // 刚写的 padding 还没进布局，等下一帧再量。
                     frame = window.requestAnimationFrame(function () {
-                        // 压盖只作诊断；保留几个看实测标题宽度（单调，只收不放）。
-                        setCollision(tavernHeaderCollision(node, corner));
-                        const crumb = header.querySelector("[class*=\"_crumbCurrent\"]");
-                        const capacity = tavernHeaderMobileCapacity(mobileLimit, crumb ? crumb.getBoundingClientRect().width : 0, { limit: TAVERN_HEADER_MOBILE_LIMIT });
+                        // 一次性预算：标题行内容宽 - 固定开销（内边距、间距、角落按钮、
+                        // 右侧动作组最小宽、标题下限），剩下按每格 42 分。
+                        // 全部是常量或行宽，与当前保留数量和标题实际宽度无关。
+                        const row = node.closest("[class*=\"_titleRow\"]");
+                        // 固定开销由 CSS 变量给出（窄屏隐藏了宿主的子智能体触发器，开销更小），
+                        // 这样布局规则与预算算法只有一份来源。
+                        const fixed = row
+                            ? Number.parseFloat(window.getComputedStyle(row).getPropertyValue("--dsh-tavern-header-fixed")) || TAVERN_HEADER_MOBILE_FIXED
+                            : TAVERN_HEADER_MOBILE_FIXED;
+                        const room = row ? row.clientWidth - fixed : 0;
+                        const capacity = tavernHeaderMobileCapacity(
+                            { itemCount: visible.length, room: room },
+                            { limit: TAVERN_HEADER_MOBILE_LIMIT }
+                        );
                         if (capacity !== mobileLimit) setMobileLimit(capacity);
+                        const nextBudget = Math.round(room);
+                        setMobileBudget(current => current === nextBudget ? current : nextBudget);
                     });
                 });
                 return function () { window.cancelAnimationFrame(frame); };
@@ -24437,6 +24455,8 @@ const worldBookSwitcherFeature = createWorldBookSwitcherFeatureModule();
                 let timer = 0;
                 function onResize() {
                     window.clearTimeout(timer);
+                    // 行宽变了就回到「3 个」重新量一次：旋屏回来不该一直停在收窄后的状态。
+                    setMobileLimit(TAVERN_HEADER_MOBILE_LIMIT);
                     timer = window.setTimeout(function () { setMeasureNonce(function (value) { return value + 1; }); }, 120);
                 }
                 window.addEventListener("resize", onResize);
@@ -24496,9 +24516,8 @@ const worldBookSwitcherFeature = createWorldBookSwitcherFeatureModule();
             return h("div", {
                 ref: host,
                 className: "dsh-tavern-header-items" + (display === "icon" ? " is-icon" : ""),
-                // 实测到的压盖像素（>0 表示还压着宿主按钮）与手机保留上限；
-                // 夹具和线上排查都读这两个值。
-                "data-tavern-header-collision": collision,
+                // 实测预算（留给快捷入口的像素）与手机保留上限；夹具和线上排查都读这两个值。
+                "data-tavern-header-budget": compact && mobileBudget !== null ? mobileBudget : "",
                 "data-tavern-header-limit": compact ? mobileLimit : ""
             },
                 visible.map(item),
