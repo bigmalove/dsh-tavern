@@ -219,6 +219,14 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
         sessionId: chat.sessionId, eventStart }
       next.tavernHelperLifecycleRevision = lifecycleRevision
       next.regenInProgress = true
+      // 生成期间先把被重做的旧正文藏起来：否则旧的正文一直挂在页面上，看上去
+      // 像"没有在生成、只是把新内容叠上去"。只藏正文，玩家输入是他自己发的，
+      // 留着才看得见这条在等谁的回复——所以走 replacingDshTurns，别混进
+      // suppressedDshTurns（那是"整轮作废"，会连输入一起收掉）。
+      const replacingBefore = Array.isArray(next.replacingDshTurns) ? next.replacingDshTurns : []
+      const alreadyReplacing = replacingBefore.some(function (turn) { return Number(turn) === Number(oldTurn) })
+      next.regenRecovery.temporaryReplacingTurn = alreadyReplacing ? null : oldTurn
+      if (!alreadyReplacing) next.replacingDshTurns = Array.from(new Set(replacingBefore.concat([oldTurn]))).sort(function (left, right) { return left - right })
       return next
     }, { source: 'rollback.regen' })
     const rolledMessageCount = (chat.messages || []).length
@@ -282,6 +290,13 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
         next.settleStatus = 'pending'
         next.settleError = null
         next.tavernHelperLifecycleRevision = lifecycleRevision + 1
+        // 撤销生成期对旧正文的临时隐藏；它此后由 regeneratedDshTurns 的键负责。
+        const temporaryTurn = Number(next.regenRecovery && next.regenRecovery.temporaryReplacingTurn)
+        const keptReplacing = (Array.isArray(next.replacingDshTurns) ? next.replacingDshTurns : [])
+          .filter(function (turn) { return !Number.isSafeInteger(temporaryTurn) || Number(turn) !== temporaryTurn })
+        if (keptReplacing.length) next.replacingDshTurns = keptReplacing
+        else delete next.replacingDshTurns
+        if (next.regenRecovery) delete next.regenRecovery.temporaryReplacingTurn
         next.suppressedDshTurns = Array.from(new Set((Array.isArray(next.suppressedDshTurns) ? next.suppressedDshTurns : []).concat([syntheticTurn]))).sort(function (left, right) { return left - right })
         next.regeneratedDshTurns = next.regeneratedDshTurns && typeof next.regeneratedDshTurns === 'object' && !Array.isArray(next.regeneratedDshTurns)
           ? structuredClone(next.regeneratedDshTurns) : {}
@@ -389,6 +404,11 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
     rolled.regenRecovery = { id: operationId, beforeRevision: revision, sessionId: chat.sessionId, eventStart }
     rolled.tavernHelperLifecycleRevision = lifecycleRevision
     rolled.regenInProgress = true
+    // 同上（完整路径）：生成期间只藏被重做的旧正文，玩家输入留着。
+    const rolledReplacingBefore = Array.isArray(rolled.replacingDshTurns) ? rolled.replacingDshTurns : []
+    const rolledAlreadyReplacing = rolledReplacingBefore.some(function (turn) { return Number(turn) === Number(oldTurn) })
+    rolled.regenRecovery.temporaryReplacingTurn = rolledAlreadyReplacing ? null : oldTurn
+    if (!rolledAlreadyReplacing) rolled.replacingDshTurns = Array.from(new Set(rolledReplacingBefore.concat([oldTurn]))).sort(function (left, right) { return left - right })
     const rollbackChanges = headerChanges(originalHeader, rolled)
     if (rollbackChanges.some(change => change.path[0] === 'messages' || change.path[0] === 'id')) return undefined
     if (msgs0.length > rolledMessageCount) rollbackChanges.push({ op: 'splice', path: ['messages'], index: rolledMessageCount, deleteCount: msgs0.length - rolledMessageCount, items: [] })
@@ -449,6 +469,13 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
       next.settleStatus = 'pending'
       next.settleError = null
       next.tavernHelperLifecycleRevision = lifecycleRevision + 1
+      // 撤销生成期对旧正文的临时隐藏；它此后由 regeneratedDshTurns 的键负责。
+      const temporaryTurn = Number(next.regenRecovery && next.regenRecovery.temporaryReplacingTurn)
+      const keptReplacing = (Array.isArray(next.replacingDshTurns) ? next.replacingDshTurns : [])
+        .filter(function (turn) { return !Number.isSafeInteger(temporaryTurn) || Number(turn) !== temporaryTurn })
+      if (keptReplacing.length) next.replacingDshTurns = keptReplacing
+      else delete next.replacingDshTurns
+      if (next.regenRecovery) delete next.regenRecovery.temporaryReplacingTurn
       next.suppressedDshTurns = Array.from(new Set((Array.isArray(next.suppressedDshTurns) ? next.suppressedDshTurns : []).concat([syntheticTurn]))).sort(function (left, right) { return left - right })
       next.regeneratedDshTurns = next.regeneratedDshTurns && typeof next.regeneratedDshTurns === 'object' && !Array.isArray(next.regeneratedDshTurns)
         ? structuredClone(next.regeneratedDshTurns) : {}

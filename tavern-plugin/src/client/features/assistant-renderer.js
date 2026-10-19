@@ -702,6 +702,15 @@
 					t: props.t
 				});
 				const distantHeight = useTavernDistantFloor(historyNode, settled && !sessionTransitioning && storyTurn > 0 && latestProjectionTurn - storyTurn >= TAVERN_LIVE_FLOORS);
+				// 重新生成期间，被重做的这一楼只留宿主的"生成中"占位：旧正文还挂在
+				// 页面上会让玩家以为没有在生成、只是把新内容叠了上去。压制列表记的是
+				// native turn，这里要 native 与 story turn 都比一遍（重生成过的回合两者不同）。
+				// 提前 return 必须在所有 hook 之后。
+				const replacingTurns = liveState.view && Array.isArray(liveState.view.replacingDshTurns) ? liveState.view.replacingDshTurns : [];
+				const suppressedTurns = liveState.view && Array.isArray(liveState.view.suppressedDshTurns) ? liveState.view.suppressedDshTurns : [];
+				const regenerating = liveState.view && liveState.view.regenInProgress === true
+					&& replacingTurns.concat(suppressedTurns).some(function (value) { return Number(value) === Number(turn) || Number(value) === Number(storyTurn); });
+				if (regenerating) return null;
 				if (!(data.status === "running" || data.status === "interrupted" || rendered.length > 0)) return null;
 				if (distantHeight > 0) return React.createElement("div", { ref:historyNode, className: "dsh-tavern-assistant", "data-distant-floor": true, style: { height: distantHeight + "px" } });
 				const mvuReceiptNode = settled && ownsTurn ? React.createElement(TavernTurnMvuReceipt, { sessionId: props.sessionId, turn: storyTurn }) : null;

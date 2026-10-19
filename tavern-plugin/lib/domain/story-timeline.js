@@ -579,7 +579,7 @@ export function createStoryTimeline(options = {}) {
       // Roll back story-owned fields, not settings saved while the model ran.
       restore(chat, snapshot(original))
       chat.timeline = clone(original.timeline)
-      for (const key of ['nativeCommits', 'suppressedDshTurns', 'regeneratedDshTurns']) {
+      for (const key of ['nativeCommits', 'suppressedDshTurns', 'regeneratedDshTurns', 'replacingDshTurns']) {
         if (Object.hasOwn(original, key)) chat[key] = clone(original[key])
         else delete chat[key]
       }

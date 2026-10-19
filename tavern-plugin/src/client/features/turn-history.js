@@ -246,6 +246,27 @@
 				} else hideTurnTailWithUser(tail);
 			}
 		}
+		// 重生成期间的那一楼：只藏会被替代的旧正文（和它的尾行），玩家输入留着。
+		// 整轮隐掉输入会让页面看起来像"我刚发的那条被删了"，这是他自己的话。
+		function hideReplacingReply(tail, turn) {
+			hideRow(tail);
+			const rows = turnRowsBefore(tail, turn);
+			for (let i = 0; i < rows.length; i++) {
+				if (rows[i].getAttribute("data-chat-flow-kind") === "user") continue;
+				hideRow(rows[i]);
+			}
+		}
+		function applyReplacingDshTurns(turns) {
+			const set = new Set((Array.isArray(turns) ? turns : []).map(String));
+			if (set.size === 0) return;
+			const tails = root().querySelectorAll('[data-chat-flow-kind="turn-tail"]');
+			for (let i = 0; i < tails.length; i++) {
+				const tail = tails[i];
+				const turn = tailTurnOf(tail);
+				if (!set.has(turn)) continue;
+				hideReplacingReply(tail, turn);
+			}
+		}
 		function applyRegeneratedDshTurns(regeneratedDshTurns) {
 			const mappings = regeneratedDshTurns && typeof regeneratedDshTurns === "object" ? regeneratedDshTurns : {};
 			const hiddenStoryTurns = new Set(Object.keys(mappings).map(String));
@@ -256,21 +277,25 @@
 				if (hiddenStoryTurns.has(tailTurnOf(tail))) hideTurnTail(tail);
 			}
 		}
-			function apply(sessionId, turns, regeneratedDshTurns) {
+			function apply(sessionId, turns, regeneratedDshTurns, replacingTurns) {
                 // Reconcile both directions: an older observer may have hidden a
                 // restored turn after the action's immediate DOM update.
                 restoreHiddenRows();
 				applySuppressedDshTurns(turns, regeneratedDshTurns);
+				applyReplacingDshTurns(replacingTurns);
 				applyRegeneratedDshTurns(regeneratedDshTurns);
                 // Native rows can mount without their turn tail. Explicit ownership
                 // must remain authoritative during streaming and partial hydration.
                 const suppressed = new Set((Array.isArray(turns) ? turns : []).map(String));
+                const replacing = new Set((Array.isArray(replacingTurns) ? replacingTurns : []).map(String));
                 const mappings = regeneratedDshTurns || {};
                 const replacements = new Set(Object.values(mappings).map(String));
                 for (const row of root().querySelectorAll('[data-chat-turn]')) {
                     const turn = row.getAttribute("data-chat-turn");
                     const kind = row.getAttribute("data-chat-flow-kind");
                     if (!kind) continue;
+                    // 正在被替换的那一楼只藏回复，玩家的输入永远留着。
+                    if (replacing.has(turn) && kind === "user") continue;
                     if (suppressed.has(turn) && (!replacements.has(turn) || kind === "user")) hideRow(row);
                     if (Object.prototype.hasOwnProperty.call(mappings, turn) && kind !== "user") hideRow(row);
                 }
@@ -286,7 +311,7 @@
 				const adopted = view && view.adopted;
 				if (adopted && Number(adopted.hiddenTurn) > 0) forgetHiddenTurn(HIDDEN_TURNS_KEY, sessionId, Number(adopted.hiddenTurn));
 				if (adopted && Number(adopted.syntheticTurn) > 0) forgetHiddenTurn(HIDDEN_REGEN_USER_TURNS_KEY, sessionId, Number(adopted.syntheticTurn));
-				apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns);
+				apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns, view && view.replacingDshTurns);
 			}
             function restored(sessionId, view) {
                 const turn = Number(view && view.undoneRollback && view.undoneRollback.turn);
@@ -301,10 +326,10 @@
                     tail.style.display = "";
                     turnRowsBefore(tail, tail.getAttribute("data-chat-turn")).forEach(function (row) { row.style.display = ""; });
                 }
-                apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns);
+                apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns, view && view.replacingDshTurns);
             }
 			function rolledBack(sessionId, view) {
-				apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns);
+				apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns, view && view.replacingDshTurns);
 			}
 			return Object.freeze({ apply: apply, regenerated: regenerated, rolledBack: rolledBack, restored: restored });
 		}
