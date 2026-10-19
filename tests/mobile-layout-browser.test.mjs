@@ -195,16 +195,18 @@ test('移动端实际样式：顶栏、键盘、候选、面板、编辑器与�
     assert.equal(await page.locator('.dsh-ig-card-toolbar').evaluate(el => getComputedStyle(el).opacity), '1', '触屏无需悬停即可操作图片')
   })
 
-  await t.test('Android 内嵌外壳零控件、全屏铺满 iframe，靠返回键关闭并释放监听', async () => {
+  await t.test('Android 内嵌外壳零控件、全屏铺满 iframe，返回键不退出并释放监听', async () => {
     await page.goto('about:blank'); await page.setViewportSize({ width: 360, height: 800 })
     const entry = await readFile(new URL('../android/dsh-tavern-entry/client.js', import.meta.url), 'utf8')
-    for (const removed of ['dsh-tavern-embed-bar', 'dsh-tavern-embed-fab', 'dsh-tavern-embed-menu']) {
+    for (const removed of ['dsh-tavern-embed-bar', 'dsh-tavern-embed-fab', 'dsh-tavern-embed-menu', 'setFrameKey']) {
       assert.ok(!entry.includes(removed), `内嵌窗口不渲染 ${removed}`)
     }
-    assert.ok(/addEventListener\("popstate", onPopState\)/.test(entry), '内嵌窗口监听返回键退出')
+    assert.ok(/role: "dialog", "aria-modal": "true"/.test(entry), '外壳声明为模态对话框，宿主返回键判定为已处理')
+    assert.ok(!/onPopState\(\) \{ close\(\)/.test(entry), '返回键不再关闭窗口')
+    assert.ok(/function onPopState\(\) \{ if \(!frameRoot\.current\) return; guard\(\)/.test(entry), '历史回退会被哨兵条目挡回')
     const style = entry.slice(entry.indexOf('const CSS = `') + 'const CSS = `'.length, entry.indexOf('`;', entry.indexOf('const CSS = `')))
     const controller = entry.slice(entry.indexOf('function installEmbeddedViewport('), entry.indexOf('function checkTavern('))
-    await page.setContent(`<style>body{margin:0}${style}</style><div class="dsh-tavern-embed"><iframe title="酒馆工作台" srcdoc="<meta name=viewport content=width=device-width><body>测试会话</body>"></iframe></div>`)
+    await page.setContent(`<style>body{margin:0}${style}</style><div class="dsh-tavern-embed" role="dialog" aria-modal="true"><iframe title="酒馆工作台" srcdoc="<meta name=viewport content=width=device-width><body>测试会话</body>"></iframe></div>`)
     await page.evaluate(source => {
       window.testViewport = new EventTarget()
       Object.assign(window.testViewport, { height: 420, offsetTop: 30, scale: 1 })

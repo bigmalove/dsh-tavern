@@ -173,19 +173,24 @@ window.__ModuleLoader__.load({
 					const [frame, setFrame] = react.useState("");
 					const frameRoot = react.useRef(null);
 					react.useEffect(function () { return installEmbeddedViewport(frameRoot.current); }, [frame]);
-					// 零控件：进入时压一条历史记录，系统返回键回退即关闭。酒馆页面自身不写
-					// 浏览器历史，所以一次返回就能退出，不会在内部路由上空转。
+					// 零控件、按返回键也不退出：DSHA 的返回键会先问页面（注入脚本找可见的
+					// dialog 并派发 Escape，说处理了就不回退、不 finish）。外壳带 role=dialog，
+					// 就等于「本次返回已被处理」；再叠一层历史守卫，万一走了原生 goBack，
+					// 也只是弹掉我们压的哨兵条目，页面不动，并且立刻补压回去，永远不会走到
+					// finish()。Escape 监听只为吃掉宿主派发的那一下，不关闭窗口。
 					react.useEffect(function () {
 						if (!frame) return undefined;
 						const marker = "dsh-tavern-embed-" + Date.now();
-						window.history.pushState({ dshTavernEmbed: marker }, "");
-						let popped = false;
-						function onPopState() { popped = true; setFrame(""); }
+						const guard = function () { window.history.pushState({ dshTavernEmbed: marker }, ""); };
+						guard();
+						function onPopState() { if (!frameRoot.current) return; guard(); }
+						function onKeyDown(event) { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); } }
 						window.addEventListener("popstate", onPopState);
+						window.addEventListener("keydown", onKeyDown, true);
 						return function () {
 							window.removeEventListener("popstate", onPopState);
-							// 不是被返回键关掉的（如宿主重载）时自己补一次回退，别留下空历史条目。
-							if (!popped && window.history.state && window.history.state.dshTavernEmbed === marker) window.history.back();
+							window.removeEventListener("keydown", onKeyDown, true);
+							if (window.history.state && window.history.state.dshTavernEmbed === marker) window.history.back();
 						};
 					}, [frame]);
 					async function openEmbedded() {
@@ -223,7 +228,11 @@ window.__ModuleLoader__.load({
 								? (state.update.error || "更新失败，请重试。")
 								: state.online === false ? "酒馆未启动，可点击更新/修复。" : "";
 					return react.createElement("div", null,
-						frame ? react.createElement("div", { className: "dsh-tavern-embed", ref: frameRoot },
+						frame ? react.createElement("div", {
+						  className: "dsh-tavern-embed", ref: frameRoot,
+						  role: "dialog", "aria-modal": "true", "aria-label": "酒馆工作台",
+						  "data-tavern-embed": "open"
+						},
 						  react.createElement("iframe", { title: "酒馆工作台", src: frame, referrerPolicy: "no-referrer", allow: "clipboard-read; clipboard-write; fullscreen", allowFullScreen: true })
 						) : null,
 						react.createElement("div", { className: "dsh-tavern-entry-actions" },
