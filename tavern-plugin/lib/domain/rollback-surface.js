@@ -112,11 +112,11 @@ export function regenerationAttemptTurns(input) {
   return modelTurns(events, events.filter(event => event && belongs(event.seq) === OWNED).map(event => event.seq))
 }
 
-/** Whether the chat view can draw this body: an append-origin node still on the surface. */
-function transcriptDraws(events, visible, body) {
+/** Whether the chat view can draw this body: an append-origin event carries it. */
+function transcriptDraws(events, body) {
   if (body === '') return false
   return events.some(event => event?.type === 'assistant/message' && event.surfaceOp === 'append' &&
-    visible.has(Number(event.seq)) && contentText(event.data?.message) === body)
+    contentText(event.data?.message) === body)
 }
 
 // A replaced reply does not disappear from the page by itself: the host keeps
@@ -129,6 +129,23 @@ function transcriptDraws(events, visible, body) {
 export function supersededRegenerationTurns({ events = [], nodes = [] } = {}) {
   const visible = new Set(nodes.map(Number))
   const turns = new Set()
+  const bySeq = new Map()
+  for (const event of events) if (Number.isSafeInteger(event?.seq)) bySeq.set(event.seq, event)
+  // A chat view paints every append-origin body it was handed, including bodies a
+  // later replacement shadowed. Rerolls chain: the replacement that stands now
+  // shadowed an earlier replacement, which shadowed the bodies the player first
+  // saw. Reading only the current replacement's own sources therefore loses the
+  // original turns — two refusals stayed on the page above the real answer.
+  const displacedBodies = (event, into = new Set(), depth = 0) => {
+    if (!event || depth > 16) return into
+    for (const seq of event.sourceEventSeqs || []) {
+      const original = bySeq.get(Number(seq))
+      if (!original || original.type !== 'assistant/message' || into.has(Number(original.seq))) continue
+      into.add(Number(original.seq))
+      if (original.surfaceOp?.op === 'replace') displacedBodies(original, into, depth + 1)
+    }
+    return into
+  }
   for (const event of events) {
     if (event?.type !== 'assistant/message' || event.surfaceOp?.op !== 'replace') continue
     // Only the replacement that is still the current node speaks for the page;
@@ -137,16 +154,31 @@ export function supersededRegenerationTurns({ events = [], nodes = [] } = {}) {
     // Only a regeneration writes a body for round N into a later turn; a seed or
     // repair rewrite carries no story turn and leaves the opening alone.
     if (!(Number(event.data?.message?.source?.tavernStoryTurn) > 0)) continue
-    for (const seq of event.sourceEventSeqs || []) {
-      const original = eventAt(events, seq)
-      if (!original || original.type !== 'assistant/message') continue
+    const winning = contentText(event.data?.message)
+    for (const seq of displacedBodies(event)) {
+      const original = bySeq.get(seq)
       // Only a turn that actually showed a body leaves a visible row behind; the
       // empty markers of earlier attempts never drew anything.
-      if (contentText(original.data?.message) === '') continue
+      const text = contentText(original?.data?.message)
+      if (text === '') continue
+      // A row that carries this very body is the one the page should keep drawing.
+      if (winning !== '' && text === winning) continue
       const turn = Number(original.data?.turn)
       // A row for the turn that now carries the replacement stays as it is.
       if (Number.isSafeInteger(turn) && turn > 0 && turn !== Number(event.data?.turn)) turns.add(turn)
     }
+  }
+  // A published copy that repeats a body an earlier row already carries is a
+  // duplicate: keep the earlier row and hide the copy.
+  const firstTurnByBody = new Map()
+  for (const event of events) {
+    if (event?.type !== 'assistant/message' || event.surfaceOp !== 'append') continue
+    const text = contentText(event.data?.message)
+    if (text === '') continue
+    const turn = Number(event.data?.turn)
+    if (!firstTurnByBody.has(text)) { firstTurnByBody.set(text, turn); continue }
+    if (!String(event.data?.message?.id || '').startsWith('tavern-transcript:')) continue
+    if (Number.isSafeInteger(turn) && turn > 0 && turn !== firstTurnByBody.get(text)) turns.add(turn)
   }
   return [...turns].sort((left, right) => left - right)
 }
@@ -593,7 +625,7 @@ export function ensureTranscriptCopy(session) {
   if (!host) return false
   // Only a copy the transcript would actually draw counts as published: an
   // append-origin node still on the surface. A shadowed copy is invisible to it.
-  if (transcriptDraws(events, visible, body)) return false
+  if (transcriptDraws(events, body)) return false
   const copy = {
     ...host.data,
     message: {
