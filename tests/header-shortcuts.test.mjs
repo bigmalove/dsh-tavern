@@ -119,7 +119,8 @@ test('会话模式还没加载时顶栏仍然渲染', () => {
   // mode 通常是空的。空 mode 是「还没加载」，不能当成「不是酒馆会话」，
   // 否则整排按钮在手机上一律消失（桌面侧栏常驻，看不出来）。
   assert.doesNotMatch(client, /if \(!mode\) return null/)
-  assert.equal((client.match(/if \(mode && !isBodyMode\(mode\)\) return null/g) || []).length, 2)
+  assert.doesNotMatch(client, /if \(!isPlayMode\(mode\)\) return null/)
+  assert.equal((client.match(/if \(mode && !is(?:Body|Play)Mode\(mode\)\) return null/g) || []).length, 2)
   assert.match(client, /function ensureTavernSessionModes\(\)/)
   assert.match(client, /function useTavernSessionMode\(sessionId\)[\s\S]*?ensureTavernSessionModes\(\)/)
 
@@ -131,6 +132,7 @@ test('会话模式还没加载时顶栏仍然渲染', () => {
     ctx: { sessions: { subagentAddress: () => null } },
     useTavernSessionMode: () => current,
     isBodyMode: mode => mode === 'story' || mode === 'script',
+    isPlayMode: mode => mode === 'story' || mode === 'script',
     React: { createElement: (type, props) => ({ rendered: type.name, props }) },
     TavernHeaderItems: function TavernHeaderItems() {},
     openTavernSidebarTab: () => {}
