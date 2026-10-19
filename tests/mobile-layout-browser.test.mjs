@@ -201,7 +201,12 @@ test('移动端实际样式：顶栏、键盘、候选、面板、编辑器与�
     for (const removed of ['dsh-tavern-embed-bar', 'dsh-tavern-embed-fab', 'dsh-tavern-embed-menu', 'setFrameKey']) {
       assert.ok(!entry.includes(removed), `内嵌窗口不渲染 ${removed}`)
     }
-    assert.ok(/role: "dialog", "aria-modal": "true"/.test(entry), '外壳声明为模态对话框，宿主返回键判定为已处理')
+    assert.ok(/root\.setAttribute\("role", "dialog"\)/.test(entry), '外壳声明 role=dialog，宿主返回键判定为已处理')
+    // 回归：dsh-web-mobile 在 `@media (max-width:1023px) and (pointer:coarse)` 里给
+    // `[aria-modal="true"]:not(:has(> :first-child > :last-child > button))` 加了
+    // `max-width: calc(100vw - 32px)`（给宿主内容弹窗留边距）。全屏外壳一旦带上该属性
+    // 就被截成 100vw-32px，右侧露出 32px 缺口（2026-10-19 手机实测）。
+    assert.ok(!/setAttribute\("aria-modal"/.test(entry), '全屏外壳不能声明 aria-modal，否则被宿主弹窗限宽规则截断')
     // 回归：侧栏插槽在手机抽屉里，抽屉带 transform 会成为 fixed 的包含块（宽度被截到
     // 92vw，右侧露出遮罩缺口）。壳必须由原生节点直挂 body，不能是插槽的 React 子节点。
     assert.ok(/document\.body\.appendChild\(root\)/.test(entry), '全屏壳挂到 body，不做侧栏抽屉的后代')
@@ -238,6 +243,17 @@ test('移动端实际样式：顶栏、键盘、候选、面板、编辑器与�
     assert.ok(Math.abs((await box('#in-drawer')).width - 360 * 0.92) <= 2, '抽屉内的 fixed 壳会被截到 92vw')
     await page.evaluate(() => document.body.appendChild(document.getElementById('in-drawer')))
     assert.equal(Math.round((await box('#in-drawer')).width), 360, '挂到 body 后铺满视口')
+    // 回归：宿主弹窗限宽（真实规则，取自 dsh-web-mobile@2.4.1 的 client.js）。
+    // 带 aria-modal 的零控件外壳会被截成 100vw-32px；去掉该属性后必须满宽。
+    const hostDialogRule = `@media (max-width: 1023px) and (pointer: coarse) {
+      [aria-modal="true"]:not(:has(> :first-child > :last-child > button)) { max-width: calc(100vw - 32px); }
+    }`
+    await page.setContent(`<style>body{margin:0}${style}${hostDialogRule}
+      .plain{position:absolute;inset:0}</style>
+      <div class="dsh-tavern-embed plain" id="capped" role="dialog" aria-modal="true"><iframe></iframe></div>
+      <div class="dsh-tavern-embed plain" id="uncapped" role="dialog"><iframe></iframe></div>`)
+    assert.equal(Math.round((await box('#capped')).width), 360 - 32, '带 aria-modal 会被宿主限宽规则截掉 32px')
+    assert.equal(Math.round((await box('#uncapped')).width), 360, '只留 role=dialog 的外壳铺满视口')
   })
   assert.deepEqual(errors, [])
 })

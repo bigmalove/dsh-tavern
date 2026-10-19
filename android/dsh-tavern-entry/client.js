@@ -181,7 +181,12 @@ window.__ModuleLoader__.load({
 						const root = document.createElement("div");
 						root.className = "dsh-tavern-embed";
 						root.setAttribute("role", "dialog");
-						root.setAttribute("aria-modal", "true");
+						// 只声明 role，不要 aria-modal：dsh-web-mobile 在
+						// `@media (max-width:1023px) and (pointer:coarse)` 里给
+						// `[aria-modal="true"]:not(:has(> :first-child > :last-child > button))`
+						// 加了 `max-width: calc(100vw - 32px)`，那是给宿主内容弹窗留边距的；
+						// 我们这一层是全屏外壳，带上该属性就被截成 100vw-32px，右侧露出 32px。
+						// 宿主返回键走 page.js 的 `[role="dialog"]` 分支，不依赖 aria-modal。
 						root.setAttribute("aria-label", "酒馆工作台");
 						const embedded = document.createElement("iframe");
 						embedded.title = "酒馆工作台";
