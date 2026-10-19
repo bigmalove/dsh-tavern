@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "revision": "eb9b30af176870779200e64802dcd06e389bc5e9",
-  "releaseSequence": 744,
+  "revision": "24123a620bf37e66956195b2645267504df36f01",
+  "releaseSequence": 745,
   "version": "3.0.0",
   "files": [
     {
@@ -491,8 +491,8 @@
     },
     {
       "path": "tavern-plugin/lib/client.js",
-      "sha256": "d85c9cac2ac28ce5363082913667fbd7cac13d61769ee1734e5fea68af2b45bf",
-      "size": 1984210
+      "sha256": "d93293d948844a38d13e0db13e0c83fe594c0d255f5c09d41c11ea496a738554",
+      "size": 1985438
     },
     {
       "path": "tavern-plugin/lib/cordis-inspect.js",
@@ -4916,8 +4916,8 @@
     },
     {
       "path": "tavern-plugin/src/client/features/play-controls.js",
-      "sha256": "4d52b771dd91f9a38533b59275d7e09d7a34e894111c87a71516b503f82564c7",
-      "size": 145265
+      "sha256": "619f3631f7f070c5b4ecc1d6ca2e319207023f21e9ed98e91310517cf86e176c",
+      "size": 145737
     },
     {
       "path": "tavern-plugin/src/client/features/plugin-extensions.js",
@@ -5266,8 +5266,8 @@
     },
     {
       "path": "tavern-plugin/src/client/runtime/host-artifacts.js",
-      "sha256": "11258230947b7fbf8aca4c11f5554622ad65bdfc606774357b3ac3d69a24e74a",
-      "size": 31937
+      "sha256": "8d2bd7ba91ef02d61967b09afe1bda2f667ed5fe5bfa6760698fde7c4902bbfe",
+      "size": 32693
     },
     {
       "path": "tavern-plugin/src/client/runtime/message-frame-lifecycle.js",
