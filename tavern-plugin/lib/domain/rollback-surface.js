@@ -112,6 +112,13 @@ export function regenerationAttemptTurns(input) {
   return modelTurns(events, events.filter(event => event && belongs(event.seq) === OWNED).map(event => event.seq))
 }
 
+/** Whether the chat view can draw this body: an append-origin node still on the surface. */
+function transcriptDraws(events, visible, body) {
+  if (body === '') return false
+  return events.some(event => event?.type === 'assistant/message' && event.surfaceOp === 'append' &&
+    visible.has(Number(event.seq)) && contentText(event.data?.message) === body)
+}
+
 // A replaced reply does not disappear from the page by itself: the host keeps
 // drawing the row it already built for that native turn, even though the node is
 // gone from the surface. `replacingDshTurns` only covers the moment of
@@ -130,6 +137,10 @@ export function supersededRegenerationTurns({ events = [], nodes = [] } = {}) {
     // Only a regeneration writes a body for round N into a later turn; a seed or
     // repair rewrite carries no story turn and leaves the opening alone.
     if (!(Number(event.data?.message?.source?.tavernStoryTurn) > 0)) continue
+    // The chat view draws append-origin events only, so a replacement on its own
+    // is invisible: hiding the round it displaced would leave the page blank.
+    // Hide only when a copy of this body is actually drawable.
+    if (!transcriptDraws(events, visible, contentText(event.data?.message))) continue
     for (const seq of event.sourceEventSeqs || []) {
       const original = eventAt(events, seq)
       if (!original || original.type !== 'assistant/message') continue
