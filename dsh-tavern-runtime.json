@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "revision": "089b3f93bc3a924578031e6d3e885d9eb4488b05",
-  "releaseSequence": 716,
+  "revision": "da107687a3b35f6d89db6599ecd4c2e88a17d4e5",
+  "releaseSequence": 717,
   "version": "3.0.0",
   "files": [
     {
@@ -316,12 +316,12 @@
     },
     {
       "path": "patches/dsh-web-mobile@3.1.0.patch",
-      "sha256": "b151174b09138f5a19067f2593383b1cd6586547748ab6848e3e3e061d0a270b",
-      "size": 858
+      "sha256": "b2a12acd19fb0b09292a7263d6e942123d4d2906ad9d9fd3f766fe28786917d2",
+      "size": 5028
     },
     {
       "path": "pnpm-lock.yaml",
-      "sha256": "4b9439b33ed19f0291be48dc523725c4de378948a54c02dae7113f6caeda2e75",
+      "sha256": "15508743a3a2a29271bf61c68dde63f2637658c89ddcd5fa7dd0933b0d04fc92",
       "size": 87189
     },
     {
@@ -1921,8 +1921,8 @@
     },
     {
       "path": "tavern-plugin/lib/domain/story-tool-submission.js",
-      "sha256": "1b8157f8e513a6c3f94ec8292d1f757bc8da8a73ffa71b6ac817e05e5050c79e",
-      "size": 8863
+      "sha256": "d60836b034b1472269447048f79d6cf17bd3dd42c7437cfc9de5c1eefadc96ac",
+      "size": 8259
     },
     {
       "path": "tavern-plugin/lib/domain/surface-recovery.js",
@@ -2121,8 +2121,8 @@
     },
     {
       "path": "tavern-plugin/lib/domain/tool-result-message.js",
-      "sha256": "0c08dbfaf08be6f43c477da0996026bb5a8200fd56395aec5e5ba1cac021260d",
-      "size": 1954
+      "sha256": "dff918b904889a662040d4cb35475eb0da16667be4f444ee3e9a6f4dc7983eb3",
+      "size": 1651
     },
     {
       "path": "tavern-plugin/lib/domain/turn-orchestration.js",
