@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "revision": "f04e5d215e4229892053945248f842960567d29a",
-  "releaseSequence": 753,
+  "revision": "b50999de14f9a500283462a299a9d34b17889369",
+  "releaseSequence": 754,
   "version": "3.0.0",
   "files": [
     {
@@ -1556,8 +1556,8 @@
     },
     {
       "path": "tavern-plugin/lib/domain/rollback-surface.js",
-      "sha256": "86c9b2f39b487dda5421c01ff82cad4e70bf82a2b00d6cbfabd3e3eed3ae4e4f",
-      "size": 36207
+      "sha256": "ff77f05ec25e2db78bbd99275105c545be8789c3b5cebd4031606f0ab7a4c55f",
+      "size": 37680
     },
     {
       "path": "tavern-plugin/lib/domain/round-anchor.js",
