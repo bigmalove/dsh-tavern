@@ -202,6 +202,10 @@ export function applyTavernSettingsPatch(current, patch) {
     if (typeof input.autoOpenStatusPanel !== 'boolean') throw new Error('自动打开酒馆状态面板设置必须是布尔值')
     next.autoOpenStatusPanel = input.autoOpenStatusPanel
   }
+  if (Object.hasOwn(input, 'worldbookAutoSync')) {
+    if (typeof input.worldbookAutoSync !== 'boolean') throw new Error('世界书自动更新设置必须是布尔值')
+    next.worldbookAutoSync = input.worldbookAutoSync
+  }
   if (Object.hasOwn(input, 'renderDepth')) {
     if (!Number.isSafeInteger(input.renderDepth) || input.renderDepth < 0 || input.renderDepth > 100) throw new Error('渲染深度必须是 0 到 100 的整数')
     next.renderDepth = input.renderDepth
@@ -294,6 +298,9 @@ export function presentTavernSettings(document, defaults) {
     // Only the latest floors run a card's HTML interface; 0 renders every floor.
     renderDepth: renderDepthOf(object(document).renderDepth),
     autoOpenStatusPanel: object(document).autoOpenStatusPanel !== false,
+    // Library edits reach a running game on its next turn; only an explicit
+    // reload still refreshes the card definition, initvars and MVU state.
+    worldbookAutoSync: object(document).worldbookAutoSync !== false,
     compatibilityMode: false,
     sillyModeEnabled: false,
     webSearchEnabled: object(document).webSearchEnabled === true,

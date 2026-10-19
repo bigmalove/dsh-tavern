@@ -2143,9 +2143,16 @@ export async function apply(ctx) {
     }
     return Object.assign(cardPreparation.present({ card: card, as: 'view' }), { path: str(card.path || chat.cardPath) })
   }
-  async function cardUpdateStatus(chat) {
-    try { return await playCardSnapshots.updateStatus(chat, await readCard(chat.cardPath)) }
-    catch (error) { return {available:true,error:String(error.message || error)} }
+  // Automatic world book updates land here: any idle read of a playing session
+  // lets a library edit enter this game without the explicit reload button.
+  async function cardUpdateStatus(chat, context = {}) {
+    try {
+      const card = await readCard(chat.cardPath)
+      const synced = context.busy === true ? null
+        : await playCardSnapshots.autoSync(chat, card, { settings: context.settings })
+      // One library read now serves both the automatic refresh and the badge.
+      return await playCardSnapshots.updateStatus(chat, card, synced?.observed)
+    } catch (error) { return {available:true,error:String(error.message || error)} }
   }
   const liveCardUpdate = createLiveCardUpdate({readGlobals:readPromptTemplateGlobalVariables})
   ctx.effect(() => () => liveCardUpdate.dispose())
@@ -2204,7 +2211,9 @@ export async function apply(ctx) {
     const forkTurnsByMessageId = forkTurnsForChat(chat)
     const {inputSources,inputTemplateDisplays}=inputFieldsProjection.project(persistedProjection ? chat : {...chat,_storageRevision:undefined}, options.inputChanges)
     const cardUpdate = ['story', 'script'].includes(chat.mode || 'story') && chat.requestMode !== 'sillytavern'
-      ? await cardUpdateStatus(chat) : { available: false }
+      ? await cardUpdateStatus(chat, { busy: activity.busy || ['pending', 'running', 'waiting-runtime'].includes(chat.settleStatus)
+        || agentRegistry.get(chat.sessionId)?.phase?.kind === 'running', settings: runtimeSettings })
+      : { available: false }
     const helperEnabled = hasTavernScriptRuntime(chat, cardExtensions.helperScripts)
     const helperRuntime = helperEnabled
       ? projectTavernHelperScripts(cardExtensions.helperScripts, chat.tavernHelperScriptVariables)
@@ -2564,7 +2573,8 @@ export async function apply(ctx) {
     return await conversationInitialization.ensureOpening(sessionId)
   }
   const contextPlanner = createContextPlanner({ prompt: runtimePrompt, callModel: callModel, now: Date.now, logger: console })
-  const playCardSnapshots = createPlayCardSnapshots({ worldBooks, planner: contextPlanner, readCard: readChatCard, writeChat, captureSceneWorldbook, userPreferenceProfile })
+  const playCardSnapshots = createPlayCardSnapshots({ worldBooks, planner: contextPlanner, readCard: readChatCard, writeChat, updateChat,
+    settings: readTavernSettings, captureSceneWorldbook, userPreferenceProfile })
   const ensurePlayCardSnapshot = playCardSnapshots.ensure
   async function ensureNativeSystemPrefix(session, chat) {
     // Rebuilding the snapshot persists the complete Chat; a bounded history cannot.
@@ -4322,6 +4332,15 @@ export async function apply(ctx) {
     prefilterWorldbook: chatId => worldbookPrefilter.start(chatId),
     cancelPrefilter: chatId => worldbookPrefilter.cancel(chatId),
     waitReconcile: async sessionId => { await reconciling.get(str(sessionId))?.catch(() => {}) },
+    syncWorldBook: async function (chat) {
+      if (!['story', 'script'].includes(chat.mode || 'story')) return
+      try {
+        // The opening-window slice carries only task fields; the snapshot lives
+        // in the complete record that this turn is about to read anyway.
+        const full = chat.openingWorldbookSnapshot ? chat : await chatForSession(chat.sessionId)
+        if (full) await playCardSnapshots.autoSync(full, undefined, { busy: false })
+      } catch (error) { console.warn('dsh-tavern: 世界书自动更新失败，本轮沿用本局快照：', str(error && error.message || error)) }
+    },
     clearFailedTurns: async function (sessionId) {
       const mode = await turnOrchestrator.modeFor(sessionId)
       if (mode !== 'story' && mode !== 'script') return 0
