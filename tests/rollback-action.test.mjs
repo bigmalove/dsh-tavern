@@ -25,7 +25,7 @@ function harness() {
     useTavernSessionMode: () => 'story', latestTavernAssistantMessageId: () => 'reply',
     useLiveTavernView: () => ({ view: { canRollback, undoRollbackTurn: undoTurn, ...extraView } }),
     useTavernCoordination: () => ({ view: { activity } }),
-    describeTavernActivity: value => value, isPlayMode: () => true, isBodyMode: () => true, isWritingMode: () => false,
+    describeTavernActivity: value => value, isPlayMode: () => true, isBodyMode: () => true,
     window: { confirm: () => { calls.push('confirm'); return true } },
     rpc: async () => { calls.push('rpc'); if (fail) throw new Error('本次回复未完成'); return { view: { rollbackWarning: warning } } },
     historyProjection: { rolledBack: () => calls.push('project'), restored: () => calls.push('restore') },
