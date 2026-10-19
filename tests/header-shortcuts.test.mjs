@@ -126,23 +126,52 @@ test('会话模式还没加载时顶栏仍然渲染', () => {
 
   // 行为：同一段包装组件，mode 为空时渲染、知道不是正文模式时才返回 null。
   const tail = client.slice(client.indexOf('id: "dsh-tavern-header-items", order: 80'))
-  const start = tail.indexOf('function (props) {')
+  const start = tail.indexOf('function (slotProps) {')
   const body = tail.slice(start, start + balancedLength(tail.slice(start)))
-  const wrap = vm.runInNewContext('(' + body + ')', {
+  // 包装体依赖同文件里的两个辅助：slot 解析与错误边界。
+  const helpersStart = client.indexOf('function resolveTavernHeaderSlot(')
+  const helpersEnd = client.indexOf('// One slot for every top-bar shortcut', helpersStart)
+  const helpers = client.slice(helpersStart, helpersEnd)
+  const wrap = vm.runInNewContext('(function(){' + helpers + '\nreturn (' + body + ');})', {
     ctx: { sessions: { subagentAddress: () => null } },
     useTavernSessionMode: () => current,
     isBodyMode: mode => mode === 'story' || mode === 'script',
     isPlayMode: mode => mode === 'story' || mode === 'script',
-    React: { createElement: (type, props) => ({ rendered: type.name, props }) },
+    React: { createElement: (type, props) => ({ rendered: type.name || 'element', props }), Component: class { constructor(props) { this.props = props } } },
     TavernHeaderItems: function TavernHeaderItems() {},
+    TavernHeaderBoundary: class TavernHeaderBoundary { constructor(props) { this.props = props } render() { return this.props.children } },
+    tavernErrorHub: { report() {} },
     openTavernSidebarTab: () => {}
-  })
+  })()
   let current = ''
   assert.ok(wrap({ sessionId: 's1' }), 'mode 还没加载时必须渲染')
+  assert.ok(wrap({}), '没有 sessionId 也不能崩（宿主 slot props 可能为空）')
   current = 'story'
   assert.ok(wrap({ sessionId: 's1' }), '正文模式渲染')
   current = 'card'
   assert.equal(wrap({ sessionId: 's1' }), null, '卡片工作台不显示顶栏')
+})
+
+test('顶栏不把宿主 slot props 当必定完整', () => {
+  // 0.2.1 的 header slot 注入 sessions；0.2.0 只给 sessionId，甚至可能为空对象。
+  // 直接 props.sessions.subagentAddress(...) 会抛 TypeError，而宿主的
+  // SlotErrorBoundary 会把异常吞掉 —— 表现就是整排按钮消失，且没有任何报错。
+  assert.doesNotMatch(client, /const owner = props\.sessions\.subagentAddress\(/)
+  assert.doesNotMatch(client, /const address = props\.sessions\.subagentAddress\(/)
+  assert.match(client, /function resolveTavernHeaderSlot\(/)
+  assert.match(client, /class TavernHeaderBoundary extends React\.Component/)
+  assert.match(client, /SlotErrorBoundary|静默吞|吞成空白/)
+})
+
+test('shell 标记不依赖左侧栏挂载，移动端顶栏有独立兜底', () => {
+  // 手机上的左侧栏是抽屉，不打开就不挂载；以前 dsh-tavern-shell-active 只在
+  // 它挂载时加，于是 body 上没有这个类，所有以它为前缀的移动端覆盖全部失效，
+  // 宿主 header:has(_headerLeading) 的 display:none 就把整排顶栏吃掉。
+  assert.match(client, /function markTavernShellActive\(\)/)
+  assert.match(client, /markTavernShellActive\(\);/)
+  // 兜底规则不依赖 body 类，只认「里面装着酒馆按钮」。
+  assert.match(css, /header:has\(\[class\*="_headerLeading"\]\) \[class\*="_headerUtilities"\]:has\(\.dsh-tavern-header-items\)/)
+  assert.match(css, /display: flex !important; flex: 0 1 auto !important; min-width: 0 !important;/)
 })
 
 // 从 `function (props) {` 起按大括号配对取完整函数源码。

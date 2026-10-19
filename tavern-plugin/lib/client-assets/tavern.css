@@ -2832,6 +2832,15 @@ body.dsh-tavern-shell-active [class*="_headerUtilities"]:has(.dsh-tavern-header-
   body.dsh-tavern-shell-active [data-mobile-nav="frame"] :is([data-phase] > header, [data-slot="conversation.session.header"] > header) [class*="_headerUtilities"] {
     display: flex !important; flex: none; margin-left: 0; gap: 0;
   }
+  /* 兜底：dsh-web-mobile 在 `header:has(_headerLeading)` 下把整个 utilities 设成
+     display:none !important（手机上 header 带侧栏开关时命中）。上面那条覆盖依赖
+     body.dsh-tavern-shell-active，一旦这个类没加上（例如侧栏是抽屉、从未挂载），
+     顶栏会整块消失，只剩宿主角落的文件按钮。这条只认「里面装着酒馆按钮」，
+     与 body 类无关；重复 :has 是为了把特异性压过宿主那条 (0,4,1)。
+     注意用后代 :has（宿主在 utilities 里还套了一层 slot 包装 div）。 */
+  header:has([class*="_headerLeading"]) [class*="_headerUtilities"]:has(.dsh-tavern-header-items):has(.dsh-tavern-header-items):has(.dsh-tavern-header-items) {
+    display: flex !important; flex: 0 1 auto !important; min-width: 0 !important;
+  }
   /* 有快捷入口时留出固定的一份宽度，量出来的可用空间才不会随收起数量变化。 */
   body.dsh-tavern-shell-active [data-mobile-nav="frame"] :is([data-phase] > header, [data-slot="conversation.session.header"] > header) [class*="_headerUtilities"]:has(.dsh-tavern-header-items) {
     flex: 0 1 auto; min-width: 0;
