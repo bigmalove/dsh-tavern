@@ -567,7 +567,11 @@ export function ensureTranscriptCopy(session) {
   const blocks = Array.isArray(tail.data?.message?.content) ? tail.data.message.content : []
   const body = blocks.filter(block => block?.type === 'text').map(block => block.text).join('')
   if (body.trim() === '') return false
-  const drawn = events.some(event => event?.type === 'assistant/message' && event.surfaceOp === 'append' &&
+  const visible = new Set(nodes)
+  // The log may already hold a copy that this very replacement shadowed; only a
+  // copy still on the surface counts as drawn.
+  const drawn = events.some(event => visible.has(Number(event?.seq)) && event.type === 'assistant/message' &&
+    event.surfaceOp === 'append' &&
     (event.data?.message?.content || []).some(block => block?.type === 'text' && block.text === body))
   if (drawn) return false
   const copy = {

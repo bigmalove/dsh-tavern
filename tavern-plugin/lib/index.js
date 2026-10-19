@@ -1100,16 +1100,18 @@ export async function apply(ctx) {
   function chatForSession(sessionId) { return sessionChats.read(sessionId) }
   // A round regenerated before the projection published its own transcript copy
   // ends on a replacement node: the model sees the body, the page draws nothing,
-  // and the old turn is hidden — the round looks empty. Heal it once per process,
-  // on the first view read of that chat, whenever the agent is idle.
-  const healedTranscripts = new Set()
+  // and the old turn is hidden — the round looks empty. Heal it on a view read
+  // whenever the surface tail has moved on since the last attempt.
+  const healedTranscripts = new Map()
   function healTranscriptCopyFor(sessionId) {
     const key = str(sessionId)
-    if (key === '' || healedTranscripts.has(key)) return
+    if (key === '') return
     const agent = agentRegistry.get(key)
     const session = agent?.session || sessionStore.get(key)
     if (!session || agent?.phase?.kind === 'running') return
-    healedTranscripts.add(key)
+    const tail = Array.isArray(session.surface?.nodes) ? session.surface.nodes.at(-1) : undefined
+    if (tail === undefined || healedTranscripts.get(key) === tail) return
+    healedTranscripts.set(key, tail)
     try {
       if (!ensureTranscriptCopy(session)) return
       void sessionStore.flush(session).catch(error => {
