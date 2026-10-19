@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "revision": "e8b653d06743057d5702129bc2073036a068d7e7",
-  "releaseSequence": 746,
+  "revision": "b572e1ff4a6a65406c6c725e0722a8b7f8b01213",
+  "releaseSequence": 747,
   "version": "3.0.0",
   "files": [
     {
@@ -491,8 +491,8 @@
     },
     {
       "path": "tavern-plugin/lib/client.js",
-      "sha256": "d93293d948844a38d13e0db13e0c83fe594c0d255f5c09d41c11ea496a738554",
-      "size": 1985438
+      "sha256": "f26aaeeb554fd4ad968908e1664dc6552cb360e96e6369aca5ee4f50934c47f3",
+      "size": 1992879
     },
     {
       "path": "tavern-plugin/lib/cordis-inspect.js",
@@ -1236,8 +1236,13 @@
     },
     {
       "path": "tavern-plugin/lib/domain/mobile-card-import.js",
-      "sha256": "5f9b3f1abc92fe996218cfabd7856027f384a262b6fc5ce3a91c23bd1c8c3e7a",
-      "size": 6462
+      "sha256": "5d53e41647160abb7ce0cf1195ec1afdb6fa64d5f9141298a889eee7eee39ded",
+      "size": 3963
+    },
+    {
+      "path": "tavern-plugin/lib/domain/mobile-files.js",
+      "sha256": "cbe4b7c757193b4eb0ac83ba6b0c1029e4bae1b44221d7481868b3a98ddba0fa",
+      "size": 3901
     },
     {
       "path": "tavern-plugin/lib/domain/model-error-presentation.js",
@@ -2321,8 +2326,8 @@
     },
     {
       "path": "tavern-plugin/lib/index.js",
-      "sha256": "c611a65ebdbb3b8637541c210eb11e12ec10a823c6cee8907802c7682d50fa41",
-      "size": 381318
+      "sha256": "44d8ed8fab530220173c1de9162ab35a1eddc71cb3b945abdd389521c48af8d8",
+      "size": 382623
     },
     {
       "path": "tavern-plugin/lib/plugin-api.js",
@@ -4961,8 +4966,8 @@
     },
     {
       "path": "tavern-plugin/src/client/features/sidebar.js",
-      "sha256": "4211aad739b0d3ae3b3afba83a0902728749f84aaed3a2bcefb578c6f6f7b260",
-      "size": 103210
+      "sha256": "690d2d8a490676e3989cbbecec1743b29dd75ce64e0c99e2c5adff9b6c1014a8",
+      "size": 105939
     },
     {
       "path": "tavern-plugin/src/client/features/skills.js",
@@ -5046,8 +5051,8 @@
     },
     {
       "path": "tavern-plugin/src/client/main.js",
-      "sha256": "7e19bab7f18c5b1569240829e6e71db91805ac9da3d2aa418e24e338d0df2099",
-      "size": 67271
+      "sha256": "c48ee64f74ed13553790433946cdd7d8bf558c8f0299bd6e983baaaff06cd4b2",
+      "size": 71983
     },
     {
       "path": "tavern-plugin/src/client/modules/assistant-visibility.js",
