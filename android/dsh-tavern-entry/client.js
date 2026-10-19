@@ -230,8 +230,7 @@ window.__ModuleLoader__.load({
 					return react.createElement("div", null,
 						frame ? react.createElement("div", {
 						  className: "dsh-tavern-embed", ref: frameRoot,
-						  role: "dialog", "aria-modal": "true", "aria-label": "酒馆工作台",
-						  "data-tavern-embed": "open"
+						  role: "dialog", "aria-modal": "true", "aria-label": "酒馆工作台"
 						},
 						  react.createElement("iframe", { title: "酒馆工作台", src: frame, referrerPolicy: "no-referrer", allow: "clipboard-read; clipboard-write; fullscreen", allowFullScreen: true })
 						) : null,
