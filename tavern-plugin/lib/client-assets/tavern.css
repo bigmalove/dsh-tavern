@@ -2227,6 +2227,57 @@ html.dsh-tavern-hide-process [data-chat-flow-kind="turn-process"]:has([data-turn
 .dsh-tavern-global-settings .dsh-tavern-image-settings .dsh-tavern-btn { align-self: flex-start; }
 .dsh-tavern-global-settings .dsh-tavern-image-settings > .dsh-tavern-settings-intro { font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-tertiary); }
 
+/* 自定义顶栏设置 */
+.dsh-tavern-header-settings-group > .dsh-tavern-settings-copy { padding: 14px 0 10px; }
+.dsh-tavern-header-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 2px 0 12px; }
+.dsh-tavern-header-mode {
+  display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1.5px solid var(--dsw-alias-border-l2);
+  border-radius: 11px; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary);
+  text-align: left; font: inherit; cursor: pointer;
+}
+.dsh-tavern-header-mode:hover:not(:disabled) { border-color: var(--dsh-tavern-accent-border); }
+.dsh-tavern-header-mode[aria-checked="true"] { border-color: var(--dsh-tavern-accent); box-shadow: 0 0 0 3px var(--dsh-tavern-accent-soft); }
+.dsh-tavern-header-mode-preview { display: flex; align-items: center; gap: 4px; height: 26px; }
+.dsh-tavern-header-mode-chip {
+  display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 7px; border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 7px; background: var(--dsw-specific-sidebar-fill); color: var(--dsw-alias-label-secondary); font-size: 11.5px;
+}
+.dsh-tavern-header-mode-chip.is-square { width: 26px; padding: 0; justify-content: center; }
+.dsh-tavern-header-mode-name { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; }
+.dsh-tavern-header-radio { width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid var(--dsw-alias-border-l3); display: grid; place-items: center; }
+.dsh-tavern-header-mode[aria-checked="true"] .dsh-tavern-header-radio { border-color: var(--dsh-tavern-accent); }
+.dsh-tavern-header-mode[aria-checked="true"] .dsh-tavern-header-radio::after { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--dsh-tavern-accent); }
+.dsh-tavern-header-mode small { font-size: 11.5px; line-height: 1.5; color: var(--dsw-alias-label-tertiary); }
+.dsh-tavern-header-list { list-style: none; display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0 0 12px; }
+.dsh-tavern-header-list-row { display: flex; align-items: center; gap: 10px; padding: 7px 8px 7px 6px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 10px; background: var(--dsw-alias-bg-base); }
+.dsh-tavern-header-list-row.is-dragging { opacity: .45; }
+.dsh-tavern-header-grip { color: var(--dsw-alias-label-tertiary); letter-spacing: -1px; font-size: 13px; cursor: grab; user-select: none; }
+.dsh-tavern-header-list-icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: var(--dsh-tavern-accent-soft); color: var(--dsh-tavern-accent); flex: none; }
+.dsh-tavern-header-list-name { flex: 1; min-width: 0; font-size: 13px; }
+.dsh-tavern-header-list-name strong { display: block; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsh-tavern-header-list-name small { display: block; font-size: 11px; color: var(--dsw-alias-label-tertiary); }
+.dsh-tavern-header-list-ops { display: flex; gap: 2px; }
+.dsh-tavern-header-op { width: 28px; height: 28px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 14px; line-height: 1; cursor: pointer; }
+.dsh-tavern-header-op:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.dsh-tavern-header-op:disabled { opacity: .3; cursor: default; }
+.dsh-tavern-header-op.is-danger:hover:not(:disabled) { color: var(--dsh-tavern-accent-error); background: color-mix(in srgb, var(--dsh-tavern-accent-error) 12%, transparent); }
+.dsh-tavern-header-empty { margin: 0 0 12px; padding: 16px; border: 1.5px dashed var(--dsw-alias-border-l3); border-radius: 10px; text-align: center; font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-tertiary); }
+.dsh-tavern-header-catalog { padding: 12px 0 4px; border-top: 1px solid var(--dsw-alias-border-l2); }
+.dsh-tavern-header-catalog > .dsh-tavern-settings-desc { margin-bottom: 10px; }
+.dsh-tavern-header-catalog-group + .dsh-tavern-header-catalog-group { margin-top: 12px; }
+.dsh-tavern-header-catalog-title { margin: 0 2px 6px; font-size: 11.5px; color: var(--dsw-alias-label-tertiary); }
+.dsh-tavern-header-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.dsh-tavern-header-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px 5px 6px; border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); font: inherit; font-size: 12.5px; cursor: pointer;
+}
+.dsh-tavern-header-chip:hover:not(:disabled) { border-color: var(--dsh-tavern-accent-border); }
+.dsh-tavern-header-chip.is-on { background: var(--dsh-tavern-accent-soft); border-color: var(--dsh-tavern-accent-border); color: var(--dsh-tavern-accent); }
+.dsh-tavern-header-chip-icon { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--dsh-tavern-accent-soft); color: var(--dsh-tavern-accent); }
+.dsh-tavern-header-chip-state { color: var(--dsw-alias-label-tertiary); }
+.dsh-tavern-header-chip.is-on .dsh-tavern-header-chip-state { color: var(--dsh-tavern-accent); }
+.dsh-tavern-header-foot { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 12px 0 14px; }
+.dsh-tavern-header-foot .dsh-tavern-settings-desc { max-width: 62%; }
 @container (max-width: 520px) {
   .dsh-tavern-model-row-controls { flex: 1 1 100%; }
   .dsh-tavern-model-row-controls > select { flex: 1; width: auto; min-width: 0; }
@@ -2501,6 +2552,33 @@ button.dsh-tavern-play-fullscreen {
 }
 .dsh-tavern-icon-fullscreen { display: block; width: 18px; height: 18px; flex: none; }
 .dsh-tavern-header-settings, .dsh-tavern-export-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+/* 顶栏快捷入口：一个容器按用户顺序渲染；放不下的页面从尾部收进「⋯」。
+   宿主把 utilities 设为 flex:none，这里让它在窄窗口里可以收缩，容器才能量出可用宽度。 */
+body.dsh-tavern-shell-active [data-slot="conversation.session.header.utilities"]:has(> .dsh-tavern-header-items) { display: contents; }
+body.dsh-tavern-shell-active [class*="_headerUtilities"]:has(.dsh-tavern-header-items) { flex: 1 1 0; min-width: 0; justify-content: flex-end; }
+.dsh-tavern-header-items { display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; max-width: 100%; margin-left: auto; }
+.dsh-tavern-header-items:empty { display: none; }
+.dsh-tavern-header-item { display: inline-flex; align-items: center; flex: none; min-width: 0; }
+.dsh-tavern-header-item.is-folded { display: none; }
+.dsh-tavern-header-page {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 32px; min-width: 32px; padding: 0 8px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 13px; white-space: nowrap; cursor: pointer;
+}
+.dsh-tavern-header-page:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.dsh-tavern-header-page:focus-visible { outline: 2px solid var(--dsh-tavern-accent); outline-offset: -2px; }
+.dsh-tavern-header-items.is-icon .dsh-tavern-header-action-label { display: none; }
+.dsh-tavern-header-items.is-icon .dsh-tavern-header-item > .dsh-tavern-header-settings,
+.dsh-tavern-header-items.is-icon .dsh-tavern-header-item .dsh-tavern-export-action,
+.dsh-tavern-header-items.is-icon .dsh-tavern-header-page { width: 32px; min-width: 32px; padding: 0; gap: 0; }
+.dsh-tavern-header-more { flex: none; }
+.dsh-tavern-header-more-button {
+  display: inline-flex; align-items: center; justify-content: center; width: 32px; min-width: 32px; height: 32px;
+  padding: 0; border: 0; border-radius: 7px; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer;
+}
+.dsh-tavern-header-more-button:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.dsh-tavern-header-more .dsh-tavern-more-menu { top: calc(100% + 6px); bottom: auto; }
+.dsh-tavern-header-context { z-index: 60; }
 .dsh-tavern-play-fullscreen:focus-visible { outline: 2px solid #a66b35; outline-offset: -2px; }
 
 /* 布局按宽度，触控命中区按输入设备：宽屏平板保留多栏，同时适应软键盘。 */
@@ -2651,15 +2729,22 @@ button.dsh-tavern-play-fullscreen {
   body.dsh-tavern-shell-active [data-mobile-nav="frame"] :is([data-phase] > header, [data-slot="conversation.session.header"] > header) [class*="_headerUtilities"] {
     display: flex !important; flex: none; margin-left: 0; gap: 0;
   }
+  /* 有快捷入口时留出固定的一份宽度，量出来的可用空间才不会随收起数量变化。 */
+  body.dsh-tavern-shell-active [data-mobile-nav="frame"] :is([data-phase] > header, [data-slot="conversation.session.header"] > header) [class*="_headerUtilities"]:has(.dsh-tavern-header-items) {
+    flex: 1 1 0; min-width: 0;
+  }
   body.dsh-tavern-shell-active :is([data-phase] > header, [data-slot="conversation.session.header"] > header) .dsh-tavern-header-action-label { display: none; }
   body.dsh-tavern-shell-active :is([data-phase] > header, [data-slot="conversation.session.header"] > header) :is(.dsh-tavern-header-settings, .dsh-tavern-export-action) {
     width: 40px; height: 40px; min-width: 40px; padding: 0; border: 0;
     border-radius: 7px; background: transparent; color: var(--dsw-alias-label-secondary);
   }
-  body.dsh-tavern-shell-active :is([data-phase] > header, [data-slot="conversation.session.header"] > header) [class*="_headerUtilities"] > :not(.dsh-tavern-header-settings):not(.dsh-tavern-export-menu) { display: none; }
+  body.dsh-tavern-shell-active :is([data-phase] > header, [data-slot="conversation.session.header"] > header) :is(.dsh-tavern-header-page, .dsh-tavern-header-more-button) {
+    width: 40px; height: 40px; min-width: 40px; padding: 0; gap: 0; border: 0; border-radius: 7px;
+  }
+  body.dsh-tavern-shell-active :is([data-phase] > header, [data-slot="conversation.session.header"] > header) [class*="_headerUtilities"] > :not(.dsh-tavern-header-settings):not(.dsh-tavern-export-menu):not(.dsh-tavern-header-items) { display: none; }
   /* utilities 也有 display:contents 插槽；保留插槽本身，隐藏已在抽屉提供的日志入口。 */
   body.dsh-tavern-shell-active [data-slot="conversation.session.header.utilities"] { display: contents !important; }
-  body.dsh-tavern-shell-active [data-slot="conversation.session.header.utilities"] > :not(.dsh-tavern-header-settings):not(.dsh-tavern-export-menu) { display: none !important; }
+  body.dsh-tavern-shell-active [data-slot="conversation.session.header.utilities"] > :not(.dsh-tavern-header-settings):not(.dsh-tavern-export-menu):not(.dsh-tavern-header-items) { display: none !important; }
   body.dsh-tavern-shell-active :is([data-phase] > header, [data-slot="conversation.session.header"] > header) [class*="_label"]:has(> svg) { display: none !important; }
   body.dsh-tavern-shell-active :is([data-phase] > header, [data-slot="conversation.session.header"] > header) .dsh-tavern-play-fullscreen {
     width: 40px; height: 40px; min-width: 40px; padding: 0; order: 2;

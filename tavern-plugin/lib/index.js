@@ -4771,7 +4771,7 @@ export async function apply(ctx) {
         return { backgroundModel: saved.backgroundModelSelection || null, imageModel: saved.imageModelSelection || null, backgroundTasks: normalizeBackgroundTasks(saved.backgroundTasks), webSearchEnabled: saved.webSearchEnabled === true, sceneImagesEnabled: saved.sceneImagesEnabled === true }
       }
       case 'getBackgroundModelReasoning': return { reasoning: await readBackgroundModelReasoning(llm, args) }
-      case 'getDisplayPreferences': { const settings = await readTavernSettings(); return { hideContextAndReasoning: settings.hideContextAndReasoning } }
+      case 'getDisplayPreferences': { const settings = await readTavernSettings(); return { hideContextAndReasoning: settings.hideContextAndReasoning, headerItems: settings.headerItems } }
       case 'getCandidatePreferences': return { candidateDismissMode: (await readTavernSettings()).candidateDismissMode }
       case 'getTavernSettings': return { settings: await readTavernSettings(), modelCatalog: await tavernModelCatalog(), releaseCapabilities: TAVERN_RELEASE_CAPABILITIES }
       case 'getSceneImageSettings': {
