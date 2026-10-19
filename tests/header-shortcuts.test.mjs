@@ -113,3 +113,45 @@ test('空间不足时从尾部收起页面，酒馆状态和导出永不收起',
   assert.deepEqual(Array.from(fold(['a', 'b', 'c'], id => (id === 'c' ? 100 : 100), 250, { gap: 2, moreWidth: 34, fixed: ['c'] })), ['b'])
   assert.deepEqual(Array.from(fold(['dsh-tavern:status', 'dsh-tavern:cards', 'dsh-tavern:worldbooks', 'header:export'], () => 100, 260, { gap: 2, moreWidth: 34, fixed: ['dsh-tavern:status', 'header:export'] })), ['dsh-tavern:cards', 'dsh-tavern:worldbooks'])
 })
+
+test('会话模式还没加载时顶栏仍然渲染', () => {
+  // 模式的发布者是左侧栏；手机上它要打开抽屉才挂载，所以顶栏首次渲染时
+  // mode 通常是空的。空 mode 是「还没加载」，不能当成「不是酒馆会话」，
+  // 否则整排按钮在手机上一律消失（桌面侧栏常驻，看不出来）。
+  assert.doesNotMatch(client, /if \(!mode\) return null/)
+  assert.equal((client.match(/if \(mode && !isBodyMode\(mode\)\) return null/g) || []).length, 2)
+  assert.match(client, /function ensureTavernSessionModes\(\)/)
+  assert.match(client, /function useTavernSessionMode\(sessionId\)[\s\S]*?ensureTavernSessionModes\(\)/)
+
+  // 行为：同一段包装组件，mode 为空时渲染、知道不是正文模式时才返回 null。
+  const tail = client.slice(client.indexOf('id: "dsh-tavern-header-items", order: 80'))
+  const start = tail.indexOf('function (props) {')
+  const body = tail.slice(start, start + balancedLength(tail.slice(start)))
+  const wrap = vm.runInNewContext('(' + body + ')', {
+    ctx: { sessions: { subagentAddress: () => null } },
+    useTavernSessionMode: () => current,
+    isBodyMode: mode => mode === 'story' || mode === 'script',
+    React: { createElement: (type, props) => ({ rendered: type.name, props }) },
+    TavernHeaderItems: function TavernHeaderItems() {},
+    openTavernSidebarTab: () => {}
+  })
+  let current = ''
+  assert.ok(wrap({ sessionId: 's1' }), 'mode 还没加载时必须渲染')
+  current = 'story'
+  assert.ok(wrap({ sessionId: 's1' }), '正文模式渲染')
+  current = 'card'
+  assert.equal(wrap({ sessionId: 's1' }), null, '卡片工作台不显示顶栏')
+})
+
+// 从 `function (props) {` 起按大括号配对取完整函数源码。
+function balancedLength(source) {
+  let depth = 0
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1
+    else if (source[index] === '}') {
+      depth -= 1
+      if (depth === 0) return index + 1
+    }
+  }
+  throw new Error('unbalanced function body')
+}

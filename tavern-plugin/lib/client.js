@@ -3251,8 +3251,23 @@ window.__ModuleLoader__.load({
 		}
 		function useTavernSessionMode(sessionId) {
 			const [values, setValues] = React.useState(tavernSessionModes.values);
-			React.useEffect(function () { tavernSessionModes.listeners.add(setValues); return function () { tavernSessionModes.listeners.delete(setValues); }; }, []);
+			React.useEffect(function () {
+				// The side panel publishes the modes; on mobile it stays unmounted until
+				// the drawer opens, so the header would see an empty map on first paint.
+				// Fetch once here so header controls do not depend on that panel.
+				if (!Object.keys(tavernSessionModes.values).length) ensureTavernSessionModes();
+				tavernSessionModes.listeners.add(setValues);
+				return function () { tavernSessionModes.listeners.delete(setValues); };
+			}, []);
 			return values[sessionId] || "";
+		}
+		let tavernSessionModeRequest = null;
+		function ensureTavernSessionModes() {
+			if (tavernSessionModeRequest || Object.keys(tavernSessionModes.values).length) return;
+			tavernSessionModeRequest = Promise.resolve()
+				.then(function () { return rpc("listSessions"); })
+				.then(function (result) { publishSessionModes(result && result.sessions); }, function () {})
+				.then(function () { tavernSessionModeRequest = null; });
 		}
 		function escapeOpeningPreviewText(value) {
 			return String(value || "")
@@ -21872,7 +21887,8 @@ async function runTavernTouchDiagnostics(host, onStatus) {
         function TavernConversationSettingsAction(props) {
             const owner = props.sessions.subagentAddress(props.sessionId)?.parentSessionId || props.sessionId;
             const mode = useTavernSessionMode(owner);
-            if (!isBodyMode(mode)) return null;
+            // Same as the slot above: an unknown mode is "not loaded yet", not "not Tavern".
+            if (mode && !isBodyMode(mode)) return null;
             return React.createElement("button", { type: "button", className: "dsh-tavern-btn dsh-tavern-header-settings", "aria-label": "酒馆状态", title: "查看本局酒馆状态", onClick: () => props.open(owner) },
                 React.createElement("svg", { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round", "aria-hidden": "true" },
                     React.createElement("path", { d: "M4 7h3m4 0h9M4 17h9m4 0h3" }),
@@ -22669,7 +22685,11 @@ async function runTavernTouchDiagnostics(host, onStatus) {
                 function (props) {
                     const owner = ctx.sessions.subagentAddress(props.sessionId)?.parentSessionId || props.sessionId;
                     const mode = useTavernSessionMode(owner);
-                    if (!mode) return null;
+                    // Unknown mode means the session list has not arrived yet (the side
+                    // panel publishes it, and on a phone that panel is not mounted until
+                    // the drawer opens). Render anyway; only a known non-body mode hides
+                    // the bar, otherwise the whole header disappears on mobile.
+                    if (mode && !isBodyMode(mode)) return null;
                     return React.createElement(TavernHeaderItems, Object.assign({}, props, { ctx: ctx, sessions: ctx.sessions, openStatus: sessionId => openTavernSidebarTab(ctx, { type: "dsh-tavern:status" }, { sessionId }) }));
                 }
             )), "dsh-tavern: header items");

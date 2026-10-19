@@ -12,8 +12,23 @@
 		}
 		function useTavernSessionMode(sessionId) {
 			const [values, setValues] = React.useState(tavernSessionModes.values);
-			React.useEffect(function () { tavernSessionModes.listeners.add(setValues); return function () { tavernSessionModes.listeners.delete(setValues); }; }, []);
+			React.useEffect(function () {
+				// The side panel publishes the modes; on mobile it stays unmounted until
+				// the drawer opens, so the header would see an empty map on first paint.
+				// Fetch once here so header controls do not depend on that panel.
+				if (!Object.keys(tavernSessionModes.values).length) ensureTavernSessionModes();
+				tavernSessionModes.listeners.add(setValues);
+				return function () { tavernSessionModes.listeners.delete(setValues); };
+			}, []);
 			return values[sessionId] || "";
+		}
+		let tavernSessionModeRequest = null;
+		function ensureTavernSessionModes() {
+			if (tavernSessionModeRequest || Object.keys(tavernSessionModes.values).length) return;
+			tavernSessionModeRequest = Promise.resolve()
+				.then(function () { return rpc("listSessions"); })
+				.then(function (result) { publishSessionModes(result && result.sessions); }, function () {})
+				.then(function () { tavernSessionModeRequest = null; });
 		}
 		function escapeOpeningPreviewText(value) {
 			return String(value || "")
