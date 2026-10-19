@@ -1665,7 +1665,7 @@
                     h("div", { className: "dsh-tavern-header-dialog-head" },
                         h("strong", null, "顶栏设置"),
                         h("button", { type: "button", className: "dsh-tavern-header-op", "aria-label": "关闭", title: "关闭", onClick: props.onClose }, "×")),
-                    h(HeaderItemsSettings))), document.body);
+                    h(HeaderItemsSettings, { collapsible: false }))), document.body);
         }
 
         // One slot for every top-bar shortcut. 酒馆状态 and 导出 keep their own
