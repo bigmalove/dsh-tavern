@@ -36,6 +36,9 @@ export function updateSourceUrls(repository) {
     // jsDelivr 的清单只有发布工作流会刷新，fork 不跑该工作流，清单里的 revision 会滞后。
     // 它只在 GitHub API 不可达时兜底：陈旧 revision 会判成 behind，不会伪造「有更新」。
     cdnMetadata: `https://cdn.jsdelivr.net/gh/${name}@main/dsh-tavern-runtime.json`,
+    // jsDelivr 对超过 50MB 的仓库直接返回 403（本仓 2026-10 起已越线），而 raw 没有
+    // 体积上限、也不按分支长缓存。它是 CDN 不可用时的等价备用源。
+    rawMetadata: `https://raw.githubusercontent.com/${name}/main/dsh-tavern-runtime.json`,
   }
 }
 const UPDATE_SOURCE = updateSourceUrls(process.env.DSH_TAVERN_REPOSITORY)
@@ -46,8 +49,13 @@ const execFileAsync = promisify(execFile)
 const UPDATE_CHECK_POLICY = 5
 const BUSY_PHASES = new Set(['running', 'cancelling', 'blocked'])
 const CDN_METADATA_URL = UPDATE_SOURCE.cdnMetadata
+const RAW_METADATA_URL = UPDATE_SOURCE.rawMetadata
 const RUNTIME_FILES = new Set(['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'cordis.patch.yml', 'install.ps1', 'install.sh'])
-const RUNTIME_DIRECTORIES = ['bin/', 'config/', 'presets/', 'tavern-plugin/', 'patches/']
+// Every path the manifest may list. android/ belongs here: it ships in the build
+// (the DSHA entry plugin and setup scripts), so leaving it out made an android-only
+// release look identical to the installed tree — the check then answered
+// "up-to-date" and the update button did nothing (2026-10-19).
+const RUNTIME_DIRECTORIES = ['bin/', 'config/', 'presets/', 'tavern-plugin/', 'patches/', 'android/']
 
 async function localCommitRelation(root, current, latest) {
   const ancestor = async (base, head) => {
@@ -271,6 +279,13 @@ export function createApplicationUpdater(options) {
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
     return response.json()
   }
+  const fetchRawMetadata = options.fetchRawMetadata || async function () {
+    const response = await diagnosticFetch(options.rawMetadataUrl || process.env.DSH_TAVERN_RAW_METADATA_URL || RAW_METADATA_URL, {
+      cache: 'no-store', signal: AbortSignal.timeout(8000),
+    }, 8000)
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    return response.json()
+  }
   const compareCommits = options.compareCommits || async function (current, latest) {
     for (const root of [sourceRoot, path.join(dshHome, 'source-cache', 'dsh-tavern.git')]) {
       const relation = await localCommitRelation(root, current, latest)
@@ -359,8 +374,9 @@ export function createApplicationUpdater(options) {
     if (currentVersion === 'unknown') throw new Error('无法确认当前构建，请手动重新安装')
     if (currentVersion === '') throw new Error('版本信息不完整')
     const settle = promise => promise.then(value => ({ status: 'fulfilled', value }), reason => ({ status: 'rejected', reason }))
-    // Start the CDN request in parallel, but only wait for it when GitHub cannot decide.
+    // Start the fallback sources in parallel, but only wait for them when GitHub cannot decide.
     const cdn = settle(stage('cdn.fetch', fetchCdnMetadata))
+    const raw = settle(stage('raw.fetch', fetchRawMetadata))
     const [manifest, commit] = await Promise.all([settle(stage('github.version', fetchManifest)), settle(stage('github.commit', fetchLatestCommit))])
     const manifestVersion = manifest.status === 'fulfilled' ? String(manifest.value?.version || '') : ''
     const cdnSequenceFor = async revision => {
@@ -381,17 +397,28 @@ export function createApplicationUpdater(options) {
     const githubError = github ? new Error('GitHub 返回的提交号无效') : commit.reason
     record('fallback.cdn', { reason: sanitizeUpdateError(githubError?.message || githubError) })
     try {
-      const metadata = await cdn
-      if (metadata.status === 'rejected') throw metadata.reason
-      const compared = await compareCdnRuntime(sourceRoot, metadata.value)
+      // jsDelivr is capped at 50MB per repo and this repository is past it, so it
+      // can answer 403 or hand back a long-cached copy; raw is size-agnostic and
+      // reflects the branch. Ask both and keep the newest published sequence.
+      const reached = (await Promise.all([cdn, raw]))
+        .filter(result => result.status === 'fulfilled')
+        .map(result => result.value)
+        .filter(metadata => /^[0-9a-f]{40}$/i.test(String(metadata?.revision || '')))
+      if (reached.length === 0) {
+        const [cdnResult, rawResult] = await Promise.all([cdn, raw])
+        throw new Error(`CDN ${sanitizeUpdateError(cdnResult.reason?.message || cdnResult.reason)}；raw ${sanitizeUpdateError(rawResult.reason?.message || rawResult.reason)}`)
+      }
+      const metadata = reached.reduce((newest, current) => (Number(current.releaseSequence) || 0) > (Number(newest.releaseSequence) || 0) ? current : newest)
+      const compared = await compareCdnRuntime(sourceRoot, metadata)
       record('cdn.comparison', { ...identity, latestVersion: compared.version, latestCommit: compared.revision, latestReleaseSequence: compared.releaseSequence, matches: compared.matches })
       const updateAvailable = !compared.matches && await relationTo(identity, compared.revision, async () => compared.releaseSequence, { sequenceFirst: true })
+      const newestSource = metadata === (await cdn).value ? 'jsdelivr' : 'raw'
       return {
-        currentVersion, latestVersion: manifestVersion || compared.version || 'unknown', currentCommit, latestCommit: compared.revision, checkSource: 'jsdelivr', updateAvailable,
-        // jsDelivr caches @main, so it can lag behind GitHub but never invent a newer build.
+        currentVersion, latestVersion: manifestVersion || compared.version || 'unknown', currentCommit, latestCommit: compared.revision, checkSource: newestSource, updateAvailable,
+        // Both fallback sources cache @main, so they can lag behind GitHub but never invent a newer build.
         checkWarning: updateAvailable
-          ? 'GitHub 暂不可达；已发现 CDN 上的较新构建，但无法确认它是最新构建。'
-          : 'GitHub 暂不可达；CDN 清单未显示更新构建，CDN 可能有数小时缓存延迟。',
+          ? 'GitHub 暂不可达；已发现备用源上的较新构建，但无法确认它是最新构建。'
+          : 'GitHub 暂不可达；备用源未显示更新构建，CDN 可能有数小时缓存延迟。',
       }
     } catch (cdnError) {
       throw new Error(`暂时无法确认最新版本：GitHub 核实失败（${sanitizeUpdateError(githubError?.message || githubError)}）；CDN 备用检查（${sanitizeUpdateError(cdnError?.message || cdnError)}）`)

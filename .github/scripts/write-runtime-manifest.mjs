@@ -9,7 +9,11 @@ const releaseSequence = Number(process.argv[3])
 if (!/^[0-9a-f]{40}$/i.test(revision)) throw new Error('A full Git commit SHA is required')
 if (!Number.isSafeInteger(releaseSequence) || releaseSequence <= 0) throw new Error('A positive release sequence is required')
 
-const entries = ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'cordis.patch.yml', 'install.ps1', 'install.sh', 'bin', 'config', 'presets', 'patches', 'tavern-plugin']
+// android/ is part of the installed build (the DSHA entry plugin and the setup
+// scripts), so the manifest must describe it. Omitting it made an android-only
+// release hash-identical to the installed tree, and the updater answered
+// "up-to-date" — the phone never received the shell fix published for it.
+const entries = ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'cordis.patch.yml', 'install.ps1', 'install.sh', 'bin', 'config', 'presets', 'patches', 'tavern-plugin', 'android']
 const files = []
 
 async function collect(relative) {

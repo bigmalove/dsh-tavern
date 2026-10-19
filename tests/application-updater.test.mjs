@@ -35,6 +35,7 @@ function createApplicationUpdater(options) {
     platform: 'linux', dshHome: options.sourceRoot,
     // CDN fallback is explicit in each fixture; never fetch live metadata.
     fetchCdnMetadata: async () => { throw new Error('CDN unavailable in GitHub fixture') },
+    fetchRawMetadata: async () => { throw new Error('raw unavailable in GitHub fixture') },
     ...options,
   })
 }
@@ -68,6 +69,7 @@ test('真实 Git 历史可离线识别新旧，包括 archive 安装的 bare sou
           fetchManifest: async () => ({ version: '1.1.0' }), fetchLatestCommit: async () => latestCommit,
           compareUrl: 'http://127.0.0.1:1/no-network-expected',
           fetchCdnMetadata: async () => { throw new Error('no fallback expected') },
+          fetchRawMetadata: async () => { throw new Error('no fallback expected') },
         })
         assert.equal((await updater.check()).phase, expected)
       }
@@ -96,6 +98,7 @@ for (const source of ['github']) {
             if (source === 'github') throw new Error('offline')
             return { revision: latestCommit, files: [{ path: 'package.json', sha256: 'a'.repeat(64) }] }
           },
+          fetchRawMetadata: async () => { throw new Error('offline') },
           compareCommits: async (current, latest) => {
             assert.equal(current, currentCommit)
             assert.equal(latest, latestCommit)
@@ -119,6 +122,54 @@ for (const source of ['github']) {
   }
 }
 
+test('仅 android/ 变化的发布必须判成有更新，且 raw 备用源能绕开陈旧 CDN', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'dsh-tavern-updater-android-'))
+  try {
+    const packageText = JSON.stringify({ version: '3.0.0' })
+    const shellText = 'old shell'
+    await mkdir(path.join(root, 'android', 'dsh-tavern-entry'), { recursive: true })
+    await writeFile(path.join(root, 'package.json'), packageText)
+    await writeFile(path.join(root, 'android', 'dsh-tavern-entry', 'client.js'), shellText)
+    const manifest = (revision, sequence, shell) => ({
+      schemaVersion: 2, revision, releaseSequence: sequence, version: '3.0.0',
+      files: [
+        { path: 'package.json', sha256: createHash('sha256').update(packageText).digest('hex') },
+        { path: 'android/dsh-tavern-entry/client.js', sha256: createHash('sha256').update(shell).digest('hex') },
+      ],
+    })
+    await writeFile(path.join(root, 'dsh-tavern-runtime.json'), JSON.stringify(manifest('a'.repeat(40), 42, shellText)))
+    const offline = async () => { throw new Error('fetch failed') }
+    const common = {
+      dataRoot: path.join(root, 'data'), sourceRoot: root, runtimeHost: 'android',
+      fetchManifest: offline, fetchLatestCommit: offline,
+      compareCommits: async () => { throw new Error('GitHub 应按不可达处理') },
+      now: () => 321,
+    }
+    // CDN 停留在安装时那一版（哈希与本地全等），raw 上有只改了 android/ 的新构建。
+    const cdnMetadata = manifest('a'.repeat(40), 42, shellText)
+    const rawMetadata = manifest('b'.repeat(40), 43, 'new shell')
+    const stale = {
+      ...common,
+      fetchCdnMetadata: async () => cdnMetadata,
+      fetchRawMetadata: async () => rawMetadata,
+    }
+    const checked = await createApplicationUpdater(stale).check()
+    assert.equal(checked.phase, 'update-available', 'android/ 的变化不能被哈希相等掩盖')
+    assert.equal(checked.latestCommit, 'b'.repeat(40))
+    assert.equal(checked.checkSource, 'raw')
+
+    // 两个备用源都停在旧版时才允许判成已是最新。
+    const bothStale = { ...common, fetchCdnMetadata: async () => cdnMetadata, fetchRawMetadata: async () => cdnMetadata }
+    assert.equal((await createApplicationUpdater(bothStale).check()).phase, 'up-to-date')
+
+    // CDN 403（本仓已超 jsDelivr 50MB 上限）时，raw 仍然能给出结论。
+    const cdnDead = { ...common, fetchCdnMetadata: async () => { throw new Error('HTTP 403') }, fetchRawMetadata: async () => rawMetadata }
+    assert.equal((await createApplicationUpdater(cdnDead).check()).phase, 'update-available')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('jsDelivr 发布序号阻止缓存倒退，并允许无 GitHub 更新', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'dsh-tavern-updater-cdn-'))
   try {
@@ -137,6 +188,7 @@ test('jsDelivr 发布序号阻止缓存倒退，并允许无 GitHub 更新', asy
       fetchManifest: async () => { throw new Error('fetch failed') },
       fetchLatestCommit: async () => { throw new Error('fetch failed') },
       fetchCdnMetadata: async () => metadata,
+      fetchRawMetadata: async () => { throw new Error('raw unavailable in CDN fixture') },
       compareCommits: async () => { throw new Error('GitHub 不应参与 CDN 发布序号判断') },
       now: () => 321,
     }
@@ -168,6 +220,7 @@ test('更新诊断跨检查保留回退和网络原因，并可在重启后读�
     const networkError = () => Object.assign(new Error('fetch failed https://user:secret@example.test/meta?token=secret'), { cause: Object.assign(new Error('connect timeout'), { code: 'ETIMEDOUT' }) })
     const options = { dataRoot: root, sourceRoot: root, runtimeHost: 'desktop', ...verifiedUpdate,
       fetchCdnMetadata: async () => { throw new Error('清单缺少发布序号') },
+      fetchRawMetadata: async () => { throw new Error('清单缺少发布序号') },
       fetchManifest: async () => { throw networkError() },
     }
     const updater = createApplicationUpdater({ ...options, fetchLatestCommit: async () => { throw networkError() } })
@@ -243,7 +296,8 @@ test('jsDelivr 兜底：本地清单未核验时用提交比较，比较不可�
     const metadata = { revision: '9'.repeat(40), releaseSequence: 44, version: '2.4.0', files: [{ path: 'package.json', sha256: 'e'.repeat(64) }] }
     const offline = async () => { throw new Error('fetch failed') }
     const common = { dataRoot: path.join(root, 'data'), sourceRoot: root, runtimeHost: 'cli',
-      fetchManifest: offline, fetchLatestCommit: offline, fetchCdnMetadata: async () => metadata }
+      fetchManifest: offline, fetchLatestCommit: offline, fetchCdnMetadata: async () => metadata,
+      fetchRawMetadata: async () => { throw new Error('raw unavailable') } }
     const compared = []
     const viaCompare = await createApplicationUpdater({ ...common, compareCommits: async (a, b) => { compared.push([a, b]); return 'ahead' } }).check()
     assert.equal(viaCompare.phase, 'update-available')
