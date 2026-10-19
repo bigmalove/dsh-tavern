@@ -539,8 +539,8 @@
 			return value;
 		}
 
-		async function submitBodyRegeneration(sessionId, panel, guidance) {
-			const res = await rpc("regenBody", { guidance: String(guidance || "").trim() }, sessionId);
+		async function submitBodyRegeneration(sessionId, panel, guidance, reroll) {
+			const res = await rpc("regenBody", { guidance: String(guidance || "").trim(), reroll: reroll === true }, sessionId);
 			applyBodyRegenerationResult({ liveTavernView: liveTavernView, historyProjection: historyProjection, sessionId: sessionId, view: res.view, tail: panel.tail });
 			setCandidatePanel(null);
 		}
@@ -681,7 +681,7 @@
 						generate(false);
 					}
 				} }, settlementActive ? "后台结算中…" : (activity.busy ? activity.label : ((busy || taskBusy) ? "生成中…" : (hasReadyPanel ? "重新生成候选项" : "生成候选项")))),
-				(canReplayFailed || canRollback) ? h("button", { className: "dsh-tavern-choice-trigger", disabled: frontRunning || (!canReplayFailed && activity.busy && !settlementActive) || regenBusy || replayBusy, title: canReplayFailed ? "移除被中断的回复并原样重放本轮请求（复用模型缓存）" : (settlementActive ? "重新生成将取消当前正文的后台结算" : (activity.busy ? activity.blockReason : "可选择填写意见，再重新生成并替换当前正文")), onClick: canReplayFailed ? replayFailed : openRegeneration }, replayBusy ? "重放中…" : regenBusy ? "重生成中…" : canReplayFailed ? "重新生成本轮" : "重新生成正文") : null,
+				(canReplayFailed || canRollback) ? h("button", { className: "dsh-tavern-choice-trigger", disabled: frontRunning || (!canReplayFailed && activity.busy && !settlementActive) || regenBusy || replayBusy, title: canReplayFailed ? "移除被中断的回复并原样重放本轮请求（复用模型缓存）" : (settlementActive ? "重新生成将取消当前正文的后台结算" : (activity.busy ? activity.blockReason : "直接重掷，或填意见后参考旧正文重写")), onClick: canReplayFailed ? replayFailed : openRegeneration }, replayBusy ? "重放中…" : regenBusy ? "重生成中…" : canReplayFailed ? "重新生成本轮" : "重新生成正文") : null,
 				canReplayFailed ? h("button", { className: "dsh-tavern-choice-trigger dsh-tavern-withdraw-failed", disabled: frontRunning || replayBusy || withdrawBusy, title: "清除这一轮：恢复到这一轮开始前，此前的剧情和变量不变，原输入放回输入框", onClick: withdrawFailed }, withdrawBusy ? "撤回中…" : "撤回这条输入") : null
 			);
 		}
@@ -1553,7 +1553,13 @@
 							return h("button", { key: text, type: "button", className: "dsh-tavern-regen-example", onClick: function () { addExample(text); } }, text);
 						})),
 						h("button", { type: "button", className: "dsh-tavern-regen-cancel", onClick: props.onCancel }, "取消"),
-						h("button", { type: "button", className: "dsh-tavern-question-primary dsh-tavern-regen-submit", onClick: props.onSubmit }, props.submitLabel)
+						props.rewriteLabel ? h("button", {
+							type: "button",
+							className: "dsh-tavern-regen-submit dsh-tavern-regen-rewrite",
+							title: props.rewriteTitle || "",
+							onClick: props.onRewrite
+						}, props.rewriteLabel) : null,
+						h("button", { type: "button", className: "dsh-tavern-question-primary dsh-tavern-regen-submit", title: props.submitTitle || "", onClick: props.onSubmit }, props.submitLabel)
 					)
 				);
 			return h("div", { className: "dsh-tavern-question dsh-tavern-regen" },
@@ -1576,29 +1582,33 @@
 			React.useEffect(function () { if (opened) setGuidance(regenGuidance.get(props.sessionId) || ""); }, [opened, props.sessionId]);
 			const h = React.createElement;
 			if (!isBodyMode(sessionMode) || running || !panel || panel.sessionId !== props.sessionId) return null;
-			async function generate() {
+			async function generate(reroll) {
 				const guide = guidance.trim();
 				if (guide) regenGuidance.set(props.sessionId, guide); else regenGuidance.delete(props.sessionId);
-				setRegenPanel(Object.assign({}, panel, { phase: "loading", error: "" }));
+				setRegenPanel(Object.assign({}, panel, { phase: "loading", error: "", reroll: reroll === true }));
 				try {
-					await submitBodyRegeneration(props.sessionId, panel, guide);
+					await submitBodyRegeneration(props.sessionId, panel, guide, reroll === true);
 					setRegenPanel(null);
 				} catch (err) {
-					tavernErrorHub.report("正文重新生成", err);
+					tavernErrorHub.report(reroll === true ? "重新生成正文" : "参考正文重写", err);
 					setRegenPanel(Object.assign({}, panel, { phase: "error", error: String(err && err.message || err) }));
 				}
 			}
 			return h(RegenGuideForm, {
 				title: "重新生成正文",
-				hint: "生成后直接替换当前正文",
-				loading: panel.phase === "loading" ? "正在重新生成正文…" : "",
+				hint: "重掷：模型看不到这一版正文；重写：把这一版一并交给模型改写",
+				loading: panel.phase === "loading" ? (panel.reroll === true ? "正在重掷正文…" : "正在参考旧正文重写…") : "",
 				error: panel.error,
 				value: guidance,
 				onChange: setGuidance,
 				placeholder: "指导意见（可选）",
 				examples: ["写得更长", "侧重心理描写", "加快节奏"],
-				submitLabel: "生成并替换正文",
-				onSubmit: generate,
+				submitLabel: "重掷正文",
+				submitTitle: "清空这一版正文后重新生成，模型不会看到旧正文",
+				onSubmit: function () { generate(true); },
+				rewriteLabel: "参考旧正文重写",
+				rewriteTitle: "保留旧正文一并发给模型，让它在此基础上按意见改写",
+				onRewrite: function () { generate(false); },
 				onCancel: function () { setRegenPanel(null); }
 			});
 		}
@@ -1666,7 +1676,10 @@
                     const gap = parseFloat(style.columnGap || style.gap) || 0;
                     const moreWidth = sample.offsetWidth + gap;
                     sample.remove();
-                    const next = tavernHeaderFold(visible, id => widths.current.get(id) || 0, node.clientWidth, { gap: gap, fixed: TAVERN_HEADER_NOT_FOLDED, moreWidth: moreWidth });
+                    // The divider takes width the buttons cannot use.
+                    const divider = node.querySelector(".dsh-tavern-header-divider");
+                    const dividerWidth = divider ? divider.offsetWidth + (parseFloat(window.getComputedStyle(divider).marginLeft) || 0) + (parseFloat(window.getComputedStyle(divider).marginRight) || 0) + gap * 2 : 0;
+                    const next = tavernHeaderFold(visible, id => widths.current.get(id) || 0, Math.max(0, node.clientWidth - dividerWidth), { gap: gap, fixed: TAVERN_HEADER_NOT_FOLDED, moreWidth: moreWidth });
                     setFolded(current => current.length === next.length && current.every((id, index) => id === next[index]) ? current : next);
                 }
                 measure();
@@ -1718,6 +1731,7 @@
             const foldedEntries = folded.map(id => ({ id: id, label: titleOf(id) })).filter(entry => entry.id !== "header:export");
             return h("div", { ref: host, className: "dsh-tavern-header-items" + (display === "icon" ? " is-icon" : "") },
                 visible.map(item),
+                visible.length ? h("span", { className: "dsh-tavern-header-divider", "aria-hidden": "true" }) : null,
                 foldedEntries.length ? h("div", { className: "dsh-tavern-more-actions dsh-tavern-header-more" },
                     h("button", { type: "button", className: "dsh-tavern-btn dsh-tavern-header-more-button", "data-tavern-header-trigger": "more", "aria-label": "更多快捷入口", "aria-haspopup": "menu", "aria-expanded": Boolean(more), title: "更多快捷入口", onClick: function () { setContext(null); setMore(more ? null : { x: null, y: null }); } },
                         h("svg", { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2.4, strokeLinecap: "round", "aria-hidden": "true" }, h("path", { d: "M5 12h.01M12 12h.01M19 12h.01" }))),

@@ -56,7 +56,11 @@ async function fixture(t, bounded) {
     return seq
   } }
   // A foreground turn as the real orchestrator stores it: begin, append the round, commit.
-  const agent = { session, phase: { kind: 'idle', lastTurn: 81 }, followup(message) { agent.input = message }, async whenIdle() {
+  const agent = { session, phase: { kind: 'idle', lastTurn: 81 }, followup(message) { agent.input = message
+      // What the model would read as story replies when this request is sent.
+      agent.sentTo = session.surface.nodes.map(seq => events[seq]).filter(e => e?.type === 'assistant/message')
+        .map(e => (e.data.message.content || []).map(block => block.text || '').join(''))
+    }, async whenIdle() {
     if (!agent.input) return
     if (hooks.failGeneration) { agent.input = null; throw new Error('fixture generation failed') }
     const turn = ++agent.phase.lastTurn, userText = agent.input.content[0].text, text = '重写正文' + turn
@@ -92,7 +96,7 @@ async function fixture(t, bounded) {
     queueSettlement: async () => {}, cancelSettlement: async () => {},
     present: async value => { presented.push(isScopedMessages(value.messages) ? 'window' : 'full'); return { rolled: true } }
   })
-  return { p, rounds, calls, session, dispatched, presented, hooks }
+  return { p, rounds, calls, session, agent, dispatched, presented, hooks }
 }
 
 function comparable(chat) {
@@ -197,4 +201,47 @@ test('a failed bounded regeneration restores the same Chat as the complete abort
     assert.deepEqual(after.variables, before.variables)
   }
   assert.deepEqual(comparable(results[0].after), comparable(results[1].after))
+})
+
+test('重掷在两条路径上都不把旧正文交给模型，结果一致', async t => {
+  const results = []
+  for (const bounded of [true, false]) {
+    const h = await fixture(t, bounded)
+    const before = await h.p.read('chat')
+    const view = await h.rounds.regenerate('chat', '', 'session', { reroll: true })
+    results.push({ h, before, view, after: await h.p.read('chat') })
+  }
+  for (const { h, before, view, after } of results) {
+    // The saved body of the round being rerolled never reaches the provider.
+    assert.equal(h.agent.sentTo.includes('新正文'), false, '旧正文不能进入重掷请求')
+    assert.equal(view.adopted.text.startsWith('重写正文'), true)
+    assert.equal(after.messages.length, before.messages.length)
+    assert.equal(after.messages.at(-1).text, view.adopted.text)
+    assert.equal(after.messages.at(-1).turn, 81)
+    assert.ok(after.messages.at(-1).swipes.includes('新正文'), '旧正文保留为可切回的版本')
+    const bodies = h.session.surface.nodes.map(seq => h.session.events[seq])
+      .filter(e => e?.type === 'assistant/message')
+      .map(e => (e.data.message.content || []).map(block => block.text || '').join(''))
+    assert.equal(bodies.includes('新正文'), false)
+    assert.equal(bodies.some(text => text.startsWith('重写正文')), true)
+  }
+  const strip = chat => {
+    const value = comparable(chat)
+    for (const op of Object.values(value.timeline.operations)) if (op.regenerationId) op.regenerationId = 'R'
+    return JSON.parse(JSON.stringify(value).replace(/tavern-regen:[0-9a-f-]+/g, 'tavern-regen:R'))
+  }
+  assert.deepEqual(strip(results[0].after), strip(results[1].after))
+})
+
+test('重掷失败后两条路径都把旧正文放回模型上下文', async t => {
+  for (const bounded of [true, false]) {
+    const h = await fixture(t, bounded)
+    h.hooks.failGeneration = true
+    await assert.rejects(h.rounds.regenerate('chat', '', 'session', { reroll: true }), /fixture generation failed/)
+    const bodies = h.session.surface.nodes.map(seq => h.session.events[seq])
+      .filter(e => e?.type === 'assistant/message')
+      .map(e => (e.data.message.content || []).map(block => block.text || '').join(''))
+    assert.equal(bodies.includes('新正文'), true, '撤销后旧正文必须回到模型上下文')
+    assert.equal((await h.p.read('chat')).regenInProgress, undefined)
+  }
 })

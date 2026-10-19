@@ -105,7 +105,7 @@ export async function brokenSaveChecks({ page, step, savedChat, output, report, 
     rpcErrors.splice(0)
     await page.getByRole('button', { name: '重新生成正文', exact: true }).filter({ visible: true }).last().click()
     await page.getByPlaceholder('指导意见（可选）').fill('雨夜重写')
-    await page.getByRole('button', { name: '生成并替换正文', exact: true }).click()
+    await page.getByRole('button', { name: '重掷正文', exact: true }).click()
     await page.getByText('雨夜里，你重新领取了奖励。', { exact: true }).filter({ visible: true }).first().waitFor({ timeout: 60000 })
     for (let i = 0; i < 60 && (await savedChat()).regenInProgress; i++) await pause(500)
     await settled()

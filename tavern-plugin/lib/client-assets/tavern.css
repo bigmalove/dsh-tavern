@@ -445,6 +445,9 @@ body.dsh-tavern-shell-active span:has(.dsh-tavern-hero-lockup) + span { display:
 .dsh-tavern-regen-cancel { margin-left: auto; padding: 6px 12px; font: inherit; font-size: 14px; border: 0; border-radius: 8px; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; }
 .dsh-tavern-regen-cancel:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 .dsh-tavern-regen-submit { padding: 6px 16px; font: inherit; font-size: 14px; white-space: nowrap; font-weight: 600; }
+/* 次要动作（参考旧正文重写）：与主按钮并排但更安静，避免误点成默认行为。 */
+.dsh-tavern-regen-submit.dsh-tavern-regen-rewrite { padding: 6px 14px; font-weight: 500; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; }
+.dsh-tavern-regen-submit.dsh-tavern-regen-rewrite:hover { border-color: var(--dsh-tavern-accent-border); color: var(--dsh-tavern-accent); background: var(--dsh-tavern-accent-soft); }
 .dsh-tavern-status { height: 100%; box-sizing: border-box; display: flex; flex-direction: column; color: var(--dsw-alias-label-primary); background: var(--dsw-specific-sidebar-fill); }
 .dsh-tavern-resources { height: 100%; box-sizing: border-box; display: flex; flex-direction: column; color: var(--dsw-alias-label-primary); background: var(--dsw-specific-sidebar-fill); }
 .dsh-tavern-library { height: 100%; box-sizing: border-box; display: flex; flex-direction: column; color: var(--dsw-alias-label-primary); background: var(--dsw-specific-sidebar-fill); }
@@ -2556,27 +2559,40 @@ button.dsh-tavern-play-fullscreen {
    宿主把 utilities 设为 flex:none，这里让它在窄窗口里可以收缩，容器才能量出可用宽度。 */
 body.dsh-tavern-shell-active [data-slot="conversation.session.header.utilities"]:has(> .dsh-tavern-header-items) { display: contents; }
 body.dsh-tavern-shell-active [class*="_headerUtilities"]:has(.dsh-tavern-header-items) { flex: 1 1 0; min-width: 0; justify-content: flex-end; }
-.dsh-tavern-header-items { display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; max-width: 100%; margin-left: auto; }
+.dsh-tavern-header-items {
+  /* 尺寸走变量：手机和图标模式只改变量，不用和宿主规则比特异性。 */
+  --dsh-tavern-header-button: 32px; --dsh-tavern-header-gap: 2px;
+  display: flex; align-items: center; justify-content: flex-end; gap: var(--dsh-tavern-header-gap);
+  min-width: 0; max-width: 100%; margin-left: auto;
+}
 .dsh-tavern-header-items:empty { display: none; }
 .dsh-tavern-header-item { display: inline-flex; align-items: center; flex: none; min-width: 0; }
 .dsh-tavern-header-item.is-folded { display: none; }
-.dsh-tavern-header-page {
+/* 一行的按钮必须是同一套外观：状态、导出原本各自带填充/描边，直接并排会像两个控件组。 */
+.dsh-tavern-header-items :is(.dsh-tavern-header-page, .dsh-tavern-header-settings, .dsh-tavern-export-action, .dsh-tavern-header-more-button) {
+  appearance: none; box-sizing: border-box;
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  height: 32px; min-width: 32px; padding: 0 8px; border: 0; border-radius: 7px;
-  background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 13px; white-space: nowrap; cursor: pointer;
+  height: var(--dsh-tavern-header-button); min-width: var(--dsh-tavern-header-button); min-height: 0;
+  margin: 0; padding: 0 8px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--dsw-alias-label-secondary);
+  font: inherit; font-size: 13px; font-weight: 500; letter-spacing: 0; white-space: nowrap; cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
 }
-.dsh-tavern-header-page:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
-.dsh-tavern-header-page:focus-visible { outline: 2px solid var(--dsh-tavern-accent); outline-offset: -2px; }
+.dsh-tavern-header-items :is(.dsh-tavern-header-page, .dsh-tavern-header-settings, .dsh-tavern-export-action, .dsh-tavern-header-more-button):hover {
+  border: 0; background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary);
+}
+.dsh-tavern-header-items :is(.dsh-tavern-header-page, .dsh-tavern-header-settings, .dsh-tavern-export-action, .dsh-tavern-header-more-button):active { transform: none; }
+.dsh-tavern-header-items :is(.dsh-tavern-header-page, .dsh-tavern-header-settings, .dsh-tavern-export-action, .dsh-tavern-header-more-button):focus-visible {
+  outline: 2px solid var(--dsh-tavern-accent); outline-offset: -2px;
+}
+.dsh-tavern-header-items .dsh-tavern-export-action[aria-expanded="true"] { background: var(--dsh-tavern-accent-soft); color: var(--dsh-tavern-accent); }
 .dsh-tavern-header-items.is-icon .dsh-tavern-header-action-label { display: none; }
-.dsh-tavern-header-items.is-icon .dsh-tavern-header-item > .dsh-tavern-header-settings,
-.dsh-tavern-header-items.is-icon .dsh-tavern-header-item .dsh-tavern-export-action,
-.dsh-tavern-header-items.is-icon .dsh-tavern-header-page { width: 32px; min-width: 32px; padding: 0; gap: 0; }
-.dsh-tavern-header-more { flex: none; }
-.dsh-tavern-header-more-button {
-  display: inline-flex; align-items: center; justify-content: center; width: 32px; min-width: 32px; height: 32px;
-  padding: 0; border: 0; border-radius: 7px; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer;
+.dsh-tavern-header-items.is-icon :is(.dsh-tavern-header-page, .dsh-tavern-header-settings, .dsh-tavern-export-action, .dsh-tavern-header-more-button) {
+  width: var(--dsh-tavern-header-button); padding: 0; gap: 0;
 }
-.dsh-tavern-header-more-button:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+/* demo 里快捷入口与宿主按钮之间有一道细分隔线。 */
+.dsh-tavern-header-divider { flex: none; width: 1px; height: 18px; margin: 0 6px; background: var(--dsw-alias-border-l2); }
+.dsh-tavern-header-more { flex: none; }
 .dsh-tavern-header-more .dsh-tavern-more-menu { top: calc(100% + 6px); bottom: auto; }
 .dsh-tavern-header-context { z-index: 60; }
 .dsh-tavern-play-fullscreen:focus-visible { outline: 2px solid #a66b35; outline-offset: -2px; }
@@ -2738,9 +2754,7 @@ body.dsh-tavern-shell-active [class*="_headerUtilities"]:has(.dsh-tavern-header-
     width: 40px; height: 40px; min-width: 40px; padding: 0; border: 0;
     border-radius: 7px; background: transparent; color: var(--dsw-alias-label-secondary);
   }
-  body.dsh-tavern-shell-active :is([data-phase] > header, [data-slot="conversation.session.header"] > header) :is(.dsh-tavern-header-page, .dsh-tavern-header-more-button) {
-    width: 40px; height: 40px; min-width: 40px; padding: 0; gap: 0; border: 0; border-radius: 7px;
-  }
+  .dsh-tavern-header-items { --dsh-tavern-header-button: 40px; }
   body.dsh-tavern-shell-active :is([data-phase] > header, [data-slot="conversation.session.header"] > header) [class*="_headerUtilities"] > :not(.dsh-tavern-header-settings):not(.dsh-tavern-export-menu):not(.dsh-tavern-header-items) { display: none; }
   /* utilities 也有 display:contents 插槽；保留插槽本身，隐藏已在抽屉提供的日志入口。 */
   body.dsh-tavern-shell-active [data-slot="conversation.session.header.utilities"] { display: contents !important; }

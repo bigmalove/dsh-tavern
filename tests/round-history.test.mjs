@@ -331,7 +331,7 @@ test('完整重生成为原轮次追加新版本并保留旧版本，再执行�
   assert.deepEqual(replacement.data.message.content, [{ type: 'text', text: '新正文3' }])
 })
 
-test('重新生成期间临时压制被重做的原生回合，提交后撤销', async () => {
+test('重新生成期间临时标记被重做的原生回合正在替换，提交后撤销', async () => {
   const h = harness({ checkpoint: true, journal: true })
   // whenIdle 之前正是"已回滚、还没生成完"的窗口，在这里取生成中的状态。
   let during = null
@@ -340,17 +340,21 @@ test('重新生成期间临时压制被重做的原生回合，提交后撤销',
       regen: h.chat.regenInProgress,
       temporary: h.chat.regenRecovery && h.chat.regenRecovery.temporarySuppressedTurn,
       suppressed: (Array.isArray(h.chat.suppressedDshTurns) ? h.chat.suppressedDshTurns : []).slice(),
+      replacing: (Array.isArray(h.chat.replacingDshTurns) ? h.chat.replacingDshTurns : []).slice(),
       texts: h.chat.messages.map(message => message.text)
     }
   })
   const result = await h.create().regenerate('chat', '', 'session')
   assert.equal(during.regen, true)
   assert.equal(during.temporary, 2)
-  assert.ok(during.suppressed.includes(2), '生成期间应压掉被重做的第 2 轮')
+  assert.ok(during.replacing.includes(2), '生成期间把被重做的第 2 轮正文标记为替换中')
+  // 玩家输入是他自己发的，不能跟着正文一起藏。
+  assert.ok(!during.suppressed.includes(2), '替换正文不是整轮作废')
   assert.deepEqual(during.texts, ['开场'], '存档已回滚到上一轮')
   // 提交时只撤销自己加的那一次，并转入新加的合成回合。
   assert.deepEqual(result.suppressedDshTurns, [3])
   assert.ok(!h.chat.suppressedDshTurns.includes(2), '旧回合不能留在压制列表，否则玩家输入气泡会一起消失')
+  assert.ok(!(h.chat.replacingDshTurns || []).includes(2), '提交后不能再标记为替换中')
   assert.equal(h.chat.regenRecovery, undefined)
 })
 

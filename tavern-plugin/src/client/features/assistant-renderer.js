@@ -901,12 +901,12 @@
 				} catch (error) { tavernErrorHub.report("切换正文版本", error); }
 				finally { setBusy(false); liveTavernView.invalidate(props.sessionId); }
 			}
-			// 最后一个版本且是最新楼层：直接重新生成一个新版本（不带意见）。
+			// 最后一个版本且是最新楼层：重掷一个新版本（不带意见，也不让模型看到这一版）。
 			async function regenerate() {
 				if (busy || disabled) return;
 				setBusy(true);
 				try {
-					const res = await rpc("regenBody", { guidance: "" }, props.sessionId);
+					const res = await rpc("regenBody", { guidance: "", reroll: true }, props.sessionId);
 					applyBodyRegenerationResult({ liveTavernView: liveTavernView, historyProjection: tavernHistoryProjection, sessionId: props.sessionId, view: res.view, tail: null });
 				} catch (error) { tavernErrorHub.report("重新生成正文", error); }
 				finally { setBusy(false); liveTavernView.invalidate(props.sessionId); tavernCoordination.invalidate(props.sessionId); }

@@ -5178,7 +5178,8 @@ export async function apply(ctx) {
       }
       case 'regenBody': {
         await reconcileStory(args && args.sessionId)
-        const view = await regenBody(args && args.chatId, args && args.guidance, args && args.sessionId)
+        // reroll：不给模型看旧正文（重掷）；缺省保留旧正文一起重写。
+        const view = await regenBody(args && args.chatId, args && args.guidance, args && args.sessionId, { reroll: args && args.reroll === true })
         notifyPluginTimeline(args && args.sessionId, 'regenerate')
         return { view }
       }
