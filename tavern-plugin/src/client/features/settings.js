@@ -267,9 +267,13 @@
                     option.label,
                     h("span", { className: "dsh-tavern-header-chip-state", "aria-hidden": true }, on ? "✓" : "＋"));
             };
-            return h("section", { className: "dsh-tavern-settings-group dsh-tavern-header-settings-group" },
-                h("div", { className: "dsh-tavern-settings-copy" },
+            const headerSummary = (config.display === "icon" ? "只显示图标" : "图标 + 文字") + " · " + items.length + " 个按钮";
+            return h("details", { className: "dsh-tavern-settings-group dsh-tavern-header-settings-group" },
+                h("summary", { className: "dsh-tavern-header-summary" },
                     h("strong", { className: "dsh-tavern-settings-title" }, "自定义顶栏"),
+                    h("span", { className: "dsh-tavern-header-summary-meta" }, headerSummary),
+                    h("span", { className: "dsh-tavern-header-summary-chevron", "aria-hidden": true }, "▾")),
+                h("div", { className: "dsh-tavern-settings-copy" },
                     h("p", { className: "dsh-tavern-settings-desc" }, "决定会话顶栏显示哪些按钮、按什么顺序、要不要文字。改动立即保存，对所有对话生效。全屏和右侧栏按钮由宿主提供，始终保留在最右。")),
                 h("div", { className: "dsh-tavern-header-modes", role: "radiogroup", "aria-label": "顶栏显示方式" },
                     mode("icon", "只显示图标", "最省空间，悬停显示名称",
