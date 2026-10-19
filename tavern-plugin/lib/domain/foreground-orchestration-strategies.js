@@ -396,9 +396,18 @@ export function createNativePlayOrchestrationStrategy(options) {
     if (passbackMessages !== request.messages) request = Object.assign({}, request, { messages: passbackMessages })
     // Past bodies replayed as the submission tool's arguments instead of prose the
     // model wrote. Runs last so the earlier passes see the shape the host built;
-    // the save, the view and every floor control keep the plain text.
+    // the save, the view and every floor control keep the plain text. Only this
+    // turn's own input stays a message — it is the prompt being answered.
     if (staged.historyToolCall === true) {
-      const historyMessages = projectHistoryAsToolCalls(request.messages, { toolName: STORY_SUBMIT_TOOL_NAME })
+      const source = request.messages
+      let inputIndex = -1
+      for (let index = source.length - 1; index >= 0; index--) {
+        if (isTurnInput(source[index])) { inputIndex = index; break }
+      }
+      const historyMessages = projectHistoryAsToolCalls(source, {
+        toolName: STORY_SUBMIT_TOOL_NAME,
+        preserve: (_message, index) => index === inputIndex
+      })
       if (historyMessages !== request.messages) request = Object.assign({}, request, { messages: historyMessages })
     }
     // DSH's renderer returns '' for no sections; adapters otherwise serialize
