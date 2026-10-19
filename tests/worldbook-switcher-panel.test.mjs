@@ -88,8 +88,14 @@ test('世界书切换器面板：渲染、开关、详情、删除与配置', as
 	assert.equal(feature.strategyOf({ constant: true }), 'constant')
 	assert.equal(feature.strategyOf({ vectorized: true }), 'vectorized')
 	assert.equal(feature.strategyOf({ selective: true }), 'selective')
-	assert.equal(feature.positionValue({ position: 1 }, 'sillytavern-worldbook'), 'after_char')
-	assert.equal(feature.positionPatch('after_char', 'sillytavern-worldbook'), 1)
+	assert.equal(feature.positionValue({ position: 1 }), 'after_char')
+	assert.equal(feature.positionValue({ position: 4 }), 'at_depth')
+	assert.equal(feature.positionValue({ position: 'after_example_messages' }), 'after_example')
+	assert.equal(feature.positionValue({ position: 'before_char' }), 'before_char')
+	assert.equal(feature.positionPatch('after_char'), 1)
+	assert.equal(feature.positionPatch('at_depth'), 4)
+	assert.equal(feature.positionPatch('outlet'), 7)
+	assert.equal(feature.positionPatch('不认识的'), 0)
 	assert.equal(feature.panelHeight(12, false, 720), 520)
 	const wide = feature.columnWidths({ available: 1264, all: true, frequent: true, pane: true })
 	assert.equal(wide.widths.main, 300)
@@ -132,17 +138,38 @@ test('世界书切换器面板：渲染、开关、详情、删除与配置', as
 	assert.equal(updateCall[1].update.operations[0].patch.enabled, false)
 	assert.equal(current.entries.find(entry => entry.ref === 'entry:0').enabled, false)
 
-	// 详情：只读正文、三个策略按钮、两个插入位置。
+	// 详情：只读正文、三个策略按钮、八个插入位置。
 	await act(async () => { query('.dsh-tavern-wbsw-main .dsh-tavern-wbsw-row').click() })
 	await tick()
 	assert.ok(query('.dsh-tavern-wbsw-detail'), '点击条目应打开详情')
 	assert.equal(queryAll('.dsh-tavern-wbsw-strategy-btn').length, 3)
 	assert.equal(query('.dsh-tavern-wbsw-content').readOnly, true)
-	assert.equal(queryAll('.dsh-tavern-wbsw-field select option').length, 2)
+	assert.equal(queryAll('.dsh-tavern-wbsw-field select option').length, 8, '插入位置应与 ST 一致有八项')
+	assert.deepEqual(queryAll('.dsh-tavern-wbsw-field select option').map(option => option.textContent), ['角色定义前', '角色定义后', '示例消息前', '示例消息后', '作者注释前', '作者注释后', '指定深度', 'Outlet'])
+	assert.equal(query('.dsh-tavern-wbsw-field-depth input').disabled, true, '非“指定深度”时深度不可编辑')
 	await act(async () => { queryAll('.dsh-tavern-wbsw-strategy-btn')[2].click() })
 	await tick()
 	const strategyCall = calls.filter(call => call[0] === 'updateWorldBook').pop()
 	assert.equal(strategyCall[1].update.operations[0].patch.vectorized, true)
+
+	// 插入位置：选“指定深度”写 4，深度随之可用；再选“示例消息前”写 5。
+	const positionSelect = query('.dsh-tavern-wbsw-detail select')
+	await act(async () => {
+		positionSelect.value = 'at_depth'
+		positionSelect.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+	})
+	await tick()
+	const atDepthCall = calls.filter(call => call[0] === 'updateWorldBook').pop()
+	assert.equal(atDepthCall[1].update.operations[0].patch.position, 4)
+	assert.equal(query('.dsh-tavern-wbsw-field-depth input').disabled, false, '选“指定深度”后深度应可编辑')
+	await act(async () => {
+		query('.dsh-tavern-wbsw-detail select').value = 'before_example'
+		query('.dsh-tavern-wbsw-detail select').dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+	})
+	await tick()
+	const beforeExampleCall = calls.filter(call => call[0] === 'updateWorldBook').pop()
+	assert.equal(beforeExampleCall[1].update.operations[0].patch.position, 5)
+	assert.equal(query('.dsh-tavern-wbsw-field-depth input').disabled, true)
 
 	// 两段式删除。
 	await act(async () => { query('.dsh-tavern-wbsw-detail .dsh-tavern-wbsw-danger').click() })
@@ -185,6 +212,57 @@ test('世界书切换器面板：渲染、开关、详情、删除与配置', as
 	await act(async () => { dom.window.document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true })) })
 	await tick()
 	assert.ok(calls.some(call => call[0] === 'updateWorldBook' && call[1].update.operations[0].patch && call[1].update.operations[0].patch.content === '改写后的正文'), 'Ctrl+S 应保存正文')
+
+	// 查找替换：先在正文里把“正文”换成“文本”。
+	await act(async () => { queryAll('.dsh-tavern-wbsw-tool').find(button => button.textContent === '查找替换').click() })
+	await tick()
+	assert.ok(query('.dsh-tavern-wbsw-finder'), '应打开查找替换条')
+	const [findInput, replaceInput] = queryAll('.dsh-tavern-wbsw-finder-input')
+	await act(async () => {
+		setInput.call(findInput, '正文')
+		findInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+	})
+	await tick()
+	assert.match(query('.dsh-tavern-wbsw-finder-count').textContent, /共 1 处/)
+	await act(async () => {
+		setInput.call(replaceInput, '文本')
+		replaceInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+	})
+	await tick()
+	await act(async () => { queryAll('.dsh-tavern-wbsw-finder-btn').find(button => button.textContent === '全部替换').click() })
+	await tick()
+	assert.equal(query('.dsh-tavern-wbsw-editor-textarea').value, '改写后的文本', '全部替换应改写正文')
+	assert.match(query('.dsh-tavern-wbsw-finder-count').textContent, /已全部替换 1 处/)
+	// 单个替换：先定位，再替换。
+	await act(async () => {
+		setInput.call(findInput, '文本')
+		findInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+		setInput.call(replaceInput, '正文')
+		replaceInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+	})
+	await tick()
+	await act(async () => { queryAll('.dsh-tavern-wbsw-finder-btn').find(button => button.textContent === '下一个').click() })
+	await tick()
+	assert.match(query('.dsh-tavern-wbsw-finder-count').textContent, /1 \/ 1/)
+	await act(async () => { queryAll('.dsh-tavern-wbsw-finder-btn').find(button => button.textContent === '替换').click() })
+	await tick()
+	assert.equal(query('.dsh-tavern-wbsw-editor-textarea').value, '改写后的正文', '单个替换应只改选中处')
+	// 找不到时给出提示，不写坏正文。
+	await act(async () => {
+		setInput.call(findInput, '不存在的词')
+		findInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+	})
+	await tick()
+	await act(async () => { queryAll('.dsh-tavern-wbsw-finder-btn').find(button => button.textContent === '全部替换').click() })
+	await tick()
+	assert.match(query('.dsh-tavern-wbsw-finder-count').textContent, /没有找到/)
+	assert.equal(query('.dsh-tavern-wbsw-editor-textarea').value, '改写后的正文')
+	// Esc 先关查找条，再关编辑器。
+	await act(async () => { dom.window.document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+	await tick()
+	assert.ok(!query('.dsh-tavern-wbsw-finder'), 'Esc 应先关闭查找替换条')
+	assert.ok(query('.dsh-tavern-wbsw-editor-layer'), 'Esc 关查找条时不应关闭编辑器')
+
 	await act(async () => {
 		setTextarea.call(area, '第二次修改')
 		area.dispatchEvent(new dom.window.Event('input', { bubbles: true }))

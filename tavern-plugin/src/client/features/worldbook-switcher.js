@@ -19,10 +19,33 @@ const WBSW_STRATEGIES = Object.freeze([
 	{ value: "selective", label: "关键词触发（绿）", color: "#10b981", glyph: "◉" },
 	{ value: "vectorized", label: "向量化（紫）", color: "#a855f7", glyph: "◆" }
 ]);
+// 与 SillyTavern 世界书一致的八个插入位置；存回去用它的数字编码，
+// 内置（人物卡）格式也写进 extensions.position，导出时能原样带回 ST。
 const WBSW_POSITIONS = Object.freeze([
-	{ value: "before_char", label: "角色定义前" },
-	{ value: "after_char", label: "角色定义后" }
+	{ value: "before_char", label: "角色定义前", code: 0 },
+	{ value: "after_char", label: "角色定义后", code: 1 },
+	{ value: "before_example", label: "示例消息前", code: 5 },
+	{ value: "after_example", label: "示例消息后", code: 6 },
+	{ value: "before_author_note", label: "作者注释前", code: 2 },
+	{ value: "after_author_note", label: "作者注释后", code: 3 },
+	{ value: "at_depth", label: "指定深度", code: 4 },
+	{ value: "outlet", label: "Outlet", code: 7 }
 ]);
+// ST 曾用过的字符串名，读旧存档时也要认得。
+const WBSW_POSITION_ALIASES = Object.freeze({
+	before_char: "before_char",
+	before_character_definition: "before_char",
+	after_char: "after_char",
+	after_character_definition: "after_char",
+	before_example: "before_example",
+	before_example_messages: "before_example",
+	after_example: "after_example",
+	after_example_messages: "after_example",
+	before_author_note: "before_author_note",
+	after_author_note: "after_author_note",
+	at_depth: "at_depth",
+	outlet: "outlet"
+});
 const WBSW_USAGE_LIMIT = 400;
 
 function wbConfigVisible(value) {
@@ -205,15 +228,27 @@ function wbStrategyPatch(strategy) {
 	return { constant: false, selective: true, vectorized: false };
 }
 
-function wbPositionValue(entry, format) {
+function wbPositionValue(entry) {
 	const raw = entry && entry.position;
-	if (format === "sillytavern-worldbook") return Number(raw) === 1 ? "after_char" : "before_char";
-	return raw === "after_char" ? "after_char" : "before_char";
+	if (typeof raw === "number" || /^-?\d+$/.test(String(raw ?? "").trim())) {
+		const code = Number(raw);
+		const match = WBSW_POSITIONS.find(option => option.code === code);
+		return match ? match.value : "before_char";
+	}
+	const name = String(raw || "").trim();
+	return WBSW_POSITION_ALIASES[name] || "before_char";
 }
 
-function wbPositionPatch(value, format) {
-	if (format === "sillytavern-worldbook") return value === "after_char" ? 1 : 0;
-	return value === "after_char" ? "after_char" : "before_char";
+// 两种格式都写数字：ST 独立世界书的 position 是数字，人物卡内置走 extensions.position，
+// 域层的 standaloneEntryFromEmbedded 也是按数字读的。
+function wbPositionPatch(value) {
+	const match = WBSW_POSITIONS.find(option => option.value === value);
+	return match ? match.code : 0;
+}
+
+function wbPositionLabel(value) {
+	const match = WBSW_POSITIONS.find(option => option.value === value);
+	return match ? match.label : "角色定义前";
 }
 
 function createWorldBookSwitcherFeatureModule() {
@@ -515,19 +550,19 @@ function createWorldBookSwitcherFeatureModule() {
 	function WbDetailPane(props) {
 		const h = React.createElement;
 		const entry = props.entry;
-		const format = props.format;
 		const visible = props.visible || WBSW_DEFAULT_VISIBLE;
 		const [strategy, setStrategy] = React.useState(wbStrategyOf(entry));
-		const [position, setPosition] = React.useState(wbPositionValue(entry, format));
+		const [position, setPosition] = React.useState(wbPositionValue(entry));
 		const [depth, setDepth] = React.useState(String(entry.depth ?? 4));
 		const [feedback, setFeedback] = React.useState("");
 		const [busy, setBusy] = React.useState(false);
+		const depthActive = position === "at_depth";
 		React.useEffect(function () {
 			setStrategy(wbStrategyOf(props.entry));
-			setPosition(wbPositionValue(props.entry, props.format));
+			setPosition(wbPositionValue(props.entry));
 			setDepth(String(props.entry.depth ?? 4));
 			setFeedback("");
-		}, [props.bookKey, props.entry.ref, props.entry.depth, props.entry.position, props.entry.constant, props.entry.vectorized, props.format]);
+		}, [props.bookKey, props.entry.ref, props.entry.depth, props.entry.position, props.entry.constant, props.entry.vectorized]);
 		async function persist(patch, message) {
 			if (busy) return;
 			setBusy(true); setFeedback("");
@@ -546,7 +581,7 @@ function createWorldBookSwitcherFeatureModule() {
 		function choosePosition(next) {
 			if (next === position) return;
 			setPosition(next);
-			void persist({ position: wbPositionPatch(next, format) }, "已更新插入位置");
+			void persist({ position: wbPositionPatch(next) }, "已更新插入位置：" + wbPositionLabel(next));
 		}
 		return h("div", { className: "dsh-tavern-wbsw-column dsh-tavern-wbsw-detail" },
 			h("div", { className: "dsh-tavern-wbsw-head" },
@@ -572,9 +607,11 @@ function createWorldBookSwitcherFeatureModule() {
 					h("label", { className: "dsh-tavern-wbsw-field" }, h("span", null, "插入位置"),
 						h("select", { value: position, disabled: busy, onChange: function (event) { choosePosition(event.target.value); } },
 							WBSW_POSITIONS.map(function (option) { return h("option", { key: option.value, value: option.value }, option.label); }))),
-					h("label", { className: "dsh-tavern-wbsw-field dsh-tavern-wbsw-field-depth" }, h("span", null, "深度"),
+					h("label", { className: "dsh-tavern-wbsw-field dsh-tavern-wbsw-field-depth" + (depthActive ? "" : " is-idle") }, h("span", null, "深度"),
 						h("input", {
-							type: "number", step: 1, inputMode: "numeric", value: depth, disabled: busy,
+							type: "number", step: 1, inputMode: "numeric", value: depth,
+							disabled: busy || !depthActive,
+							title: depthActive ? "插入到倒数第 N 条消息之前" : "选择“指定深度”后才生效",
 							onChange: function (event) { setDepth(event.target.value); },
 							onBlur: function () {
 								const next = Number.parseInt(depth, 10);
@@ -713,7 +750,10 @@ function createWorldBookSwitcherFeatureModule() {
 		const [confirmClose, setConfirmClose] = React.useState(false);
 		const [feedback, setFeedback] = React.useState("");
 		const [tagDialog, setTagDialog] = React.useState(null);
+		// 查找替换条：打开时停靠在工具栏下方，替换结果写回正文（保存仍由 Ctrl+S / 保存按钮负责）。
+		const [finder, setFinder] = React.useState({ open: false, find: "", replace: "", caseSensitive: false, message: "" });
 		const areaRef = React.useRef(null);
+		const findInputRef = React.useRef(null);
 		const savedRef = React.useRef(entry.content || "");
 		function update(next) {
 			setValue(next);
@@ -737,17 +777,23 @@ function createWorldBookSwitcherFeatureModule() {
 		}
 		React.useEffect(function () {
 			function onKey(event) {
-				if ((event.ctrlKey || event.metaKey) && String(event.key).toLowerCase() === "s") {
+				const key = String(event.key).toLowerCase();
+				if ((event.ctrlKey || event.metaKey) && key === "s") {
 					event.preventDefault();
 					void save();
+				} else if ((event.ctrlKey || event.metaKey) && key === "f") {
+					event.preventDefault();
+					openFinder();
 				} else if (event.key === "Escape") {
 					event.preventDefault();
-					if (tagDialog) setTagDialog(null); else requestClose();
+					if (tagDialog) setTagDialog(null);
+					else if (finder.open) setFinder(function (current) { return Object.assign({}, current, { open: false, message: "" }); });
+					else requestClose();
 				}
 			}
 			document.addEventListener("keydown", onKey, true);
 			return function () { document.removeEventListener("keydown", onKey, true); };
-		}, [value, dirty, busy, tagDialog]);
+		}, [value, dirty, busy, tagDialog, finder]);
 		function selection() {
 			const area = areaRef.current;
 			if (!area) return { start: 0, end: 0, text: "" };
@@ -793,16 +839,80 @@ function createWorldBookSwitcherFeatureModule() {
 		function removeBlankLines() {
 			update(value.replace(/\n{3,}/g, "\n\n").replace(/[ \t]+\n/g, "\n"));
 		}
+		// 查找替换：命中的下标从 0 开始，按大小写设置做匹配。
+		function matchesOf(text, needle, caseSensitive) {
+			if (!needle) return [];
+			const haystack = caseSensitive ? text : text.toLowerCase();
+			const target = caseSensitive ? needle : needle.toLowerCase();
+			const hits = [];
+			let index = haystack.indexOf(target);
+			while (index >= 0) {
+				hits.push(index);
+				index = haystack.indexOf(target, index + Math.max(1, target.length));
+			}
+			return hits;
+		}
+		const hitCount = finder.open ? matchesOf(value, finder.find, finder.caseSensitive).length : 0;
+		function openFinder() {
+			setFinder(function (current) { return Object.assign({}, current, { open: true, message: "" }); });
+			window.requestAnimationFrame(function () { if (findInputRef.current) findInputRef.current.focus(); });
+		}
+		function applyFinder(patch) {
+			setFinder(function (current) { return Object.assign({}, current, patch); });
+		}
 		function findNext() {
+			const needle = finder.find;
+			if (!needle) { applyFinder({ message: "先输入要查找的内容" }); return; }
+			const hits = matchesOf(value, needle, finder.caseSensitive);
+			if (!hits.length) { applyFinder({ message: "没有找到：" + needle }); return; }
+			const area = areaRef.current;
+			const from = area ? (area.selectionEnd || 0) : 0;
+			const index = hits.find(position => position >= from) ?? hits[0];
+			if (area) {
+				area.focus();
+				area.setSelectionRange(index, index + needle.length);
+			}
+			applyFinder({ message: (hits.indexOf(index) + 1) + " / " + hits.length });
+		}
+		function replaceOne() {
+			const needle = finder.find;
+			if (!needle) { applyFinder({ message: "先输入要查找的内容" }); return; }
 			const area = areaRef.current;
 			if (!area) return;
-			const needle = window.prompt("查找内容", "") || "";
-			if (!needle) return;
-			let index = value.indexOf(needle, area.selectionEnd || 0);
-			if (index < 0) index = value.indexOf(needle);
-			if (index < 0) { setFeedback("没有找到：" + needle); return; }
-			area.focus();
-			area.setSelectionRange(index, index + needle.length);
+			const start = area.selectionStart || 0;
+			const end = area.selectionEnd || 0;
+			const selected = value.slice(start, end);
+			const equal = finder.caseSensitive ? selected === needle : selected.toLowerCase() === needle.toLowerCase();
+			// 没有落在命中上就当作“先找下一个”。
+			if (!equal || !selected) { findNext(); return; }
+			const next = value.slice(0, start) + finder.replace + value.slice(end);
+			const caret = start + finder.replace.length;
+			update(next);
+			const hits = matchesOf(next, needle, finder.caseSensitive);
+			const index = hits.find(position => position >= caret);
+			window.requestAnimationFrame(function () {
+				const node = areaRef.current;
+				if (!node) return;
+				node.focus();
+				if (index === undefined) node.setSelectionRange(caret, caret);
+				else node.setSelectionRange(index, index + needle.length);
+			});
+			applyFinder({ message: index === undefined ? "已替换，后面没有更多" : "已替换 1 处，继续找下一处" });
+		}
+		function replaceAll() {
+			const needle = finder.find;
+			if (!needle) { applyFinder({ message: "先输入要查找的内容" }); return; }
+			const hits = matchesOf(value, needle, finder.caseSensitive);
+			if (!hits.length) { applyFinder({ message: "没有找到：" + needle }); return; }
+			let result = "";
+			let last = 0;
+			for (const index of hits) {
+				result += value.slice(last, index) + finder.replace;
+				last = index + needle.length;
+			}
+			result += value.slice(last);
+			update(result);
+			applyFinder({ message: "已全部替换 " + hits.length + " 处" });
 		}
 		function autoCloseTags() {
 			const stack = [];
@@ -840,7 +950,7 @@ function createWorldBookSwitcherFeatureModule() {
 			setFeedback("已把 <" + from + "> 改为 <" + to + ">");
 		}
 		const tools = [
-			[["撤销", function () { exec("undo"); }], ["重做", function () { exec("redo"); }], ["复制", function () { exec("copy"); }], ["剪切", function () { exec("cut"); }], ["全选", function () { exec("selectAll"); }], ["查找", findNext], ["去空行", removeBlankLines]],
+			[["撤销", function () { exec("undo"); }], ["重做", function () { exec("redo"); }], ["复制", function () { exec("copy"); }], ["剪切", function () { exec("cut"); }], ["全选", function () { exec("selectAll"); }], ["查找替换", openFinder], ["去空行", removeBlankLines]],
 			[["标题", function () { prefixLines(function (line) { return line.startsWith("#") ? line : "# " + line; }); }], ["加粗", function () { wrap("**", "**", "粗体"); }], ["斜体", function () { wrap("_", "_", "斜体"); }], ["无序列表", function () { prefixLines(function (line) { return "- " + line.replace(/^[-*]\s+/, ""); }); }], ["有序列表", function () { let index = 0; prefixLines(function (line) { index += 1; return index + ". " + line.replace(/^\d+\.\s+/, ""); }); }], ["引用", function () { prefixLines(function (line) { return "> " + line; }); }], ["行内代码", function () { wrap("`", "`", "code"); }], ["代码块", function () { wrap("```\n", "\n```", "code"); }], ["分隔线", function () { insertAtCursor("\n---\n"); }], ["链接", function () { wrap("[", "](https://)", "文字"); }]],
 			[["<>", function () { wrap("<tag>", "", "内容"); }], ["</>", function () { insertAtCursor("\n<tag>\n\n</tag>\n"); }], ["自动闭合", autoCloseTags], ["标签改名", openTagRename]]
 		];
@@ -855,9 +965,30 @@ function createWorldBookSwitcherFeatureModule() {
 						h("button", { type: "button", className: "dsh-tavern-wbsw-btn", onClick: requestClose }, "关闭"))),
 				h("div", { className: "dsh-tavern-wbsw-toolbar" }, tools.map(function (group, index) {
 					return h("div", { key: index, className: "dsh-tavern-wbsw-toolgroup" }, group.map(function ([label, action]) {
-						return h("button", { key: label, type: "button", className: "dsh-tavern-wbsw-tool", title: label, onClick: action }, label);
+						return h("button", { key: label, type: "button", className: "dsh-tavern-wbsw-tool" + (label === "查找替换" && finder.open ? " is-active" : ""), title: label, onClick: action }, label);
 					}));
 				})),
+				finder.open ? h("div", { className: "dsh-tavern-wbsw-finder", role: "search" },
+					h("input", {
+						ref: findInputRef, className: "dsh-tavern-wbsw-finder-input", type: "text", value: finder.find,
+						placeholder: "查找", "aria-label": "查找",
+						onChange: function (event) { applyFinder({ find: event.target.value, message: "" }); },
+						onKeyDown: function (event) { if (event.key === "Enter") { event.preventDefault(); findNext(); } }
+					}),
+					h("input", {
+						className: "dsh-tavern-wbsw-finder-input", type: "text", value: finder.replace,
+						placeholder: "替换为", "aria-label": "替换为",
+						onChange: function (event) { applyFinder({ replace: event.target.value }); },
+						onKeyDown: function (event) { if (event.key === "Enter") { event.preventDefault(); replaceOne(); } }
+					}),
+					h("label", { className: "dsh-tavern-wbsw-finder-case", title: "区分大小写" },
+						h("input", { type: "checkbox", checked: finder.caseSensitive, onChange: function (event) { applyFinder({ caseSensitive: event.target.checked, message: "" }); } }),
+						"区分大小写"),
+					h("span", { className: "dsh-tavern-wbsw-finder-count" }, finder.message || (finder.find ? "共 " + hitCount + " 处" : "")),
+					h("button", { type: "button", className: "dsh-tavern-wbsw-finder-btn", onClick: findNext }, "下一个"),
+					h("button", { type: "button", className: "dsh-tavern-wbsw-finder-btn", onClick: replaceOne }, "替换"),
+					h("button", { type: "button", className: "dsh-tavern-wbsw-finder-btn", onClick: replaceAll }, "全部替换"),
+					h("button", { type: "button", className: "dsh-tavern-wbsw-finder-btn is-ghost", title: "关闭查找替换", onClick: function () { applyFinder({ open: false, message: "" }); } }, "✕")) : null,
 				h("div", { className: "dsh-tavern-wbsw-editor-body" },
 					h("textarea", {
 						ref: areaRef, className: "dsh-tavern-wbsw-editor-textarea", spellCheck: false, value: value,
