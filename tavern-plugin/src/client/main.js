@@ -373,7 +373,8 @@ window.__ModuleLoader__.load({
 				h("div", { className: "dsh-tavern-mobile-import-list" }, files.length ? files.map(rowOf)
 					: h("div", { className: "dsh-tavern-empty" }, needle ? "没有匹配“" + filter.trim() + "”的文件"
 						: catalog && catalog.storageAccessible === false ? "DSHA 无法读取下载目录。请在系统设置中允许 DSHA ‘访问所有文件’，然后点刷新。"
-						: kind === "chat" ? "下载目录里还没有 .jsonl 聊天记录。" : "下载目录里还没有 .dshsave 存档。")),
+						: kind === "chat" ? "下载目录里还没有 .jsonl 聊天记录。放进 Download 后点刷新，或点下面的「使用系统文件选择器」从其他目录选。"
+						: "下载目录里还没有 .dshsave 存档。放进 Download 后点刷新，或点下面的「使用系统文件选择器」从其他目录选。")),
 				h("div", { className: "dsh-tavern-library-head-actions dsh-tavern-mobile-import-actions" },
 					h("button", { className: "dsh-tavern-btn", disabled: busy, onClick: load }, "刷新"),
 					h("button", { className: "dsh-tavern-btn", disabled: busy, onClick: usePicker }, "使用系统文件选择器"),

@@ -655,7 +655,8 @@ window.__ModuleLoader__.load({
 				h("div", { className: "dsh-tavern-mobile-import-list" }, files.length ? files.map(rowOf)
 					: h("div", { className: "dsh-tavern-empty" }, needle ? "没有匹配“" + filter.trim() + "”的文件"
 						: catalog && catalog.storageAccessible === false ? "DSHA 无法读取下载目录。请在系统设置中允许 DSHA ‘访问所有文件’，然后点刷新。"
-						: kind === "chat" ? "下载目录里还没有 .jsonl 聊天记录。" : "下载目录里还没有 .dshsave 存档。")),
+						: kind === "chat" ? "下载目录里还没有 .jsonl 聊天记录。放进 Download 后点刷新，或点下面的「使用系统文件选择器」从其他目录选。"
+						: "下载目录里还没有 .dshsave 存档。放进 Download 后点刷新，或点下面的「使用系统文件选择器」从其他目录选。")),
 				h("div", { className: "dsh-tavern-library-head-actions dsh-tavern-mobile-import-actions" },
 					h("button", { className: "dsh-tavern-btn", disabled: busy, onClick: load }, "刷新"),
 					h("button", { className: "dsh-tavern-btn", disabled: busy, onClick: usePicker }, "使用系统文件选择器"),
@@ -16034,21 +16035,13 @@ async function runTavernTouchDiagnostics(host, onStatus) {
 				}
 				finally { setBusy(false); }
 			}
-			// Prefer the folder list; fall back to the host picker when it is empty or
-			// this is not an Android install (no folder to list).
-			async function openSaveImport(kind, input) {
+			// Open the folder panel synchronously. Clicking the hidden input after an
+			// await loses the user gesture, and the browser then silently drops the
+			// picker — the panel's own button is a real click, so that one works.
+			function openSaveImport(kind) {
 				setSaveImportMenuOpen(false);
 				setError("");
-				let catalog;
-				try { catalog = await call("listMobileSaveImports", {}); }
-				catch (_error) { catalog = null; }
-				const files = catalog && catalog.available && Array.isArray(catalog.files) ? catalog.files : [];
-				const usable = files.filter(function (file) {
-					const name = String(file && file.name || "").toLowerCase();
-					return kind === "chat" ? name.endsWith(".jsonl") : (name.endsWith(".dshsave") || name.endsWith(".zip"));
-				});
-				if (usable.length) { setMobileSavePicker(kind); return; }
-				if (input && input.current) input.current.click();
+				setMobileSavePicker(kind);
 			}
 			// 一份记录一个新对话；人物卡、称呼与“仅导入正文”对这一批里的每份都一样。
 			async function importConversationEntry(request, entry) {
@@ -16510,8 +16503,8 @@ async function runTavernTouchDiagnostics(host, onStatus) {
 					h("div", { className: "dsh-tavern-more-actions dsh-tavern-save-import-menu", ref: saveImportMenu },
 						h("button", { type: "button", className: "dsh-tavern-btn", disabled: busy, "aria-haspopup": "menu", "aria-expanded": saveImportMenuOpen, onClick: function () { setSaveImportMenuOpen(function (value) { return !value; }); } }, "导入存档"),
 						h("div", { className: "dsh-tavern-more-menu", role: "menu", "aria-label": "导入存档", hidden: !saveImportMenuOpen, onClick: function (event) { if (event.target.closest("button:not(:disabled)")) setSaveImportMenuOpen(false); } },
-							h("button", { type: "button", role: "menuitem", disabled: busy, title: "在其他电脑的 DSH Tavern 导出的存档，作为一局新游戏继续玩", onClick: function () { void openSaveImport("save", saveImportFile); } }, "DSH Tavern 存档（.dshsave）"),
-							h("button", { type: "button", role: "menuitem", disabled: busy, title: "SillyTavern 导出的聊天记录，需要对应的人物卡", onClick: function () { void openSaveImport("chat", sillyTavernChatFile); } }, "SillyTavern 聊天记录（.jsonl）"))),
+							h("button", { type: "button", role: "menuitem", disabled: busy, title: "在其他电脑的 DSH Tavern 导出的存档，作为一局新游戏继续玩", onClick: function () { openSaveImport("save"); } }, "DSH Tavern 存档（.dshsave）"),
+							h("button", { type: "button", role: "menuitem", disabled: busy, title: "SillyTavern 导出的聊天记录，需要对应的人物卡", onClick: function () { openSaveImport("chat"); } }, "SillyTavern 聊天记录（.jsonl）"))),
 					mobileSavePicker ? h(MobileSaveImportPicker, {
 						kind: mobileSavePicker,
 						open: true,
