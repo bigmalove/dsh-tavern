@@ -38,7 +38,10 @@ test('安装脚本与更新检查共用同一个默认仓库', async () => {
   assert.match(installSh, new RegExp(`REPOSITORY=\\$\\{DSH_TAVERN_REPOSITORY:-${REPOSITORY}\\}`))
   assert.match(installPs1, new RegExp(`'${REPOSITORY}'`))
   assert.match(androidSetup, new RegExp(`DEFAULT_REPOSITORY="https://github\\.com/${REPOSITORY}\\.git"`))
-  assert.match(androidSetup, new RegExp(`DEFAULT_TARBALL_URL="https://codeload\\.github\\.com/${REPOSITORY}/tar\\.gz/refs/heads/main"`))
+  // The branch reaches the tarball URL through ${BRANCH} (default main), so assert the
+  // repository is pinned there instead of expecting a literal /main suffix.
+  assert.match(androidSetup, new RegExp(`DEFAULT_TARBALL_URL="https://codeload\\.github\\.com/${REPOSITORY}/tar\\.gz/refs/heads/(?:main|\\$\\{BRANCH\\})"`))
+  assert.match(androidSetup, /^BRANCH="\$\{DSH_TAVERN_BRANCH:-main\}"$/m, '安卓脚本的分支默认仍是 main')
   assert.match(launcher, /DSH_TAVERN_REPOSITORY/)
   assert.equal(/flizzywine/.test([installSh, installPs1, androidSetup, launcher].join('\n')), false, '安装链路不应再出现上游仓库')
 })

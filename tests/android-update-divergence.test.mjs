@@ -61,7 +61,10 @@ try {
   assert.equal(isAncestor('HEAD', 'origin/main', installed), false, '前置条件：本地确实与远端分叉')
 
   const snippet = path.join(root, 'divergence.sh')
-  await writeFile(snippet, extract('divergence_is_disposable') + '\ndivergence_is_disposable "$1"\n')
+  // The snippet runs outside setup.sh, so the branch the function compares against
+  // has to be defined here; without it `rev-list origin/..HEAD` fails, the loop never
+  // runs, and the check degrades into "every divergence is disposable".
+  await writeFile(snippet, 'BRANCH=main\n' + extract('divergence_is_disposable') + '\ndivergence_is_disposable "$1"\n')
   const check = (dir) => {
     try {
       execFileSync('bash', [snippet, dir], { encoding: 'utf8' })

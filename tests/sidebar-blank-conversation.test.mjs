@@ -22,7 +22,7 @@ function blankFixture(options = {}) {
     openSessionWhenReady: async id => { calls.push(['open', id]) },
     setError: message => { errors.push(message) },
   })
-  vm.runInContext(source.slice(source.indexOf('async function openBlankConversation()'), source.indexOf('// A turn the live Agent')), ctx)
+  vm.runInContext(source.slice(source.indexOf('async function openBlankConversation()'), source.indexOf('async function finishPendingOpen(')), ctx)
   return { ctx, calls, errors }
 }
 
