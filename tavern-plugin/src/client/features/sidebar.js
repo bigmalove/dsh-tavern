@@ -1,5 +1,6 @@
 		function createTavernShellFeatureModule() {
 		// @include modules/host-compatibility.js
+		// @include modules/auto-open-tabs.js
 		// Entering a game opens its settings and status tabs (the 「进入游戏时打开酒馆状态」 setting, on by default).
 		// Only a switch to another game reopens them: readiness flickers while the session list refreshes
 		// (after the first turn, when the sidebar remounts), and reopening then would cover the tab the
@@ -324,8 +325,16 @@
 				return function () { stopped = true; window.clearTimeout(timer); };
 			}, [openingPicker && openingPicker.card && openingPicker.card.path, openingPicker && openingPicker.userName, openingPicker && openingPicker.preparing, requestMode, compatibilityAvailable]);
 			// Leaving the game (for another game, a card-design chat or the start page) lets coming back open the tabs again.
+			// An empty `current` is not a leave: the session list is refreshing or the sidebar remounted, and the
+			// mark would be cleared on that flicker — the next snapshot then reopens the panel over the story.
+			// Only a blank that outlives the flicker means the player really left (start page, another workspace).
 			React.useEffect(function () {
-				if (current !== tavernSettingsTabsShownFor) tavernSettingsTabsShownFor = "";
+				if (current) {
+					if (tavernAutoOpenClearedBy(tavernSettingsTabsShownFor, current)) tavernSettingsTabsShownFor = "";
+					return;
+				}
+				const timer = window.setTimeout(function () { tavernSettingsTabsShownFor = ""; }, TAVERN_AUTO_OPEN_BLANK_MS);
+				return function () { window.clearTimeout(timer); };
 			}, [current]);
 			React.useEffect(function () {
 				if (!readyTavernSession || typeof props.openConversationSettingsTab !== "function") return;
@@ -1315,8 +1324,12 @@
 					openConversationSettingsTab: async function (sessionId) {
 						if (narrowLayout()) return closeNarrowSidebar();
 						if (tavernSettingsTabsShownFor === sessionId) return;
-						tavernSettingsTabsShownFor = sessionId;
+						// The setting is off: do not claim the session, so turning it on later still opens the tabs.
 						if (!await tavernAutoOpenStatus.read()) return;
+						// The column already shows one of these pages (it was never closed, or the sidebar remounted):
+						// opening again expands the column and focuses the page, pulling it over the story for nothing.
+						if (tavernRightColumnShowing(ctx, ["dsh-tavern:conversation-settings", "dsh-tavern:status"])) { tavernSettingsTabsShownFor = sessionId; return; }
+						tavernSettingsTabsShownFor = sessionId;
 						const opened = await openTavernSidebarTab(ctx, { type: "dsh-tavern:conversation-settings" }, { sessionId: sessionId }) && await openTavernSidebarTab(ctx, { type: "dsh-tavern:status" }, { sessionId: sessionId });
 						// Not opened (the player already moved on, or the host refused): try again next time this game is entered.
 						if (!opened) { if (tavernSettingsTabsShownFor === sessionId) tavernSettingsTabsShownFor = ""; return; }
