@@ -1,7 +1,93 @@
 diff --git a/lib/client.js b/lib/client.js
 --- a/lib/client.js
 +++ b/lib/client.js
-@@ -14832,7 +14832,9 @@
+@@ -8668,6 +8668,9 @@
+     else {
+         return false;
+     }
++    // DSH Tavern: every stroke that survived the gates above can still become a
++    // swipe, so the guard is mounted now and dropped by reset().
++    attachScrollClaim();
+     trackingPointer = event.pointerId;
+     tracking = false;
+     startX = event.clientX;
+@@ -8904,6 +8907,30 @@
+     (0, gesture_guard_ts_1.markGestureConsumed)(target, CONSUME_WINDOW_MS, upTo);
+     consumedEl = target;
+ }
++/**
++ * DSH Tavern: the document-level non-passive `touchmove` guard is only installed
++ * while a stroke that genuinely needs it is live. A standing listener puts the
++ * whole page into the touch-handler region, so Android WebView routes every
++ * scroll (and its start) through JS, and the first preventDefault inside it
++ * cancels that gesture for the rest of the sequence — measured on a phone as
++ * "the conversation slides slowly and cannot be flicked".
++ */
++let scrollClaimHandler = null;
++// The handler that is actually registered: a re-install replaces `scrollClaimHandler`,
++// and removing by the new reference would leave the old listener in place forever.
++let attachedClaimHandler = null;
++function attachScrollClaim() {
++    if (attachedClaimHandler !== null || scrollClaimHandler === null)
++        return;
++    attachedClaimHandler = scrollClaimHandler;
++    document.addEventListener('touchmove', attachedClaimHandler, { capture: true, passive: false });
++}
++function detachScrollClaim() {
++    if (attachedClaimHandler === null)
++        return;
++    document.removeEventListener('touchmove', attachedClaimHandler, { capture: true });
++    attachedClaimHandler = null;
++}
+ /** Forget stroke state (called on cancel / visibility change / blur). */
+ function reset() {
+     trackingPointer = 0;
+@@ -8911,6 +8938,7 @@
+     samples = [];
+     strokeMode = 'drawer';
+     lockFilesOpen = false;
++    detachScrollClaim();
+     (0, gesture_guard_ts_1.clearStrokeLocked)();
+ }
+ /** The logical reading direction of the frame (RTL support). */
+@@ -9054,6 +9082,13 @@
+                 abortStroke(ctx);
+                 return;
+             }
++            // Before the axis locks the stroke may still turn out vertical, and
++            // canceling a touchmove suppresses that touch point's default action
++            // for the WHOLE gesture: WebKit never resumes scrolling after reset().
++            // 3.2.0 fixed this upstream (#222/#223); the same gate is required here
++            // because the claim is now mounted mid-session.
++            if (!tracking)
++                return;
+             event.preventDefault();
+         };
+         document.addEventListener('pointerdown', onPointerDown, true);
+@@ -9061,7 +9096,12 @@
+         document.addEventListener('pointerup', onPointerUp, true);
+         document.addEventListener('pointercancel', onPointerCancel, true);
+         document.addEventListener('click', onClick, true);
+-        document.addEventListener('touchmove', onTouchMove, { capture: true, passive: false });
++        // DSH Tavern: kept as a handler only. It is attached for the duration of a
++        // stroke that can become a swipe (see attachScrollClaim) instead of for the
++        // whole session: a standing document-level non-passive touchmove puts the
++        // entire page into the touch-handler region, so Android WebView runs every
++        // scroll through JS before it can composite.
++        scrollClaimHandler = onTouchMove;
+         const onBlur = () => abortStroke(ctx);
+         document.addEventListener('visibilitychange', onVisibility);
+         window.addEventListener('blur', onBlur);
+@@ -9071,7 +9111,7 @@
+             document.removeEventListener('pointerup', onPointerUp, true);
+             document.removeEventListener('pointercancel', onPointerCancel, true);
+             document.removeEventListener('click', onClick, true);
+-            document.removeEventListener('touchmove', onTouchMove, { capture: true });
++            detachScrollClaim();
+             document.removeEventListener('visibilitychange', onVisibility);
+             window.removeEventListener('blur', onBlur);
+             if (armRevealRaf !== 0) {
+@@ -14832,7 +14872,9 @@
      (0, panel_exit_ts_1.installPanelRowExit)(ctx, panelExit.exit);
      // Session deletion, injected into each session row's ⋯ menu (beside
      // rename / fork / archive) with a confirm dialog. Mobile-only.
