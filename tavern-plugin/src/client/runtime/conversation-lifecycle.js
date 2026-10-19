@@ -57,6 +57,13 @@
 				// binding 没跟上（新建会话的 scope 尚未 retain）。前者刷新页面也没用，
 				// 必须让用户去删掉这条历史记录，否则只能反复重试同一次超时。
 				const missing = !options.summary(sessionId);
+				// The host also leaves out a save whose old log it could not upgrade. That reason
+				// matters more than "deleted": deleting the history would throw the save away.
+				if (missing && typeof options.explainMissing === "function") {
+					let reason = "";
+					try { reason = await options.explainMissing(sessionId); } catch (_error) {}
+					if (reason) throw new Error(reason);
+				}
 				throw new Error(missing
 					? "DSH 会话 " + sessionId + " 已不在宿主列表中（可能已被删除），请删除这条历史记录后重试；若刚更新过请先刷新页面。"
 					: "DSH Session 列表同步超时，请刷新页面后重试：" + sessionId);

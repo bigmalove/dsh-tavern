@@ -24,3 +24,12 @@ test('Windows Desktop installs run the bundled DSH bootstrap, never a `dsh` foun
   assert.equal(pinnedDesktopDsh('desktop', { ...env, DSH_DESKTOP_DSH_BOOTSTRAP: path.join(root, 'missing.js') }, 'win32'), null)
   assert.deepEqual(resolveDshInvocation('dsh', ['--version'], 'desktop', process.execPath, env, 'win32'), { command: 'dsh', args: ['--version'] })
 })
+
+test('桌面宿主 start：固定入口已带 --expose-internals 时，Windows 不再补一遍入口（#254）', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const source = await readFile(new URL('../bin/service-lifecycle.mjs', import.meta.url), 'utf8')
+  const start = source.slice(source.indexOf('export async function startService('))
+  const block = start.slice(start.indexOf('const invocation = resolveDshInvocation('), start.indexOf('mkdirSync(LOG_DIR'))
+  assert.match(block, /const pinned = invocation\.args\[0\] === '--expose-internals'/)
+  assert.match(block, /if \(process\.platform === 'win32' && !pinned\)/, 'only an unpinned command gets its entry added')
+})

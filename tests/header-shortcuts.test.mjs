@@ -52,8 +52,8 @@ test('getDisplayPreferences 一并返回顶栏设置', async () => {
   const line = server.split('\n').find(source => source.includes("case 'getDisplayPreferences':"))
   const body = line.slice(line.indexOf('{') + 1, line.lastIndexOf('}'))
   const run = new Function('readTavernSettings', 'return async () => {' + body + '}')
-  const preferences = await run(async () => ({ hideContextAndReasoning: false, headerItems: { display: 'icon', items: ['header:export'] } }))()
-  assert.deepEqual(preferences, { hideContextAndReasoning: false, headerItems: { display: 'icon', items: ['header:export'] } })
+  const preferences = await run(async () => ({ hideContextAndReasoning: false, renderDepth: 5, headerItems: { display: 'icon', items: ['header:export'] } }))()
+  assert.deepEqual(preferences, { hideContextAndReasoning: false, renderDepth: 5, headerItems: { display: 'icon', items: ['header:export'] } })
 })
 
 test('客户端顶栏默认值与服务端一致，设置在首次读取前就用默认值', async () => {
@@ -86,13 +86,13 @@ test('顶栏落成一个插槽，旧的两个插槽已移除', () => {
   assert.match(client, /function tavernStartGroups\(/)
 })
 
-test('开始页把图钉做成卡片旁边的独立按钮', () => {
-  assert.match(client, /className: 'dsh-tavern-start-cell'/)
-  assert.match(client, /className: 'dsh-tavern-start-pin'/)
-  assert.match(client, /'data-tavern-start-pin': option\.id/)
-  // 图钉是卡片的兄弟节点，不是按钮里的按钮。
-  const cell = client.match(/className: 'dsh-tavern-start-cell'[\s\S]*?\}\)\)\);/)
-  assert.ok(cell && cell[0].indexOf('dsh-tavern-start-pin') > cell[0].indexOf('dsh-tavern-start-card'))
+test('默认对小白无感：开始页没有图钉，「⋯」只在有按钮收起时出现，配置放在高级里', () => {
+  assert.doesNotMatch(client, /dsh-tavern-start-pin/)
+  assert.doesNotMatch(client, /dsh-tavern-header-divider/)
+  assert.match(client, /foldedEntries\.length \? h\("div", \{ className: "dsh-tavern-more-actions dsh-tavern-header-more" \}/)
+  const advanced = client.slice(client.indexOf('group("高级"'))
+  assert.match(advanced.slice(0, advanced.indexOf('state.error ?')), /h\(HeaderItemsSettings\)/)
+  assert.doesNotMatch(client.slice(client.indexOf('group("显示与交互"'), client.indexOf('group("高级"')), /HeaderItemsSettings/)
 })
 
 test('手机上两个例外规则都放行新的顶栏容器', () => {

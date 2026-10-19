@@ -901,13 +901,22 @@ try {
     # Custom install folders are found through the running app or its uninstall entry.
     # Official first, then the community app (DSH NEXT replaced DSH Desktop after 2.0.18).
     $DesktopNames = @('DeepSeek Harness', 'DSH NEXT', 'DSH Desktop')
-    $DesktopCandidates = @($env:DSH_DESKTOP_NODE_EXECUTABLE, $env:DSH_DESKTOP_APP_EXECUTABLE)
+    # Inside the community app's terminal DSH_DESKTOP_NODE_EXECUTABLE is its bundled node.exe, not the app.
+    $DesktopCandidates = @($env:DSH_DESKTOP_APP_EXECUTABLE)
+    if ($env:DSH_DESKTOP_NODE_EXECUTABLE -and (Split-Path -Leaf $env:DSH_DESKTOP_NODE_EXECUTABLE) -notmatch '^node(\.exe)?$') { $DesktopCandidates += $env:DSH_DESKTOP_NODE_EXECUTABLE }
     foreach ($DesktopName in $DesktopNames) {
       $DesktopCandidates += (Join-Path $env:LOCALAPPDATA ('Programs\' + $DesktopName + '\' + $DesktopName + '.exe'))
       if ($env:ProgramFiles) { $DesktopCandidates += (Join-Path $env:ProgramFiles ($DesktopName + '\' + $DesktopName + '.exe')) }
+      # NSIS entries may omit InstallLocation; the uninstaller and icon paths name the same folder.
       $DesktopCandidates += @(Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
         'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
-        Where-Object { $_.DisplayName -like ($DesktopName + '*') -and $_.InstallLocation } | ForEach-Object { Join-Path $_.InstallLocation ($DesktopName + '.exe') })
+        Where-Object { $_.DisplayName -like ($DesktopName + '*') } | ForEach-Object {
+          $Folders = @($_.InstallLocation)
+          foreach ($Entry in @($_.DisplayIcon, $_.UninstallString)) {
+            if ($Entry -match '^\s*"([^"]+)"' -or $Entry -match '^\s*([^,]+?\.(exe|ico))') { $Folders += (Split-Path -Parent $Matches[1]) }
+          }
+          $Folders | Where-Object { $_ } | ForEach-Object { Join-Path $_ ($DesktopName + '.exe') }
+        })
       $DesktopCandidates += @(Get-Process -Name $DesktopName -ErrorAction SilentlyContinue | ForEach-Object { $_.Path })
     }
     $OfficialDesktopExecutable = $DesktopCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1

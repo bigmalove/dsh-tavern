@@ -14,7 +14,7 @@ test('宿主按允许清单：清单内放行，清单外拦截；CLI 独立运�
     for (const version of allowedDshVersions) assert.doesNotThrow(() => assertCompatibleDshVersion(version, host), version)
     for (const version of ['0.1.5-rc.2', '0.2.2', '99.0.0']) {
       assert.throws(() => assertCompatibleDshVersion(version, host), error => {
-        assert.match(error.message, /不在允许清单内；已停止安装/)
+        assert.match(error.message, version.startsWith('0.1.') ? /已停止安装，现有酒馆、存档和宿主都没有改动[^]*要用这个版本[^]*改装稳定版/ : /不在允许清单内；已停止安装/)
         assert.ok(error.message.includes(allowedDshVersions.join('、')))
         assert.ok(error.message.includes(host === 'desktop' ? desktopReleasesUrl : dshaReleasesUrl), error.message)
         return true

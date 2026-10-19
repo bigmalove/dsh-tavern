@@ -173,7 +173,51 @@ function normalizeHistoricalCompaction(artifact) {
   // chronological coordinates. remapReferences checks the mapped ordering.
   return { ...artifact, repairedHistory: true, inheritedEventCount: cut,
     events: events.map(event => remapReferences(event, mapping)),
-    upgradeOrigins: events.map(event => event.seq < 0 ? null : event.seq) }
+    upgradeOrigins: events.map(event => event.seq < 0 ? null : (artifact.upgradeOrigins ? artifact.upgradeOrigins[event.seq] : event.seq)) }
+}
+
+// A compaction request interrupted by a crash or an aborted request left its
+// compaction/start without an end. V4 refuses a turn that crosses it. Record the
+// interruption as a failed compaction just before the next turn boundary (or at
+// the end of the log); a failed compaction changes no context.
+function closeInterruptedCompactions(artifact) {
+  const events = [], synthetic = { next: -1 }
+  let open = null
+  const close = before => {
+    events.push({ seq: synthetic.next--, time: before?.time ?? events.at(-1).time, type: 'compaction/end',
+      data: { compactionId: open.data.compactionId, ...(open.data.sourceCommandId === undefined ? {} : { sourceCommandId: open.data.sourceCommandId }),
+        turn: open.data.turn, error: 'interrupted before completion (closed by the DSH Tavern upgrade)' } })
+    open = null
+  }
+  for (const event of structuredClone(artifact.events)) {
+    if (open && (event.type.startsWith('turn/') || event.type === 'compaction/start')) close(event)
+    if (event.type === 'compaction/start') open = event
+    else if (event.type === 'compaction/end' || event.type === 'session/end-seed') open = null
+    events.push(event)
+  }
+  if (open) close()
+  if (synthetic.next === -1) return artifact
+  const mapping = []
+  events.forEach((event, seq) => { mapping[event.seq] = seq })
+  const cut = artifact.header.isSeeded ? mapping[artifact.inheritedEventCount] : 0
+  if (cut === undefined || artifact.events.some(event => (event.seq < artifact.inheritedEventCount) !== (mapping[event.seq] < cut))) throw new Error('中断压缩的修复会跨越分支继承边界')
+  return { ...artifact, inheritedEventCount: cut,
+    upgradeOrigins: events.map(event => event.seq < 0 ? null : (artifact.upgradeOrigins ? artifact.upgradeOrigins[event.seq] : event.seq)),
+    events: events.map((event, seq) => event.seq < 0 ? { ...event, seq } : remapReferences(event, mapping)) }
+}
+
+// The host reports which rule failed, not where. Find the first event whose
+// prefix already fails the same way, so a report can name it.
+function locateFailure(convert, artifact, error) {
+  const fails = count => {
+    try { convert({ ...artifact, inheritedEventCount: Math.min(artifact.inheritedEventCount, count), events: artifact.events.slice(0, count) }); return false }
+    catch (other) { return other.message === error.message }
+  }
+  let low = 1, high = artifact.events.length
+  if (!fails(high)) return error
+  while (low < high) { const middle = (low + high) >> 1; if (fails(middle)) high = middle; else low = middle + 1 }
+  const event = artifact.events[low - 1], origin = artifact.upgradeOrigins ? artifact.upgradeOrigins[event.seq] : event.seq
+  return new Error(`${error.message}（${origin === null ? '升级补入的' : '原第 ' + origin + ' 条'}事件 ${event.type}）`, { cause: error })
 }
 
 export function prepareSessionUpgrade(parsed, migration, children = []) {
@@ -187,9 +231,10 @@ export function prepareSessionUpgrade(parsed, migration, children = []) {
   let normalized = historical
   try { artifact = convert(historical) }
   catch (originalError) {
-    normalized = normalizeHistoricalEdits(normalizeHistoricalOpening(normalizeHistoricalCompaction(historical)))
-    if (normalized === historical) throw originalError
-    artifact = convert(normalized)
+    normalized = normalizeHistoricalEdits(normalizeHistoricalOpening(normalizeHistoricalCompaction(closeInterruptedCompactions(historical))))
+    if (normalized === historical) throw locateFailure(convert, historical, originalError)
+    try { artifact = convert(normalized) }
+    catch (error) { throw locateFailure(convert, normalized, error) }
   }
   artifact = retainUpgradeReferences(historical, normalized, artifact, parsed.header.version)
   // Validate the metadata-bearing artifact through the same installed reader.

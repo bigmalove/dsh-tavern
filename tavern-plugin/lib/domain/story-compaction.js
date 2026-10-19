@@ -13,8 +13,11 @@ export function createStoryCompactionRequest(options, instruction) {
   const lastIndex = options.messages.length - 1
   const message = options.messages[lastIndex]
   const source = message && message.source
+  // The summarization directive is the final user message DSH appends. DSH 0.1.x tagged it
+  // with its producer; DSH 0.2.x sends it with no source at all. Missing the second shape
+  // left every story compaction on DSH's English engineering-summary prompt.
   if (message === null || typeof message !== 'object' || message.role !== 'user' ||
-    source === null || typeof source !== 'object' || !isProducerSource(source, 'dsh-compaction-basic')) return options
+    (source !== undefined && source !== null && !isProducerSource(source, 'dsh-compaction-basic'))) return options
 
   const messages = options.messages.slice()
   messages[lastIndex] = Object.freeze(Object.assign({}, message, {
@@ -118,6 +121,64 @@ export function retainRecentStoryRounds(request, rounds = RETAINED_STORY_ROUNDS,
   const transcript = units.slice(starts[starts.length - keep]).map(lineOf).filter(Boolean)
   return {
     request: { ...request, messages: [...history.slice(0, boundary), ...history.slice(boundary).filter(message => message?.role === 'system'), request.messages.at(-1)] },
-    appendix: transcriptHeader(keep) + transcript.join('\n\n')
+    appendix: transcriptHeader(keep) + transcript.join('\n\n'),
+    kept: keep
+  }
+}
+
+// Story summaries are kept as volumes (分卷). Each compaction writes one new volume for
+// the rounds it folds and carries the earlier volumes verbatim, so what was summarized
+// once is not summarized again (and worn down) by every later compaction. Only when the
+// carried volumes outgrow their budget are they merged once into a 前情总览.
+export const STORY_SUMMARY_NOTE = '【剧情摘要说明】以下按轮次分卷记录已经压缩的剧情，只是索引。需要原话、细节或确认某件事时，用 tavern_recall_history 按关键词或轮次查原文。'
+// Carried volumes may use at most this share of the model's context window.
+export const STORY_VOLUMES_WINDOW_SHARE = 0.15
+const VOLUME_HEADER = /^【[^】\n]*(?:剧情摘要|前情总览)[^】\n]*】/gm
+const isCheckpoint = message => message?.role === 'user' && message.source !== null && typeof message.source === 'object' && 'compactionId' in message.source
+
+/** The volumes the latest summary holds; a summary written before volumes counts as one 前情总览. */
+export function storySummaryVolumes(history) {
+  const checkpoint = (Array.isArray(history) ? history : []).findLast(isCheckpoint)
+  const texts = (Array.isArray(checkpoint?.content) ? checkpoint.content : [])
+    .filter(block => block?.type === 'text' && typeof block.text === 'string').map(block => block.text)
+    // The native framing (preamble + tags), the note and the carried transcript are not volumes.
+    .filter(text => text.trim() && !text.includes('compacted-summary>') && !text.startsWith('【剧情摘要说明】') && !TRANSCRIPT_HEADER.test(text))
+  const volumes = []
+  const legacy = text => ({ text: '【前情总览】\n' + text.trim(), through: null })
+  for (const text of texts) {
+    const starts = [...text.matchAll(VOLUME_HEADER)].map(match => match.index)
+    if (!starts.length) { volumes.push(legacy(text)); continue }
+    if (text.slice(0, starts[0]).trim()) volumes.push(legacy(text.slice(0, starts[0])))
+    starts.forEach((start, index) => {
+      const piece = text.slice(start, starts[index + 1] ?? text.length).trim()
+      const numbers = piece.match(/^【[^】]*】/)[0].match(/\d+/g)
+      volumes.push({ text: piece, through: numbers ? Number(numbers.at(-1)) : null })
+    })
+  }
+  return volumes
+}
+
+/**
+ * How this compaction writes its summary: the instruction tail for the summarizer and the
+ * blocks placed before its output (the note and the carried volumes). `through` is the last
+ * story turn being folded, when known.
+ */
+export function storyVolumePlan(request, { through, budget = Infinity, estimate = text => Math.ceil(text.length / 4) } = {}) {
+  const volumes = storySummaryVolumes(Array.isArray(request?.messages) ? request.messages.slice(0, -1) : [])
+  const merge = volumes.length > 0 && estimate(volumes.map(volume => volume.text).join('\n\n')) > budget
+  const last = volumes.at(-1)
+  const from = volumes.length === 0 ? 1 : (Number.isInteger(last.through) ? last.through + 1 : null)
+  const end = Number.isInteger(through) && through > 0 ? through : null
+  const range = end === null ? '' : from !== null && from <= end ? `第 ${from}–${end} 轮` : `截至第 ${end} 轮`
+  if (merge) {
+    const header = `【前情总览${end === null ? '' : `（截至第 ${end} 轮）`}】`
+    return { prefix: [STORY_SUMMARY_NOTE], instruction: `【本次摘要的写法】旧卷已超出篇幅预算。把 <compacted-summary> 中的全部旧卷与之后的新剧情合并成一份，第一行单独写「${header}」；合并重复内容，省略琐碎和已失效的细节，使总篇幅明显短于旧卷之和。` }
+  }
+  const header = `【${range || '新一卷'}剧情摘要】`
+  return {
+    prefix: [STORY_SUMMARY_NOTE, ...volumes.map(volume => volume.text)],
+    instruction: volumes.length === 0
+      ? `【本次摘要的写法】第一行单独写「${header}」。`
+      : `【本次摘要的写法】<compacted-summary> 中的旧卷会原样保留在新摘要里，不要复述旧卷内容。只总结旧卷之后的新剧情，第一行单独写「${header}」，写成新的一卷：只写本段新增和变化的内容，人物、关系、物品等只记本段有变化的条目；与旧卷冲突时以本卷为准。`
   }
 }

@@ -7,6 +7,7 @@ import { createCardEditor } from './domain/card-editor.js'
 import { ensureSessionVariableDirectory } from './domain/session-variable-directory.js'
 import { createCompatibilityTurnCompiler } from './domain/compatibility-turn.js'
 import { registerTavernHttpRoutes } from './http/routes.js'
+import { installChatAnswerBootPatch } from './domain/chat-answer-boot-patch.js'
 import { registerRequestHooks } from './hooks/request.js'
 import { syncUserPlugins, watchUserPlugins, userPluginPaths } from './domain/user-plugins.js'
 import { createPluginAssets } from './domain/plugin-assets.js'
@@ -34,8 +35,9 @@ import { withPluginWorldbookEntries } from './domain/plugin-worldbook.js'
 import { createTemplateWindowReader, templateStateFields } from './domain/template-window-reader.js'
 import { createSessionResourceAccess } from './domain/session-resource-access.js'
 import { worldBookDisplayName } from './domain/worldbook-resource.js'
-import { createSaveUpgrade, prepareSaveUpgrade, saveSessionIds, unreadySaveSessions } from './domain/save-upgrade.js'
+import { createSaveUpgrade, detachSaveSessions, prepareSaveUpgrade, saveSessionIds, unreadySaveSessions } from './domain/save-upgrade.js'
 import { storedSessionVersion } from './domain/session-upgrade.js'
+import { exportSessionDiagnostics } from './domain/session-diagnostics.js'
 import { createTaskStateReader, taskStateFields } from './domain/task-state-reader.js'
 import { installHostProjectionReplay } from './domain/host-projection-replay.js'
 import { createBoundedHistory, readRecentWindow, readRowsAt } from './domain/bounded-history.js'
@@ -93,7 +95,7 @@ import { resolveAgentCompaction } from './agent-compaction.js'
 import { compactForegroundIfNeeded } from './domain/foreground-compaction.js'
 import { compactBackgroundIfNeeded, measureBackgroundBudget } from './domain/background-compaction.js'
 import { createAutoCompaction, installCompactionPolicy } from './domain/auto-compaction.js'
-import { RETAINED_ROUNDS_WINDOW_SHARE, storyHistoryFullyRetained } from './domain/story-compaction.js'
+import { RETAINED_ROUNDS_WINDOW_SHARE, STORY_VOLUMES_WINDOW_SHARE, storyHistoryFullyRetained } from './domain/story-compaction.js'
 import { createPerformanceDiagnostics } from './domain/performance-diagnostics.js'
 import { createBackgroundSuppressionReader } from './domain/background-surface.js'
 import { ensureCardWorkspaceMessage } from './domain/card-workspace-message.js'
@@ -1080,6 +1082,12 @@ export async function apply(ctx) {
     }
   })
   async function readSessionMap() { return await conversationRegistry.links() }
+  try {
+    const stored = await profileData.list('chats')
+    const chatIds = [...new Set(stored.map(entry => entry.directory ? entry.name : (entry.name.match(/^(chat-[^.]+)\.json$/) || [])[1]).filter(name => /^chat-[^.]+$/.test(name || '')))]
+    const recovered = await conversationRegistry.recoverUnlisted(chatIds)
+    if (recovered.length) console.warn('dsh-tavern: 找回 ' + recovered.length + ' 局未登记的存档：' + recovered.join('、'))
+  } catch (error) { console.warn('dsh-tavern: 核对存档登记失败', error?.message || error) }
   const sessionChats = createSessionChatReader({
     registry: conversationRegistry,
     needsAdoption: chat => groupOfMode(chat.mode) === 'play'
@@ -1778,7 +1786,7 @@ export async function apply(ctx) {
         try {
           handle = await ctx.get('agents').create({ sessionId, seed: events, inheritedEventCount: events.length,
             meta: { cwd, isSeeded: true, agentPreset: str(save.session.header?.agentPreset) || 'tavern' },
-            agentOptions: { provider: selection.provider, model: selection.model } })
+            agentOptions: { provider: selection.provider, model: selection.model }, setup: tavernPresetSetup(str(save.session.header?.agentPreset) || 'tavern') })
         } catch (error) { throw new Error('存档包已损坏：模型会话记录无法恢复（' + str(error?.message || error).slice(0, 200) + '）') }
         created = true
         await sessionStore.flush(handle.agent.session)
@@ -2703,6 +2711,31 @@ export async function apply(ctx) {
       flush: session => sessionStore.flush(session)
     }
   })
+  // Agents Tavern creates or resumes itself get the Tavern preset's plugins (the compaction
+  // engine among them), as DSH's session controller mounts them for the page's sessions.
+  function tavernPresetSetup(presetId = 'tavern') {
+    return async agentCtx => {
+      const presets = ctx.get('agentPresets')
+      if (presets) await presets.mount(agentCtx, (await presets.resolve(presetId)).id)
+    }
+  }
+  // The same import as 「导入聊天记录」, for tools: the page creates the new Session through the
+  // host, here the server creates it (as importGameSave does) and imports into it.
+  async function importChatHistoryText(args) {
+    if (typeof args?.text !== 'string' || !args.text.trim()) throw new Error('缺少聊天记录内容')
+    const cardPath = str(args.cardPath)
+    if (!await readCard(cardPath).catch(() => undefined)) throw new Error('找不到人物卡：' + cardPath)
+    const sessionId = 'session-' + randomUUID(), cwd = path.join(dataRoot, 'resources')
+    const selection = agentDefaultModel?.currentSelection?.() || {}
+    const handle = await ctx.get('agents').create({ sessionId, meta: { cwd, agentPreset: 'tavern' },
+      agentOptions: { provider: selection.provider, model: selection.model }, setup: tavernPresetSetup() })
+    try {
+      const workspace = await ctx.get('workspaceRegistry')?.resolveByPath(cwd)
+      if (workspace) await workspace.attachSession(sessionId)
+      return await chatHistoryImporter.import({ operationId: randomUUID(), sessionId, cardPath, text: args.text,
+        fileName: str(args.fileName) || 'import.jsonl', ...(args.userName ? { userName: str(args.userName) } : {}) })
+    } finally { await handle.dispose() }
+  }
   async function prepareConversationFork(sourceChatId, sourceSessionId, requestedTurn) {
     const source = str(sourceChatId) === '' ? await chatForSession(str(sourceSessionId)) : await readChat(str(sourceChatId))
     if (!source) throw new Error('找不到要分叉的源对话')
@@ -3254,6 +3287,8 @@ export async function apply(ctx) {
     return {
       rounds,
       budget: Number.isFinite(window) && window > 0 ? Math.floor(window * RETAINED_ROUNDS_WINDOW_SHARE) : Infinity,
+      // An unknown window still merges old volumes eventually rather than letting them grow without end.
+      volumeBudget: Number.isFinite(window) && window > 0 ? Math.floor(window * STORY_VOLUMES_WINDOW_SHARE) : 30000,
       estimate: text => meter?.estimateMessage ? meter.estimateMessage({ role: 'user', content: [{ type: 'text', text }] }) : Math.ceil(text.length / 4)
     }
   }
@@ -3269,7 +3304,10 @@ export async function apply(ctx) {
   async function withCompactionSession(id, work) {
     const live = agentRegistry.get(id)
     if (live) return work(live)
-    const handle = await agentRegistry.resume({ resumeSessionId: id })
+    // The compaction engine comes from the preset and needs a model: resume as DSH's session controller does.
+    const selection = agentDefaultModel?.currentSelection?.() || {}
+    const handle = await agentRegistry.resume({ resumeSessionId: id, setup: tavernPresetSetup(),
+      agentOptions: { provider: selection.provider, model: selection.model } })
     try { return await work(handle.agent) } finally { await handle.dispose() }
   }
   async function retireOldForegroundFrames(agent, keepTurn) {
@@ -4508,8 +4546,16 @@ export async function apply(ctx) {
         stored: id => storedSessionVersion(path.join(path.dirname(resolveTavernDataRoot()), 'sessions'), id),
         prepared: id => preparedSaveSessions.get(id),
       })
-      return failed.length ? { ready: false, error: '会话日志未完成升级，请重启酒馆后重试。原档保留：' + failed.map(id => id + (preparedSaveSessions.get(id)?.error ? '（' + preparedSaveSessions.get(id).error + '）' : '')).join('、') } : { ready: true, version: 4 }
+      // A log the upgrader refused fails the same way on every restart; only a skipped one waits for it.
+      const refused = failed.filter(id => preparedSaveSessions.get(id)?.error)
+      const reasons = ids => ids.map(id => id + '（' + preparedSaveSessions.get(id).error + '）').join('、')
+      if (!failed.length) return { ready: true, version: 4 }
+      if (refused.length !== failed.length) return { ready: false, error: '会话日志未完成升级，请重启酒馆后重试。原档保留：' + failed.join('、') }
+      if (refused.includes(chat.sessionId)) return { ready: false, error: '会话日志无法升级，原档保留：' + reasons(refused) }
+      return { ready: false, detachable: refused, error: '会话日志无法升级，原档保留：' + reasons(refused),
+        warning: '本局有 ' + refused.length + ' 个后台或回退快照会话的旧日志无法升级，迁移时会跳过它们：剧情正文和变量不受影响；后台代理会换新会话，从当前剧情继续；上一次回退将不能撤销。原档保留。' }
     },
+    detachSessions: (chatId, ids) => updateChat(chatId, chat => detachSaveSessions(chat, ids), { source: 'save-upgrade.detach-sessions' }),
     assertIdle: chat => {
       if (chat.mode === 'card' || backgroundTasks.activity(chat).busy || chat.regenInProgress || agentRegistry.get(chat.sessionId)?.phase?.kind === 'running') {
         throw new Error('请等待本轮游玩和后台结算完成后再升级')
@@ -4529,6 +4575,18 @@ export async function apply(ctx) {
         const chatId = (await readSessionMap())[str(args?.sessionId)]
         if (!chatId) throw new Error('找不到当前存档')
         return method === 'getSaveUpgrade' ? saveUpgrade.status(chatId) : saveUpgrade.start(chatId)
+      }
+      case 'exportSessionDiagnostics': {
+        const chatId = str(args?.chatId) || (await readSessionMap())[str(args?.sessionId)]
+        const chat = chatId && await readChat(chatId)
+        if (!chat) throw new Error('找不到这局存档')
+        const report = await exportSessionDiagnostics({
+          sessionsRoot: path.join(path.dirname(resolveTavernDataRoot()), 'sessions'),
+          sessionIds: saveSessionIds(chat),
+          errorOf: id => preparedSaveSessions.get(id)?.error,
+          tavernVersion: TAVERN_PACKAGE_VERSION,
+        })
+        return { filename: '酒馆诊断-' + chat.id.slice(0, 8) + '.json', text: JSON.stringify(report) }
       }
       case 'getCardOrganization': return { groups: (await cardOrganization.read()).groups }
       case 'organizeCards': return { groups: (await cardOrganization.update(args || {}, await fileResources.list('card'))).groups }
@@ -4771,7 +4829,7 @@ export async function apply(ctx) {
         return { backgroundModel: saved.backgroundModelSelection || null, imageModel: saved.imageModelSelection || null, backgroundTasks: normalizeBackgroundTasks(saved.backgroundTasks), webSearchEnabled: saved.webSearchEnabled === true, sceneImagesEnabled: saved.sceneImagesEnabled === true }
       }
       case 'getBackgroundModelReasoning': return { reasoning: await readBackgroundModelReasoning(llm, args) }
-      case 'getDisplayPreferences': { const settings = await readTavernSettings(); return { hideContextAndReasoning: settings.hideContextAndReasoning, headerItems: settings.headerItems } }
+case 'getDisplayPreferences': { const settings = await readTavernSettings(); return { hideContextAndReasoning: settings.hideContextAndReasoning, renderDepth: settings.renderDepth, headerItems: settings.headerItems } }
       case 'getCandidatePreferences': return { candidateDismissMode: (await readTavernSettings()).candidateDismissMode }
       case 'getTavernSettings': return { settings: await readTavernSettings(), modelCatalog: await tavernModelCatalog(), releaseCapabilities: TAVERN_RELEASE_CAPABILITIES }
       case 'getSceneImageSettings': {
@@ -5013,6 +5071,7 @@ export async function apply(ctx) {
 	  case 'completeTavernHelperEvent': return { completed: tavernScriptHostAdapter.completeEvent(args && args.sessionId, args && args.eventId, args && args.args, args && args.runtimeId, args && args.leaseToken, args && args.error, sanitizeRuntimeDiagnostics(args && args.diagnostics)) }
 	  case 'releaseTavernHelperRuntime': return { released: tavernScriptHostAdapter.releaseRuntime(args && args.sessionId, args && args.runtimeId) }
       case 'previewChatImport': return await chatHistoryImporter.preview(args || {})
+      case 'importChatHistoryText': return await importChatHistoryText(args || {})
       case 'rescueChatHistory': return await chatHistoryImporter.rescue(args || {})
       case 'importChatHistory': return await chatHistoryImporter.import(args || {})
       case 'startChat': {
@@ -5178,8 +5237,8 @@ export async function apply(ctx) {
       }
       case 'regenBody': {
         await reconcileStory(args && args.sessionId)
-        // reroll：不给模型看旧正文（重掷）；缺省保留旧正文一起重写。
-        const view = await regenBody(args && args.chatId, args && args.guidance, args && args.sessionId, { reroll: args && args.reroll === true })
+        // rewrite: revise the current body with the guidance; omitted is a fresh sample.
+        const view = await regenBody(args && args.chatId, args && args.guidance, args && args.sessionId, { rewrite: args && args.rewrite === true })
         notifyPluginTimeline(args && args.sessionId, 'regenerate')
         return { view }
       }
@@ -5333,6 +5392,8 @@ export async function apply(ctx) {
     tavernRemoteAssets,
     tavernStaticResources,
   })
+  // A desktop host's chat view sits in a read-only app.asar: patch its answer step in the page.
+  installChatAnswerBootPatch(ctx)
   // Card scripts run on the server by default; DSH_TAVERN_SERVER_SCRIPTS=0 leaves them to the page.
   if (process.env.DSH_TAVERN_SERVER_SCRIPTS !== '0') {
     serverScripts = createServerScriptExecutor({

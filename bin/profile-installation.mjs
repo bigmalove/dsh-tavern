@@ -336,9 +336,9 @@ async function installProfileOwned(host, { attemptId, runInstall, runDsh }) {
         else if (patched) console.log('已将 DSH 原有字号上限放宽到 32px。')
       }
       const [chat] = resolveHostDependencies({ dsh, host, requiredExports: { '@deepseek-ai/dsh-client-ui-chat': null } })
-      // Same as the font patch: an asar host is read-only and a mismatch is skipped, never rolled back.
-      if (isAsarPath(chat.directory)) console.log('桌面版的对话界面在 app.asar 内（只读归档），回复步骤补丁跳过；整理过正文的回合在折叠模式下可能被收起，可改用「完全展开」。')
-      else {
+      // An asar host is read-only: the page applies the same patch when the chat view loads
+      // (tavern-plugin/lib/domain/chat-answer-boot-patch.js). A mismatch is skipped, never rolled back.
+      if (!isAsarPath(chat.directory)) {
         const patched = patchChatAnswerStep(chat.directory)
         if (patched === null) console.log('当前 DSH 的对话界面与回复步骤补丁不符，已跳过。')
         else if (patched) console.log('已修正 DSH 对话界面：整理过正文的回合不再被当作过程收起。')

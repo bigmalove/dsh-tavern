@@ -108,17 +108,18 @@ function createGlobalSettingsModule({ React, rpc, notifySettingsChanged, TavernD
                 state.settings ? h(SettingSwitch, { settings: state.settings, name: "castPresentation", title: "对话头像",
                     description: "后台结算时顺带标注每句台词的说话人和情绪，台词显示成带头像的一行。主角用人物卡头像，其他人物用首字头像。" }) : null,
                 h(DisplayPreferencesSettings),
-                h(HeaderItemsSettings),
                 h(CandidatePreferencesSettings)),
             group("高级", "",
                 state.settings ? h(SettingSwitch, { settings: state.settings, name: "storyToolCall", title: "正文走工具调用",
                     description: "让模型通过工具调用提交正文，可缓解 Gemini 等模型在正文中途截断或拒答。需要模型支持工具调用；正文生成完成后一次性显示。" }) : null,
                 state.settings ? h(SettingSwitch, { settings: state.settings, name: "storyHistoryToolCall", title: "历史正文也走工具调用",
-                    description: "把已保存的正文以工具参数的形式回放给模型，而不是当成模型自己说过的普通文字；实测能明显降低续写被拒答的概率。需要模型支持工具调用，只影响发送给模型的历史，存档和界面不变。" }) : null,
+                    description: "把历史里的正文和玩家消息都以工具参数的形式回放给模型，而不是普通对话文字；实测能明显降低续写被拒答的概率。本轮输入保持原样。需要模型支持工具调用，只影响发送给模型的历史，存档和界面不变。" }) : null,
                 h(PromptTemplateSettingsEntry),
                 h(ContextCompactionSettings),
-                h(TouchDiagnosticsSetting)),
-            state.error ? React.createElement("div", { className: "dsh-tavern-settings-error", role: "alert" }, "保存失败：" + state.error) : null
+                h(ContextCompactionSettings),
+                h(TouchDiagnosticsSetting),
+                // Most players never need this; it lives at the bottom of 高级, folded.
+                h(HeaderItemsSettings)),            state.error ? React.createElement("div", { className: "dsh-tavern-settings-error", role: "alert" }, "保存失败：" + state.error) : null
         );
     }
 

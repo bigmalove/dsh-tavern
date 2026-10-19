@@ -9,13 +9,28 @@ import { createRegenerationRecovery } from './regeneration-recovery.js'
 import { isDeepStrictEqual } from 'node:util'
 import { createScopedMessages, isScopedMessages } from './scoped-messages.js'
 import { diffJson } from './json-mutation.js'
-import { rollbackAvailability, clearFailedTurnSurface, locateRegenerationSurface, planRegenerationSurface, regenerationProjection, applyRegenerationProjection, failedTurnReplayAvailability, replayableFailedTurn, shadowRegenerationReply } from './rollback-surface.js'
+import { rollbackAvailability, clearFailedTurnSurface, locateRegenerationSurface, planRegenerationSurface, regenerationProjection, applyRegenerationProjection, failedTurnReplayAvailability, replayableFailedTurn } from './rollback-surface.js'
 import { assertRegenerationSourceCurrent, replaceLastRound, originalStateOf } from './last-round-replacement.js'
 import { diagnosticIdentity, regenerationTargetDiagnostic } from './regeneration-diagnostics.js'
 
 function str(value) {
   return typeof value === 'string' ? value : (value === undefined || value === null ? '' : String(value))
 }
+
+/**
+ * The input of a regeneration attempt. The provider never sees the replaced body
+ * (the request projection drops it), so a plain regeneration is a fresh sample of
+ * the round. A rewrite hands that body back inside the input as the draft to
+ * revise, because only then can "写得更长" mean "this one, longer".
+ */
+export function regenerationInputText(userText, guidance, rewriteBody) {
+  const input = str(userText).trim(), guide = str(guidance).trim(), draft = str(rewriteBody).trim()
+  if (draft !== '' && guide !== '') return input + '\n\n【当前正文】\n' + draft + '\n\n【改写要求】\n在当前正文基础上改写本轮正文：' + guide
+  return input + (guide !== '' ? '\n\n【本轮补充要求】\n' + guide : '')
+}
+
+// What the model saw of a stored reply (same precedence as the body editor).
+function replyTextOf(message) { return str(message && (message.projectionText ?? message.sourceText ?? message.text)) }
 
 export function selectRegenerationTarget(chat, session, observe) {
   const nodes = (session.surface !== undefined && Array.isArray(session.surface.nodes)) ? session.surface.nodes : []
@@ -164,12 +179,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
         catch { /* Recording failure must not affect regeneration or replace its error. */ }
       }
     }
-    const { msgs0, oldAssistantIndex, oldTurn, oldSource } = selection
-    let { eventStart, oldSeq } = selection
-    // 重掷（reroll）：模型不该再看到这一版正文。生成前把旧正文从原生消息面
-    // 清空，重新发的玩家输入之后才是它要写的内容；重写（默认）保留旧正文，
-    // 相当于把这一版连同意见一起交给模型改写。
-    const reroll = options.reroll === true
+    const { eventStart, msgs0, oldAssistantIndex, oldSeq, oldTurn, oldSource } = selection
     // V3 hosts may reject assistant replacements. Check an isolated copy before
     // rolling back the Chat, cancelling settlement or paying for a new reply.
     if (session.header?.version >= 3) {
@@ -189,7 +199,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
     let originalChat = structuredClone(chat)
     const operationId = randomUUID()
     async function restoreFailedRegen() {
-      await regenerationRecovery.abort({ chatId: chat.id, originalChat, session, eventStart, operationId, shadow })
+      await regenerationRecovery.abort({ chatId: chat.id, originalChat, session, eventStart, operationId })
     }
     let legacyBefore = null
     if (storyTimeline.inspect({ chat }).checkpointCount === 0) {
@@ -226,44 +236,19 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
         sessionId: chat.sessionId, eventStart }
       next.tavernHelperLifecycleRevision = lifecycleRevision
       next.regenInProgress = true
-      // 生成期间就把被重做的旧正文藏起来：否则旧的正文一直挂在页面上，
-      // 看上去像"没有在生成、只是把新内容叠上去"。注意只藏正文——玩家输入是
-      // 他自己发的，留着才看得见这条在等谁的回复。所以走 replacingDshTurns
-      // 单独一个字段，别混进 suppressedDshTurns（那是"整轮作废"，连输入一起收）。
-      // 只记住本函数临时加进去的那一次，别动原本就该隐藏的回合。
+      // 生成期间先把被重做的旧正文藏起来：否则旧的正文一直挂在页面上，看上去
+      // 像"没有在生成、只是把新内容叠上去"。只藏正文，玩家输入是他自己发的，
+      // 留着才看得见这条在等谁的回复——所以走 replacingDshTurns，别混进
+      // suppressedDshTurns（那是"整轮作废"，会连输入一起收掉）。
       const replacingBefore = Array.isArray(next.replacingDshTurns) ? next.replacingDshTurns : []
       const alreadyReplacing = replacingBefore.some(function (turn) { return Number(turn) === Number(oldTurn) })
-      next.regenRecovery.temporarySuppressedTurn = alreadyReplacing ? null : oldTurn
+      next.regenRecovery.temporaryReplacingTurn = alreadyReplacing ? null : oldTurn
       if (!alreadyReplacing) next.replacingDshTurns = Array.from(new Set(replacingBefore.concat([oldTurn]))).sort(function (left, right) { return left - right })
       return next
     }, { source: 'rollback.regen' })
-    // A reroll removes the previous body from the model surface before the new
-    // input is sent. The attempt boundary moves past that edit, so the surface
-    // work this regeneration does is what the projection and the abort clean up;
-    // the displaced node itself is restored from `surfaceShadow` if it fails.
-    let shadow = null
-    if (reroll) {
-      try {
-        shadow = shadowRegenerationReply({ session, agent, target: { assistantSeq: oldSeq, turn: oldTurn, source: oldSource } })
-        eventStart = sessionEvents(session).length
-        oldSeq = shadow.seq
-        const saved = await updateChat(chat.id, function (current) {
-          if (!current || current.regenRecovery?.id !== operationId) throw new Error('重新生成操作已失效')
-          current.regenRecovery.eventStart = eventStart
-          current.regenRecovery.surfaceShadow = { seq: shadow.seq, turn: oldTurn, message: shadow.message }
-          return current
-        }, { source: 'foreground.regen-shadow' })
-        if (!saved) throw new Error('重新生成前的上下文清理未能保存')
-        if (typeof sessions.flush === 'function') await sessions.flush(session)
-      } catch (error) {
-        // The Chat is already rolled back here: undo it, or the story loses a round.
-        await restoreFailedRegen()
-        throw error
-      }
-    }
     const rolledMessageCount = (chat.messages || []).length
     const guide = str(guidance).trim()
-    const syntheticText = originalUserText + (guide !== '' ? '\n\n【本轮补充要求】\n' + guide : '')
+    const syntheticText = regenerationInputText(originalUserText, guide, options.rewrite === true ? replyTextOf(msgs0[oldAssistantIndex]) : '')
     releaseOpeningTurn(agent.session, agent)
     const beforeLastTurn = agent.phase !== undefined && agent.phase !== null && Number.isFinite(Number(agent.phase.lastTurn)) ? Number(agent.phase.lastTurn) : 0
     let committedChat, body, syntheticTurn
@@ -323,16 +308,13 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
         next.settleError = null
         next.tavernHelperLifecycleRevision = lifecycleRevision + 1
         // 撤销生成期对旧正文的临时隐藏；它此后由 regeneratedDshTurns 的键负责。
-        const temporaryTurn = Number(next.regenRecovery && next.regenRecovery.temporarySuppressedTurn)
+        const temporaryTurn = Number(next.regenRecovery && next.regenRecovery.temporaryReplacingTurn)
         const keptReplacing = (Array.isArray(next.replacingDshTurns) ? next.replacingDshTurns : [])
           .filter(function (turn) { return !Number.isSafeInteger(temporaryTurn) || Number(turn) !== temporaryTurn })
         if (keptReplacing.length) next.replacingDshTurns = keptReplacing
         else delete next.replacingDshTurns
-        // 旧存档把临时压制写进了 suppressedDshTurns，这里一并清理。
-        const keptSuppressed = (Array.isArray(next.suppressedDshTurns) ? next.suppressedDshTurns : [])
-          .filter(function (turn) { return !Number.isSafeInteger(temporaryTurn) || Number(turn) !== temporaryTurn })
-        if (next.regenRecovery) delete next.regenRecovery.temporarySuppressedTurn
-        next.suppressedDshTurns = Array.from(new Set(keptSuppressed.concat([syntheticTurn]))).sort(function (left, right) { return left - right })
+        if (next.regenRecovery) delete next.regenRecovery.temporaryReplacingTurn
+        next.suppressedDshTurns = Array.from(new Set((Array.isArray(next.suppressedDshTurns) ? next.suppressedDshTurns : []).concat([syntheticTurn]))).sort(function (left, right) { return left - right })
         next.regeneratedDshTurns = next.regeneratedDshTurns && typeof next.regeneratedDshTurns === 'object' && !Array.isArray(next.regeneratedDshTurns)
           ? structuredClone(next.regeneratedDshTurns) : {}
         next.regeneratedDshTurns[String(oldTurn)] = syntheticTurn
@@ -411,9 +393,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
         catch { /* Recording failure must not affect regeneration or replace its error. */ }
       }
     }
-    const { msgs0, oldAssistantIndex, oldTurn, oldSource } = selection
-    let { eventStart, oldSeq } = selection
-    const reroll = options.reroll === true
+    const { eventStart, msgs0, oldAssistantIndex, oldSeq, oldTurn, oldSource } = selection
     if (!Object.hasOwn(msgs0, String(oldAssistantIndex - 1))) throw new Error('没有可重新生成的玩家输入与正文组合')
     if (session.header?.version >= 3) {
       const preview = session.constructor.fromRestore(session.id, structuredClone(sessionEvents(session)), structuredClone(session.header), session.inheritedEventCount, 'detached')
@@ -444,7 +424,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
     // 同上（完整路径）：生成期间只藏被重做的旧正文，玩家输入留着。
     const rolledReplacingBefore = Array.isArray(rolled.replacingDshTurns) ? rolled.replacingDshTurns : []
     const rolledAlreadyReplacing = rolledReplacingBefore.some(function (turn) { return Number(turn) === Number(oldTurn) })
-    rolled.regenRecovery.temporarySuppressedTurn = rolledAlreadyReplacing ? null : oldTurn
+    rolled.regenRecovery.temporaryReplacingTurn = rolledAlreadyReplacing ? null : oldTurn
     if (!rolledAlreadyReplacing) rolled.replacingDshTurns = Array.from(new Set(rolledReplacingBefore.concat([oldTurn]))).sort(function (left, right) { return left - right })
     const rollbackChanges = headerChanges(originalHeader, rolled)
     if (rollbackChanges.some(change => change.path[0] === 'messages' || change.path[0] === 'id')) return undefined
@@ -453,32 +433,13 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
     if (agent.phase?.kind === 'running') throw new Error('前台正在生成，请完成或停止后再重新生成')
     const rolledSaved = await chats.patch(chat.id, revision, rollbackChanges, { source: 'rollback.regen' })
     if (!rolledSaved) return undefined
-    // 重掷：先把旧正文从原生消息面清空，再发新的输入（理由同 regenBody）。
-    let shadow = null
     async function restoreFailedRegen() {
       // Rare error path: the complete abort restores the exact original revision.
       const originalChat = await readChatRevision(chat.id, revision)
-      await regenerationRecovery.abort({ chatId: chat.id, originalChat, session, eventStart, operationId, shadow })
-    }
-    if (reroll) {
-      try {
-        shadow = shadowRegenerationReply({ session, agent, target: { assistantSeq: oldSeq, turn: oldTurn, source: oldSource } })
-        eventStart = sessionEvents(session).length
-        oldSeq = shadow.seq
-        const shadowSaved = await chats.patch(chat.id, rolledSaved._storageRevision, [
-          { op: 'set', path: ['regenRecovery', 'eventStart'], value: eventStart },
-          { op: 'set', path: ['regenRecovery', 'surfaceShadow'], value: { seq: shadow.seq, turn: oldTurn, message: shadow.message } }
-        ], { source: 'foreground.regen-shadow' })
-        if (!shadowSaved) throw new Error('重新生成前的上下文清理未能保存')
-        if (typeof sessions.flush === 'function') await sessions.flush(session)
-      } catch (error) {
-        // The Chat is already rolled back here: undo it, or the story loses a round.
-        await restoreFailedRegen()
-        throw error
-      }
+      await regenerationRecovery.abort({ chatId: chat.id, originalChat, session, eventStart, operationId })
     }
     const guide = str(guidance).trim()
-    const syntheticText = originalUserText + (guide !== '' ? '\n\n【本轮补充要求】\n' + guide : '')
+    const syntheticText = regenerationInputText(originalUserText, guide, options.rewrite === true ? replyTextOf(msgs0[oldAssistantIndex]) : '')
     releaseOpeningTurn(agent.session, agent)
     const beforeLastTurn = agent.phase !== undefined && agent.phase !== null && Number.isFinite(Number(agent.phase.lastTurn)) ? Number(agent.phase.lastTurn) : 0
     let committedChat, body, syntheticTurn
@@ -525,16 +486,14 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
       next.settleStatus = 'pending'
       next.settleError = null
       next.tavernHelperLifecycleRevision = lifecycleRevision + 1
-      const temporaryTurn = Number(next.regenRecovery && next.regenRecovery.temporarySuppressedTurn)
+      // 撤销生成期对旧正文的临时隐藏；它此后由 regeneratedDshTurns 的键负责。
+      const temporaryTurn = Number(next.regenRecovery && next.regenRecovery.temporaryReplacingTurn)
       const keptReplacing = (Array.isArray(next.replacingDshTurns) ? next.replacingDshTurns : [])
         .filter(function (turn) { return !Number.isSafeInteger(temporaryTurn) || Number(turn) !== temporaryTurn })
       if (keptReplacing.length) next.replacingDshTurns = keptReplacing
       else delete next.replacingDshTurns
-      // 旧存档把临时压制写进了 suppressedDshTurns，这里一并清理。
-      const keptSuppressed = (Array.isArray(next.suppressedDshTurns) ? next.suppressedDshTurns : [])
-        .filter(function (turn) { return !Number.isSafeInteger(temporaryTurn) || Number(turn) !== temporaryTurn })
-      if (next.regenRecovery) delete next.regenRecovery.temporarySuppressedTurn
-      next.suppressedDshTurns = Array.from(new Set(keptSuppressed.concat([syntheticTurn]))).sort(function (left, right) { return left - right })
+      if (next.regenRecovery) delete next.regenRecovery.temporaryReplacingTurn
+      next.suppressedDshTurns = Array.from(new Set((Array.isArray(next.suppressedDshTurns) ? next.suppressedDshTurns : []).concat([syntheticTurn]))).sort(function (left, right) { return left - right })
       next.regeneratedDshTurns = next.regeneratedDshTurns && typeof next.regeneratedDshTurns === 'object' && !Array.isArray(next.regeneratedDshTurns)
         ? structuredClone(next.regeneratedDshTurns) : {}
       next.regeneratedDshTurns[String(oldTurn)] = syntheticTurn
@@ -696,7 +655,7 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
     chat = await readChat(chat.id)
     const originalChat = structuredClone(chat)
     const mode = chat.mode || 'story'
-    if (!['story', 'script'].includes(mode)) throw new Error('仅游玩模式支持回退本轮')
+    if (mode !== 'story' && mode !== 'script') throw new Error('仅游玩模式支持回退本轮')
     const card = await readChatCard(chat)
     const agent = sessions.get(chat.sessionId) || (restoredAgent?.session?.id === chat.sessionId ? restoredAgent : undefined)
     const session = agent?.session || sessions.getSession?.(chat.sessionId)

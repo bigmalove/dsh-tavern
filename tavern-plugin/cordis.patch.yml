@@ -112,24 +112,6 @@
               search: true
               fetch: false
 
-          # 卡片模式复用 dsh-base 提供的一次性 bash／pwsh 与文件编辑能力；
-          # 具体工具是否对当前会话可见，由 Tavern 按游玩/卡片模式过滤。
-          - id: filesystem
-            name: cordis:group
-            group: true
-            isolate:
-              fs: true
-            config:
-              - id: fs-local
-                name: '@deepseek-ai/dsh-fs-local'
-                config:
-                  cwd: !!js process.env.DSH_CWD ?? process.cwd()
-
-              - id: str-replace-editor
-                name: '@deepseek-ai/dsh-tool-str-replace-editor'
-                config:
-                  maxOutputChars: 16000
-
           # Skill 来源由 Tavern 按 Agent 用途分配，调用仍使用原生工具。
           - id: tool-skill
             name: '@deepseek-ai/dsh-tool-skill'

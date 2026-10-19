@@ -9,6 +9,7 @@ import { createStoryTimeline } from '../tavern-plugin/lib/domain/story-timeline.
 import { createChatPersistence } from '../tavern-plugin/lib/domain/chat-persistence.js'
 import { createChatJournalStore } from '../tavern-plugin/lib/domain/chat-journal-store.js'
 import { createBoundedHistory, readRowsAt } from '../tavern-plugin/lib/domain/bounded-history.js'
+import { projectRegenerationRequestMessages } from '../tavern-plugin/lib/domain/foreground-orchestration-strategies.js'
 import { isScopedMessages } from '../tavern-plugin/lib/domain/scoped-messages.js'
 
 const model = { kind: 'model', provider: 'fixture', model: 'fixture' }
@@ -43,7 +44,7 @@ async function fixture(t, bounded) {
   } }).chat, { source: 'background.settlement.commit' })
 
   const events = [
-    { seq: 0, type: 'user/message', data: { turn: 81, role: 'user', content: [{ type: 'text', text: '推门' }] } },
+    { seq: 0, type: 'user/message', data: { turn: 81, role: 'user', content: [{ type: 'text', text: '推门' }], source: { kind: 'user' } } },
     { seq: 1, type: 'assistant/message', data: { turn: 81, step: 1, message: { role: 'assistant', source: model, content: [{ type: 'text', text: '新正文' }] } } }
   ]
   const session = { id: 'session', events, surface: { nodes: [0, 1] }, append(type, data, options = {}) {
@@ -58,8 +59,11 @@ async function fixture(t, bounded) {
   // A foreground turn as the real orchestrator stores it: begin, append the round, commit.
   const agent = { session, phase: { kind: 'idle', lastTurn: 81 }, followup(message) { agent.input = message
       // What the model would read as story replies when this request is sent.
+      // The provider receives the play strategy's projected messages, not the
+      // raw session: regeneration drops the replaced body there.
       agent.sentTo = session.surface.nodes.map(seq => events[seq]).filter(e => e?.type === 'assistant/message')
         .map(e => (e.data.message.content || []).map(block => block.text || '').join(''))
+      agent.sentRequest = null
     }, async whenIdle() {
     if (!agent.input) return
     if (hooks.failGeneration) { agent.input = null; throw new Error('fixture generation failed') }
@@ -73,6 +77,13 @@ async function fixture(t, bounded) {
       draft.nativeCommits[String(turn)] = { turn, userText }
     } }).chat, { source: 'foreground.commit' })
     session.append('user/message', { turn, role: 'user', content: [{ type: 'text', text: userText }], source: { kind: 'plugin', plugin: 'dsh-tavern-regen' } }, { surfaceOp: 'append' })
+    // The request exists now and before the attempt's own reply: this is what
+    // the play strategy projects for the provider.
+    agent.sentRequest = session.surface.nodes.map(seq => events[seq]).map(event => {
+      if (event?.type === 'assistant/message') return event.data.message
+      if (event?.type === 'user/message') return { id: event.data.id, role: 'user', content: event.data.content, source: event.data.source }
+      return null
+    }).filter(Boolean)
     session.append('assistant/message', { turn, step: 1, message: { role: 'assistant', source: model, content: [{ type: 'text', text }] } }, { surfaceOp: 'append' })
     session.append('turn/end', { turn, reason: { kind: 'completed' } })
   } }
@@ -212,8 +223,10 @@ test('重掷在两条路径上都不把旧正文交给模型，结果一致', as
     results.push({ h, before, view, after: await h.p.read('chat') })
   }
   for (const { h, before, view, after } of results) {
-    // The saved body of the round being rerolled never reaches the provider.
-    assert.equal(h.agent.sentTo.includes('新正文'), false, '旧正文不能进入重掷请求')
+    // The saved body of the round being rerolled never reaches the provider:
+    // the request projection replaces the old reply with this attempt's input.
+    const request = JSON.stringify(projectRegenerationRequestMessages(h.agent.sentRequest))
+    assert.equal(request.includes('新正文'), false, '旧正文不能进入重掷请求')
     assert.equal(view.adopted.text.startsWith('重写正文'), true)
     assert.equal(after.messages.length, before.messages.length)
     assert.equal(after.messages.at(-1).text, view.adopted.text)

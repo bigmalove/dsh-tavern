@@ -140,6 +140,9 @@
                 h("div", {className:"dsh-tavern-status-empty"}, "统一迁移本局的会话日志与剧情存储，保留正文、变量、分支和历史版本。旧文件保留原样；迁移后的新进度写入新版存档。"),
                 busy ? h("div", {role:"status"}, stage + " 大存档可能需要较长时间，暂时不要关闭或重启酒馆。") : null,
                 error || state?.phase === "failed" ? h("div", {className:"dsh-card-error",role:"alert"}, error || state.error) : null,
+                state?.sessions?.warning && state.phase !== "failed" ? h("div", {className:"dsh-tavern-status-empty",role:"note"}, state.sessions.warning) : null,
+                state?.phase === "failed" && !state.sessions?.ready ? h("div", {className:"dsh-tavern-status-empty"}, "这局的旧会话日志暂时无法升级，原档已保留。请点「导出诊断文件」，把文件发给开发者（不含剧情正文）；修复发布后更新酒馆即可自动升级。想先接着玩，可以在左侧对话菜单「⋯」里用「存档救援」把剧情转到新对话。") : null,
+                state?.phase === "failed" && !state.sessions?.ready ? h("button", {type:"button",className:"dsh-tavern-btn",onClick:() => downloadSessionDiagnostics({}, props.sessionId).catch(err => setError("导出诊断文件失败：" + String(err.message || err)))}, "导出诊断文件") : null,
                 !state ? h("button", {className:"dsh-tavern-btn",onClick:()=>setRefresh(value=>value+1)}, "重新检查存档迁移") :
                 h("button", {type:"button",className:"dsh-tavern-btn",disabled:busy || props.busy,onClick:migrate}, busy ? "迁移中…" : state.phase === "failed" ? "重试迁移" : "迁移存档"),
                 !busy && props.busy ? h("div", {className:"dsh-tavern-status-empty"}, "请等待本轮游玩和后台结算完成后再迁移。") : null
@@ -539,8 +542,8 @@
 			return value;
 		}
 
-		async function submitBodyRegeneration(sessionId, panel, guidance, reroll) {
-			const res = await rpc("regenBody", { guidance: String(guidance || "").trim(), reroll: reroll === true }, sessionId);
+		async function submitBodyRegeneration(sessionId, panel, guidance, rewrite) {
+			const res = await rpc("regenBody", { guidance: String(guidance || "").trim(), rewrite: rewrite === true }, sessionId);
 			applyBodyRegenerationResult({ liveTavernView: liveTavernView, historyProjection: historyProjection, sessionId: sessionId, view: res.view, tail: panel.tail });
 			setCandidatePanel(null);
 		}
@@ -1556,7 +1559,8 @@
 							return h("button", { key: text, type: "button", className: "dsh-tavern-regen-example", onClick: function () { addExample(text); } }, text);
 						})),
 						h("button", { type: "button", className: "dsh-tavern-regen-cancel", onClick: props.onCancel }, "取消"),
-						props.rewriteLabel ? h("button", {
+						// 改写必须有个方向：没填意见时只留重掷，免得按钮名不副实。
+						props.rewriteLabel && props.value.trim() ? h("button", {
 							type: "button",
 							className: "dsh-tavern-regen-submit dsh-tavern-regen-rewrite",
 							title: props.rewriteTitle || "",
@@ -1584,34 +1588,34 @@
 			const opened = panel && panel.sessionId === props.sessionId && panel.phase === "input";
 			React.useEffect(function () { if (opened) setGuidance(regenGuidance.get(props.sessionId) || ""); }, [opened, props.sessionId]);
 			const h = React.createElement;
-			if (!isBodyMode(sessionMode) || running || !panel || panel.sessionId !== props.sessionId) return null;
-			async function generate(reroll) {
+			if (!isPlayMode(sessionMode) || running || !panel || panel.sessionId !== props.sessionId) return null;
+			async function generate(rewrite) {
 				const guide = guidance.trim();
 				if (guide) regenGuidance.set(props.sessionId, guide); else regenGuidance.delete(props.sessionId);
-				setRegenPanel(Object.assign({}, panel, { phase: "loading", error: "", reroll: reroll === true }));
+				setRegenPanel(Object.assign({}, panel, { phase: "loading", error: "", rewrite: rewrite === true && guide !== "" }));
 				try {
-					await submitBodyRegeneration(props.sessionId, panel, guide, reroll === true);
+					await submitBodyRegeneration(props.sessionId, panel, guide, rewrite === true && guide !== "");
 					setRegenPanel(null);
 				} catch (err) {
-					tavernErrorHub.report(reroll === true ? "重新生成正文" : "参考正文重写", err);
+					tavernErrorHub.report(rewrite === true ? "参考正文重写" : "重新生成正文", err);
 					setRegenPanel(Object.assign({}, panel, { phase: "error", error: String(err && err.message || err) }));
 				}
 			}
 			return h(RegenGuideForm, {
 				title: "重新生成正文",
-				hint: "重掷：模型看不到这一版正文；重写：把这一版一并交给模型改写",
-				loading: panel.phase === "loading" ? (panel.reroll === true ? "正在重掷正文…" : "正在参考旧正文重写…") : "",
+				hint: "重掷：模型看不到这一版正文；重写：把这一版交给模型，在原稿上改写",
+				loading: panel.phase === "loading" ? (panel.rewrite === true ? "正在参考旧正文重写…" : "正在重掷正文…") : "",
 				error: panel.error,
 				value: guidance,
 				onChange: setGuidance,
 				placeholder: "指导意见（可选）",
 				examples: ["写得更长", "侧重心理描写", "加快节奏"],
 				submitLabel: "重掷正文",
-				submitTitle: "清空这一版正文后重新生成，模型不会看到旧正文",
-				onSubmit: function () { generate(true); },
+				submitTitle: "重新生成这一轮正文，模型不会看到当前这一版",
+				onSubmit: function () { generate(false); },
 				rewriteLabel: "参考旧正文重写",
-				rewriteTitle: "保留旧正文一并发给模型，让它在此基础上按意见改写",
-				onRewrite: function () { generate(false); },
+				rewriteTitle: "把当前正文一并发给模型，让它在原稿基础上按意见改写",
+				onRewrite: function () { generate(true); },
 				onCancel: function () { setRegenPanel(null); }
 			});
 		}
@@ -1728,14 +1732,10 @@
                     const gap = parseFloat(style.columnGap || style.gap) || 0;
                     const moreWidth = sample.offsetWidth + gap;
                     sample.remove();
-                    // The trailing divider takes width the buttons cannot use: its
-                    // margins plus the one gap before it. Hidden (mobile) costs nothing.
-                    const divider = node.querySelector(".dsh-tavern-header-divider");
-                    const dividerStyle = divider && divider.offsetWidth ? window.getComputedStyle(divider) : null;
-                    const dividerWidth = dividerStyle ? divider.offsetWidth + (parseFloat(dividerStyle.marginLeft) || 0) + (parseFloat(dividerStyle.marginRight) || 0) + gap : 0;
-                    // ⋯ is always shown, so its width is never available to the buttons.
-                    const available = Math.max(0, tavernHeaderAvailableWidth(node) - dividerWidth - moreWidth);
-                    const next = tavernHeaderFold(visible, id => widths.current.get(id) || 0, available, { gap: gap, fixed: TAVERN_HEADER_NOT_FOLDED, moreWidth: 0 });
+                    // ⋯ appears only once something folds, so its width is reserved
+                    // only then; the default bar looks exactly as it did before.
+                    const available = tavernHeaderAvailableWidth(node);
+                    const next = tavernHeaderFold(visible, id => widths.current.get(id) || 0, available, { gap: gap, fixed: TAVERN_HEADER_NOT_FOLDED, moreWidth: moreWidth });
                     setFolded(current => current.length === next.length && current.every((id, index) => id === next[index]) ? current : next);
                 }
                 measure();
@@ -1789,14 +1789,13 @@
             const foldedEntries = folded.map(id => ({ id: id, label: titleOf(id) })).filter(entry => entry.id !== "header:export");
             return h("div", { ref: host, className: "dsh-tavern-header-items" + (display === "icon" ? " is-icon" : "") },
                 visible.map(item),
-                h("div", { className: "dsh-tavern-more-actions dsh-tavern-header-more" },
+                foldedEntries.length ? h("div", { className: "dsh-tavern-more-actions dsh-tavern-header-more" },
                     h("button", { type: "button", className: "dsh-tavern-btn dsh-tavern-header-more-button", "data-tavern-header-trigger": "more", "aria-label": "更多快捷入口", "aria-haspopup": "menu", "aria-expanded": Boolean(more), title: "更多快捷入口", onClick: function () { setContext(null); setMore(more ? null : { x: null, y: null }); } },
                         h("svg", { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2.4, strokeLinecap: "round", "aria-hidden": "true" }, h("path", { d: "M5 12h.01M12 12h.01M19 12h.01" }))),
                     more ? h("div", { className: "dsh-tavern-more-menu dsh-tavern-header-popup", role: "menu", "aria-label": "更多快捷入口" },
                         foldedEntries.map(entry => h("button", { key: entry.id, type: "button", role: "menuitem", onClick: function () { setMore(null); activate(entry.id); } }, tavernStartIcon(entry.id, entries.get(entry.id), 15), entry.label)),
-                        foldedEntries.length ? h("div", { className: "dsh-tavern-header-menu-sep", role: "separator" }) : null,
-                        tavernHeaderMenuButton(h, "顶栏设置…", TAVERN_HEADER_GEAR_PATH, false, function () { setMore(null); setDialog(true); })) : null),
-                visible.length ? h("span", { className: "dsh-tavern-header-divider", "aria-hidden": "true" }) : null,
+                        h("div", { className: "dsh-tavern-header-menu-sep", role: "separator" }),
+                        tavernHeaderMenuButton(h, "顶栏设置…", TAVERN_HEADER_GEAR_PATH, false, function () { setMore(null); setDialog(true); })) : null) : null,
                 context ? h("div", { className: "dsh-tavern-more-menu dsh-tavern-header-popup dsh-tavern-header-context", role: "menu", style: { position: "fixed", left: Math.min(context.x, (window.innerWidth || 1024) - 190) + "px", top: Math.min(context.y, (window.innerHeight || 768) - 190) + "px", right: "auto", bottom: "auto" } },
                     tavernHeaderMenuButton(h, "左移", "M15 6l-6 6 6 6", items.indexOf(context.id) <= 0, function () { setContext(null); move(context.id, -1); }),
                     tavernHeaderMenuButton(h, "右移", "M9 6l6 6-6 6", items.indexOf(context.id) >= items.length - 1, function () { setContext(null); move(context.id, 1); }),

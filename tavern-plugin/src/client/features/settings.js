@@ -151,7 +151,8 @@
                 return { display: input.display === "icon" ? "icon" : "icon-text", items: input.items.filter(item => typeof item === "string").slice(0, 24) };
             }
             function apply(settings) {
-                value = { hideContextAndReasoning: settings.hideContextAndReasoning === true, headerItems: headerItemsOf(settings) };
+                value = { hideContextAndReasoning: settings.hideContextAndReasoning === true, headerItems: headerItemsOf(settings),
+                    renderDepth: Number.isSafeInteger(settings.renderDepth) ? settings.renderDepth : 3 };
                 document.documentElement.classList.toggle("dsh-tavern-hide-process", value.hideContextAndReasoning);
                 listeners.forEach(listener => listener());
             }
@@ -198,6 +199,13 @@
             return h("section", { className: "dsh-tavern-settings-group dsh-tavern-display-preferences" },
                 row("隐藏上下文注入和思考过程", "隐藏对话中的上下文注入、已思考和思考过程。仅影响显示，正文、模型请求和存档内容不变。",
                     preferences?.hideContextAndReasoning === true, value => ({ hideContextAndReasoning: value })),
+                h("label", { className: "dsh-tavern-settings-row dsh-tavern-background-task" },
+                    h("div", { className: "dsh-tavern-settings-copy" }, h("strong", { className: "dsh-tavern-settings-title" }, "渲染深度"),
+                        h("p", { className: "dsh-tavern-settings-desc" }, "只有最近几轮渲染人物卡的 HTML 界面（状态栏、美化面板等），更早的轮次只显示文字，可点「渲染此轮」单独打开。重美化的卡渲染太多轮会很卡。")),
+                    h("select", { "aria-label": "渲染深度", value: String(preferences?.renderDepth ?? 3), disabled: preferences === null || busy,
+                        onChange: event => save({ renderDepth: Number(event.target.value) }) },
+                        [1, 2, 3, 5, 10, 20].map(depth => h("option", { key: depth, value: String(depth) }, "最近 " + depth + " 轮")),
+                        h("option", { value: "0" }, "不限"))),
                 notice ? h("p", { className: "dsh-tavern-settings-desc", role: "status" }, notice) : null);
         }
 

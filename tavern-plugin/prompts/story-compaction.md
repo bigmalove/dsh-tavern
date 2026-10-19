@@ -1,4 +1,4 @@
-Condense prior history into structured summary for plot continuation. Include main plot, old summaries & worldbook snapshot facts. Newer main text overrides conflicting old summaries.
+Condense prior history into structured summary for plot continuation. Include main plot & worldbook snapshot facts. Newer main text overrides conflicting old summaries.
 
 只输出摘要本身，按以下八段组织，某段无内容写「ToPopulate」：
 
@@ -13,8 +13,8 @@ Condense prior history into structured summary for plot continuation. Include ma
 
 记录要求：
 保留专名、数字、称谓与用户原话中的关键表述，但不要冗余，拒绝无意义的修辞
-一次性描写不得写成永久设定，剧情尽量压缩
+一次性描写不得写成永久设定
 遇到取舍时优先保：用户意志 > 人物关系 > 未兑现伏笔 > 当前生效设定 > 历史事件细节 > 当前现场；结果 > 过程；结构关系 > 场景叙述；暗线发展 > 过期主线; 长期影响 > 短期事态
 只总结已发生的内容，不续写、不猜测、不评价，只输出摘要
-已有摘要也一起归纳，合并重复内容，省略琐碎和失效的细节，使摘要显著短于原文
+旧卷会原样保留、不再重压，所以本次摘要不以简短为目标：保留新剧情的关键条件、细节和原话，只省略琐碎和失效的内容；但总篇幅仍须明显短于原文。旧卷如何处理见下方「本次摘要的写法」
 核心要务：提炼关键信息，精炼有效的规则集，而非叙述性描写；结构化摘要，各段不要重复冗余，职责清晰

@@ -18,8 +18,9 @@ export function projectCompactionRequest(request) {
  * The single Tavern hook for summary requests. Every rewrite of the request
  * (metadata projection, then `prepare`, e.g. the story prompt) is applied here as
  * a plain transformation; only the final summarizer calls re-enter llm/stream.
- * `prepare` returns `{ request, appendix? }`; the appendix text is added to a
- * successful summary as its own block (the native engine keeps every text block).
+ * `prepare` returns `{ request, prefix?, appendix? }`: on a successful summary the prefix
+ * texts go before it and the appendix text after it, each as its own block (the native
+ * engine keeps every text block).
  * Separate re-dispatching hooks previously re-processed each other's copies
  * (#146) and collided on their lineage marks (#148).
  */
@@ -31,9 +32,23 @@ export function installCompactionRequestProjection(ctx, ownsSession, prepare = a
     return (async function * () {
       if (!(await ownsSession(request.sessionId))) { yield* next(); return }
       const prepared = await prepare(projectCompactionRequest(request))
-      yield* withAppendix(withTextFallback(ctx, prepared.request, stream), prepared.appendix)
+      yield* withAppendix(withPrefix(withTextFallback(ctx, prepared.request, stream), prepared.prefix), prepared.appendix)
     })()
   })
+}
+
+// Blocks placed before the summarizer's output (carried story volumes). Emitted only once
+// the summary succeeded, so a failed attempt leaves nothing behind.
+async function* withPrefix(events, prefix) {
+  if (!Array.isArray(prefix) || prefix.length === 0) { yield* events; return }
+  const chunks = []
+  for await (const event of events) chunks.push(event)
+  if (!chunks.some(event => event?.type === 'finish' && event.reason?.kind === 'stop')) { yield* chunks; return }
+  for (const [index, text] of prefix.entries()) {
+    yield { type: 'block-start', index, blockType: 'text' }
+    yield { type: 'block-end', index, block: { type: 'text', text } }
+  }
+  for (const event of chunks) yield Number.isInteger(event?.index) ? { ...event, index: event.index + prefix.length } : event
 }
 
 async function* withAppendix(events, appendix) {

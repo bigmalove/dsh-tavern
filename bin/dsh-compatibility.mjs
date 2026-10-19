@@ -36,9 +36,15 @@ export function dshCompatibilityNotice(currentVersion = '', host = 'desktop') {
   const allowed = allowedDshVersions.join('、')
   if (!currentVersion) return `允许的 DSH 版本：${allowed}；${hostGuidance(host)}`
   if (classifyDshVersion(currentVersion, compatibility).status === 'allowed') return `当前 DSH ${currentVersion} 在允许清单内。`
-  // DSH 0.1.x hosts: the release for them lives on the stable branch (installed copies there update from it).
-  const stable = /^0\.1\./.test(currentVersion) ? `\n要继续使用 DSH ${currentVersion}，请改装稳定版（跟随 stable 分支，安装命令见 ${STABLE_GUIDE}），重新运行一次即可，以后的更新跟随稳定版。` : ''
-  return `当前 DSH ${currentVersion} 不在允许清单内；已停止安装，不会修改宿主版本。允许的版本：${allowed}；${hostGuidance(host)}${stable}`
+  // DSH 0.1.x hosts (DSH Desktop 2.0.13, the old one-click package, DSHA 0.1.5): say first how to
+  // get this release, then that the stable branch keeps serving the current host.
+  if (/^0\.1\./.test(currentVersion)) {
+    const upgrade = host === 'android'
+      ? `先升级到 DSHA ${recommendedDshaVersion}（${dshaReleasesUrl}）`
+      : `先安装官方 DeepSeek Harness ${recommendedDesktopVersion}（${desktopReleasesUrl}）或社区版 DSH NEXT（https://github.com/anywhere-labs/dsh-desktop/releases），打开一次后从托盘退出`
+    return `已停止安装，现有酒馆、存档和宿主都没有改动。\n当前宿主是 DSH ${currentVersion}（DSH Desktop 2.0.13 / 旧一键安装包 / DSHA 0.1.5），装不了这个版本（需要 DSH ${allowed}）。\n要用这个版本：${upgrade}，再重新运行安装；旧一键安装包的存档在它自己的目录里，换宿主后按 https://github.com/flizzywine/dsh-tavern/blob/main/docs/data-import.md 导入。\n想继续用现在的宿主：请改装稳定版，安装方法见 ${STABLE_GUIDE}`
+  }
+  return `当前 DSH ${currentVersion} 不在允许清单内；已停止安装，不会修改宿主版本。允许的版本：${allowed}；${hostGuidance(host)}`
 }
 
 export function assertCompatibleDshVersion(currentVersion, host = 'cli') {
@@ -56,9 +62,15 @@ let isEntryPoint = false
 try { isEntryPoint = Boolean(process.argv[1]) && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)) } catch {}
 if (isEntryPoint) {
   if (process.argv[2] === '--check') {
-    const version = extractDshVersion(process.argv[4])
-    assertCompatibleDshVersion(version, process.argv[3])
-    if (process.argv[3] !== 'cli') console.log(dshCompatibilityNotice(version, process.argv[3]))
+    // A refusal is an expected outcome: print the guidance, not a Node stack trace.
+    try {
+      const version = extractDshVersion(process.argv[4])
+      assertCompatibleDshVersion(version, process.argv[3])
+      if (process.argv[3] !== 'cli') console.log(dshCompatibilityNotice(version, process.argv[3]))
+    } catch (error) {
+      console.error(error.message)
+      process.exit(1)
+    }
   } else {
     console.log(process.argv[2] === '--version' ? adaptedDshVersion : dshCompatibilityNotice('', process.argv[3] || 'desktop'))
   }

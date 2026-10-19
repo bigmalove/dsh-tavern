@@ -1,5 +1,5 @@
-import { createImportContextPreparation, needsImportContextPreparation } from '../domain/import-context-preparation.js'
-import { createStoryCompactionRequest, nativelyRetainedRounds, retainRecentStoryRounds, usesStoryCompaction } from '../domain/story-compaction.js'
+import { createImportContextPreparation } from '../domain/import-context-preparation.js'
+import { createStoryCompactionRequest, nativelyRetainedRounds, retainRecentStoryRounds, storyVolumePlan, usesStoryCompaction } from '../domain/story-compaction.js'
 import { installCompactionRequestProjection } from '../domain/compaction-request.js'
 import { installWorkspaceInstructionPresentation } from '../domain/workspace-instruction-presentation.js'
 import { presentModelError } from '../domain/model-error-presentation.js'
@@ -51,14 +51,20 @@ export function registerModelStreamHooks({
     // verbatim after the summary; other sessions keep DSH's prompt.
     const chat = await chatForSession(str(request.sessionId))
     if (!usesStoryCompaction(chat)) return { request }
-    if (needsImportContextPreparation(chat)) throw new Error('导入对话尚未完成首次上下文容量检查，暂不调用摘要模型')
+    // An imported game compacts right away: an oversized history is summarized in segments
+    // (bounded-compaction.js), so the first-play capacity check is not a precondition.
     // Seam to the plugin layer: plugins may add what the summary must keep.
     const notes = pluginCompactionNotes ? await pluginCompactionNotes({ gameId: str(request.sessionId) }).catch(() => []) : []
-    const instruction = [runtimePrompt('story-compaction'), ...(notes.length ? ['【插件附加的摘要要求】', ...notes.map(note => note.text)] : [])].join('\n\n')
+    const session = sessionStore.get(request.sessionId) || agentRegistry.get(request.sessionId)?.session
+    const retention = await storyRetention(request)
+    const natively = nativelyRetainedRounds(session, request)
+    // Which story turns this compaction folds: everything but the rounds kept verbatim.
+    const kept = retainRecentStoryRounds(request, retention.rounds - natively, retention).kept || 0
+    const turns = (chat.messages || []).filter(message => message?.role === 'assistant' && Number(message.turn) > 0).map(message => Number(message.turn))
+    const volumes = storyVolumePlan(request, { through: turns[turns.length - 1 - kept - natively], budget: retention.volumeBudget, estimate: retention.estimate })
+    const instruction = [runtimePrompt('story-compaction'), volumes.instruction, ...(notes.length ? ['【插件附加的摘要要求】', ...notes.map(note => note.text)] : [])].join('\n\n')
     const story = createStoryCompactionRequest(request, instruction)
-    const session = sessionStore.get(story.sessionId) || agentRegistry.get(story.sessionId)?.session
-    const retention = await storyRetention(story)
-    return retainRecentStoryRounds(story, retention.rounds - nativelyRetainedRounds(session, story), retention)
+    return { ...retainRecentStoryRounds(story, retention.rounds - natively, retention), prefix: volumes.prefix }
   })
 
   async function gameChildSession(sessionId) {

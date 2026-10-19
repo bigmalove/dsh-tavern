@@ -1,5 +1,5 @@
-// The top bar and the start page share one catalog of right-sidebar pages, so a
-// page pinned from the start page is the same entry the settings list offers.
+// The top bar, the start page and the settings list share one catalog of
+// right-sidebar pages, so a page offered in settings is the one the start page opens.
 const TAVERN_HEADER_DEFAULT = Object.freeze({ display: "icon-text", items: Object.freeze(["dsh-tavern:status", "header:export"]) });
 const TAVERN_HEADER_NOT_FOLDED = Object.freeze(["dsh-tavern:status", "header:export"]);
 
@@ -24,8 +24,6 @@ const TAVERN_START_ICON_PATHS = Object.freeze({
 	'card-memory': 'M5 3h14v18H5zM8 7h8M8 11h8M8 15h5',
 	fallback: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z'
 });
-
-const TAVERN_HEADER_PIN_PATH = 'M12 17v5M9 3h6l-1 6 4 4v2H6v-2l4-4z';
 
 // One icon for a page, wherever it is drawn: the start page card, the top bar
 // button, or the settings list. Tavern tabs keep their path; a plugin tab hands
@@ -133,27 +131,13 @@ function useTavernHeaderItems() {
 function TavernStartCards(props) {
 	const { newTabOptions, onNewTab } = props;
 	const h = React.createElement;
-	const header = useTavernHeaderItems();
-	const pinned = new Set(header.items);
 	const groups = tavernStartGroups(newTabOptions, props.pluginGroups);
-	function togglePin(id) {
-		const items = pinned.has(id) ? header.items.filter(value => value !== id) : [...header.items, id];
-		Promise.resolve(displayPreferences.save({ headerItems: { display: header.display, items: items } }))
-			.catch(error => tavernErrorHub.report("保存顶栏设置", error));
-	}
-	const css = `.dsh-tavern-start{box-sizing:border-box;padding:18px 16px 24px;overflow:auto;min-height:0;width:100%;color:var(--dsw-alias-label-primary);container-type:inline-size}.dsh-tavern-start section+section{margin-top:22px}.dsh-tavern-start h3{font-size:12px;font-weight:500;color:var(--dsw-alias-label-tertiary);margin:0 2px 8px}.dsh-tavern-start-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,104px),1fr));gap:8px}.dsh-tavern-start-cell{position:relative;display:flex;min-width:0}.dsh-tavern-start-card{appearance:none;font:inherit;font-size:13px;color:inherit;background:var(--dsw-specific-input-major,#fff);border:1px solid var(--dsw-alias-border-l2,#ddd);border-radius:12px;min-width:0;width:100%;min-height:88px;padding:14px 8px 12px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:9px;cursor:pointer;transition:border-color 140ms ease,transform 140ms ease,box-shadow 140ms ease}.dsh-tavern-start-card:hover:not(:disabled){border-color:var(--dsh-tavern-accent-border);box-shadow:0 4px 14px rgba(0,0,0,.06);transform:translateY(-1px)}.dsh-tavern-start-card:active:not(:disabled){transform:none}.dsh-tavern-start-card:focus-visible{outline:2px solid var(--dsh-tavern-accent);outline-offset:2px}.dsh-tavern-start-card:disabled{opacity:.45;cursor:default}.dsh-tavern-start-icon{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:var(--dsh-tavern-accent-soft);color:var(--dsh-tavern-accent)}.dsh-tavern-start-icon svg{width:20px;height:20px}.dsh-tavern-start-label{text-align:center;line-height:1.4;overflow-wrap:anywhere}.dsh-tavern-start-pin{position:absolute;top:5px;right:5px;width:24px;height:24px;min-width:24px;padding:0;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-tertiary);display:grid;place-items:center;cursor:pointer;opacity:0;transition:opacity 140ms ease,background 140ms ease,color 140ms ease}.dsh-tavern-start-cell:hover .dsh-tavern-start-pin,.dsh-tavern-start-cell:focus-within .dsh-tavern-start-pin,.dsh-tavern-start-pin[aria-pressed="true"]{opacity:1}.dsh-tavern-start-pin:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsh-tavern-start-pin[aria-pressed="true"]{color:var(--dsh-tavern-accent);background:var(--dsh-tavern-accent-soft)}.dsh-tavern-start-pin:focus-visible{outline:2px solid var(--dsh-tavern-accent);outline-offset:1px}@media (pointer: coarse){.dsh-tavern-start-pin{opacity:1;width:32px;height:32px}}@media (prefers-reduced-motion:reduce){.dsh-tavern-start-card,.dsh-tavern-start-pin{transition:none}.dsh-tavern-start-card:hover:not(:disabled){transform:none}}@container(max-width:260px){.dsh-tavern-start-grid{gap:6px}.dsh-tavern-start-card{font-size:12px;padding:10px 6px;min-height:76px}}`;
+	const css = `.dsh-tavern-start{box-sizing:border-box;padding:18px 16px 24px;overflow:auto;min-height:0;width:100%;color:var(--dsw-alias-label-primary);container-type:inline-size}.dsh-tavern-start section+section{margin-top:22px}.dsh-tavern-start h3{font-size:12px;font-weight:500;color:var(--dsw-alias-label-tertiary);margin:0 2px 8px}.dsh-tavern-start-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,104px),1fr));gap:8px}.dsh-tavern-start-card{appearance:none;font:inherit;font-size:13px;color:inherit;background:var(--dsw-specific-input-major,#fff);border:1px solid var(--dsw-alias-border-l2,#ddd);border-radius:12px;min-width:0;min-height:88px;padding:14px 8px 12px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:9px;cursor:pointer;transition:border-color 140ms ease,transform 140ms ease,box-shadow 140ms ease}.dsh-tavern-start-card:hover:not(:disabled){border-color:var(--dsh-tavern-accent-border);box-shadow:0 4px 14px rgba(0,0,0,.06);transform:translateY(-1px)}.dsh-tavern-start-card:active:not(:disabled){transform:none}.dsh-tavern-start-card:focus-visible{outline:2px solid var(--dsh-tavern-accent);outline-offset:2px}.dsh-tavern-start-card:disabled{opacity:.45;cursor:default}.dsh-tavern-start-icon{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:var(--dsh-tavern-accent-soft);color:var(--dsh-tavern-accent)}.dsh-tavern-start-icon svg{width:20px;height:20px}.dsh-tavern-start-label{text-align:center;line-height:1.4;overflow-wrap:anywhere}@media (prefers-reduced-motion:reduce){.dsh-tavern-start-card{transition:none}.dsh-tavern-start-card:hover:not(:disabled){transform:none}}@container(max-width:260px){.dsh-tavern-start-grid{gap:6px}.dsh-tavern-start-card{font-size:12px;padding:10px 6px;min-height:76px}}`;
 	return h('div', { className: 'dsh-tavern-start' }, h('style', null, css), groups.map(([title, options], index) => {
 		if (!options.length) return null;
-		return h('section', { key: index + ':' + title, 'aria-label': title }, h('h3', null, title), h('div', { className: 'dsh-tavern-start-grid' }, options.map(option => {
-			const on = pinned.has(option.id);
-			const pinLabel = on ? '从顶栏移除' : '固定到顶栏';
-			return h('div', { key: option.id, className: 'dsh-tavern-start-cell' },
-				h('button', { type: 'button', className: 'dsh-tavern-start-card', disabled: option.disabled === true, title: option.label, onClick: () => onNewTab(option.id) },
-					h('span', { className: 'dsh-tavern-start-icon', 'aria-hidden': true }, tavernStartIcon(option.id, option)),
-					h('span', { className: 'dsh-tavern-start-label' }, option.label)),
-				h('button', { type: 'button', className: 'dsh-tavern-start-pin', 'data-tavern-start-pin': option.id, 'aria-pressed': on, 'aria-label': pinLabel, title: pinLabel, onClick: () => togglePin(option.id) },
-					h('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: on ? 'currentColor' : 'none', stroke: 'currentColor', strokeWidth: on ? 2.2 : 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': 'true' }, h('path', { d: TAVERN_HEADER_PIN_PATH }))));
-		})));
+		return h('section', { key: index + ':' + title, 'aria-label': title }, h('h3', null, title), h('div', { className: 'dsh-tavern-start-grid' }, options.map(option => h('button', { key: option.id, type: 'button', className: 'dsh-tavern-start-card', disabled: option.disabled === true, title: option.label, onClick: () => onNewTab(option.id) },
+			h('span', { className: 'dsh-tavern-start-icon', 'aria-hidden': true }, tavernStartIcon(option.id, option)),
+			h('span', { className: 'dsh-tavern-start-label' }, option.label)))));
 	}));
 }
 

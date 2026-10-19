@@ -19,18 +19,20 @@ test('重生成只藏被替换的正文：replacingDshTurns 与 suppressedDshTur
   assert.deepEqual(view.suppressedDshTurns, [5])
 })
 
-test('旧存档把临时压制写在 suppressedDshTurns 里，视图按"只换正文"读回来', () => {
-  // 0.2.1 之前的存档形状：临时压制混进了整轮作废列表。
-  const view = viewOf({
-    suppressedDshTurns: [1], regenInProgress: true,
-    regenRecovery: { id: 'op', temporarySuppressedTurn: 1 }
-  })
-  assert.deepEqual(view.replacingDshTurns, [1])
-  assert.deepEqual(view.suppressedDshTurns, [], '整轮作废列表里不能再留着这一楼，否则输入会被一起收掉')
+test('同一回合不会同时出现在两个列表里，否则玩家输入会被连带隐藏', () => {
+  const view = viewOf({ replacingDshTurns: [3], suppressedDshTurns: [3, 6] })
+  assert.deepEqual(view.replacingDshTurns, [3])
+  assert.deepEqual(view.suppressedDshTurns, [6])
 })
 
-test('没在重生成时，旧的 temporarySuppressedTurn 不再生效', () => {
-  const view = viewOf({ suppressedDshTurns: [3], regenRecovery: { temporarySuppressedTurn: 1 } })
+test('中断在生成中的存档按恢复记录读回：重启后输入仍然可见', () => {
+  const view = viewOf({ regenInProgress: true, regenRecovery: { id: 'op', temporaryReplacingTurn: 1 } })
+  assert.deepEqual(view.replacingDshTurns, [1])
+  assert.deepEqual(view.suppressedDshTurns, [])
+})
+
+test('没在重生成时，残留的恢复记录不再生效', () => {
+  const view = viewOf({ suppressedDshTurns: [3], regenRecovery: { temporaryReplacingTurn: 1 } })
   assert.deepEqual(view.replacingDshTurns, [])
   assert.deepEqual(view.suppressedDshTurns, [3])
 })
@@ -40,7 +42,7 @@ test('没在重生成时，旧的 temporarySuppressedTurn 不再生效', () => {
 const projectedEvents = [
   { seq: 0, type: 'user/message', data: { role: 'user', source: { kind: 'user' } } },
   { seq: 1, type: 'assistant/message', data: { turn: 1, message: { source: { kind: 'model', provider: 'p', model: 'm' }, content: [{ type: 'text', text: '开场' }] } } },
-  { seq: 2, type: 'assistant/message', data: { turn: 11, message: { source: { kind: 'model', provider: 'p', model: 'm' }, content: [{ type: 'text', text: '拒答' }] } } },
+  { seq: 2, type: 'assistant/message', data: { turn: 11, message: { source: { kind: 'model', provider: 'p', model: 'm' }, content: [{ type: 'text', text: '被替换的正文' }] } } },
   { seq: 3, type: 'assistant/message', surfaceOp: { op: 'replace', startSeq: 2, endSeq: 2 }, sourceEventSeqs: [2],
     data: { turn: 12, message: { source: { kind: 'model', provider: 'p', model: 'm', tavernStoryTurn: 4 }, content: [{ type: 'text', text: '新正文' }] } } }
 ]

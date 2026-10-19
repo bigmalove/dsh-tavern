@@ -113,10 +113,9 @@ export function createSessionStateView({ activity: activityOf, evidence: evidenc
   function replacingDshTurnsOf(chat) {
     const turns = new Set((Array.isArray(chat.replacingDshTurns) ? chat.replacingDshTurns : [])
       .map(Number).filter(turn => Number.isSafeInteger(turn) && turn > 0))
-    // Old saves wrote the temporary suppression into suppressedDshTurns; the
-    // marker in regenRecovery still says which turn was only being replaced.
+    // A save interrupted mid-regeneration keeps the marker in its recovery record.
     if (chat.regenInProgress === true) {
-      const temporary = Number(chat.regenRecovery?.temporarySuppressedTurn)
+      const temporary = Number(chat.regenRecovery?.temporaryReplacingTurn)
       if (Number.isSafeInteger(temporary) && temporary > 0) turns.add(temporary)
     }
     return [...turns].sort((left, right) => left - right)
@@ -144,7 +143,7 @@ export function createSessionStateView({ activity: activityOf, evidence: evidenc
       && Array.isArray(events) && Object.isFrozen(events) && Array.isArray(nodes) && Number.isSafeInteger(generation)
     const key = native ? JSON.stringify([chat.sessionId,chat.messages?.length,chat.tavernHelperLifecycleRevision,
       chat.importHistory?.rescue,chat.importHistory?.operationId,chat.hiddenDshErrorTurns,chat.suppressedDshTurns,
-      chat.replacingDshTurns, chat.regenInProgress, chat.regenRecovery?.temporarySuppressedTurn,
+      chat.replacingDshTurns, chat.regenInProgress, chat.regenRecovery?.temporaryReplacingTurn,
       sharedMappings ? mappingIds.get(mappings) : chat.regeneratedDshTurns,
       nodes.length,nodes[0],nodes.at(-1),generation]) : null
     const previous = rollbackCache.get(chat.id)

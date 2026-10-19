@@ -216,9 +216,40 @@ export function createTavernConversationRegistry(options = {}) {
     return result
   }
 
+  // The index and the session links are derived from the stored chats. A game on disk
+  // that neither lists is registered again, so a lost or replaced index (#251) never hides
+  // a save. Deletion removes the chat before its rows, so a deleted game cannot return.
+  async function recoverUnlisted(chatIds) {
+    const listed = new Set(chatRows(await store.readIndex()).map(item => str(item && item.id)))
+    const recovered = []
+    for (const id of chatIds) {
+      if (listed.has(str(id))) continue
+      let chat
+      try { chat = await store.readChat(id) } catch (error) { console.warn('dsh-tavern: 无法读取未登记的存档', id, error?.message || error); continue }
+      if (!chat || str(chat.id) !== str(id)) continue
+      const sessionId = str(chat.sessionId)
+      if (sessionId !== '') {
+        await store.updateLinks(function (value) {
+          const current = Object.assign({}, normalizeLinks(value))
+          if (typeof current[sessionId] === 'string' && current[sessionId] !== '') return undefined
+          current[sessionId] = chat.id
+          return current
+        })
+      }
+      await store.updateIndex(index => {
+        const rows = chatRows(index)
+        if (rows.some(item => item && item.id === chat.id)) return undefined
+        return { ...index, chats: rows.concat([chatSummary(chat)]) }
+      })
+      recovered.push(chat.id)
+    }
+    return recovered
+  }
+
   async function remove(chatId) {
     const id = str(chatId)
     if (id === '') return { deleted: false }
+    await store.removeChat(id)
     await store.updateIndex(index => {
       const nextRows = chatRows(index).filter(item => item.id !== id)
       return nextRows.length === chatRows(index).length ? undefined : { ...index, chats: nextRows }
@@ -231,9 +262,8 @@ export function createTavernConversationRegistry(options = {}) {
       }
       return changed ? current : undefined
     })
-    await store.removeChat(id)
     return { deleted: true }
   }
 
-  return { links, resolve, resolveState, resolveSceneImageState, resolveBackgroundConfig, publish, sync, list, touch, remove }
+  return { links, resolve, resolveState, resolveSceneImageState, resolveBackgroundConfig, publish, sync, list, touch, remove, recoverUnlisted }
 }

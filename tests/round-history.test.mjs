@@ -338,7 +338,7 @@ test('重新生成期间临时标记被重做的原生回合正在替换，提�
   h.beforeGenerate(async () => {
     during = {
       regen: h.chat.regenInProgress,
-      temporary: h.chat.regenRecovery && h.chat.regenRecovery.temporarySuppressedTurn,
+      temporary: h.chat.regenRecovery && h.chat.regenRecovery.temporaryReplacingTurn,
       suppressed: (Array.isArray(h.chat.suppressedDshTurns) ? h.chat.suppressedDshTurns : []).slice(),
       replacing: (Array.isArray(h.chat.replacingDshTurns) ? h.chat.replacingDshTurns : []).slice(),
       texts: h.chat.messages.map(message => message.text)

@@ -376,6 +376,17 @@ window.__ModuleLoader__.load({
 		// @include modules/session-compat.js
 		const beginSessionViewRead = createSessionViewReader();
 
+		// A save whose session log cannot be upgraded may not open at all, so this works from the
+		// conversation menu too: the structure goes to the developer, the story text stays home.
+		async function downloadSessionDiagnostics(args, sessionId) {
+			const result = await rpc("exportSessionDiagnostics", args, sessionId);
+			const url = URL.createObjectURL(new Blob([result.text], { type: "application/json;charset=utf-8" }));
+			const link = document.createElement("a");
+			link.href = url; link.download = result.filename;
+			document.body.appendChild(link); link.click(); link.remove();
+			window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+		}
+
 		function rpc(method, args, sessionId, requestOptions) {
 			const runtimeControl = ["claimTavernScriptWork", "startTavernScriptWork", "getTavernScriptWorkState", "heartbeatTavernScriptRuntime", "completeTavernHelperEvent", "releaseTavernHelperRuntime"].includes(method);
 			const controlChannel = runtimeControl && typeof tavernSessionSignals !== "undefined" && typeof tavernSessionSignals.control === "function" ? tavernSessionSignals : null;

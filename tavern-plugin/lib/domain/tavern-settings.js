@@ -21,6 +21,42 @@ function promptSetName(value) {
   return name
 }
 
+export const DEFAULT_RENDER_DEPTH = 3
+function renderDepthOf(value) { return Number.isSafeInteger(value) && value >= 0 && value <= 100 ? value : DEFAULT_RENDER_DEPTH }
+
+// Header shortcuts: { display, items }. The items are page ids — a Tavern tab
+// (dsh-tavern:*), a plugin tab (tavern-plugin:*), the export menu (header:export)
+// or any other id the right sidebar registers.
+const HEADER_ITEM_LIMIT = 24
+const HEADER_ITEM_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,79}$/
+const HEADER_DISPLAYS = ['icon', 'icon-text']
+export const DEFAULT_HEADER_ITEMS = Object.freeze({ display: 'icon-text', items: Object.freeze(['dsh-tavern:status', 'header:export']) })
+
+export function headerItems(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('无效的顶栏设置')
+  const display = value.display === undefined ? DEFAULT_HEADER_ITEMS.display : value.display
+  if (!HEADER_DISPLAYS.includes(display)) throw new Error('无效的顶栏设置')
+  const source = value.items === undefined ? [] : value.items
+  if (!Array.isArray(source)) throw new Error('无效的顶栏设置')
+  const items = []
+  for (const item of source) {
+    if (typeof item !== 'string' || !HEADER_ITEM_PATTERN.test(item)) throw new Error('无效的顶栏设置')
+    if (!items.includes(item)) items.push(item)
+  }
+  return { display, items: items.slice(0, HEADER_ITEM_LIMIT) }
+}
+
+// Stored documents are read leniently: an older or hand-edited value falls back
+// to the default instead of breaking every settings read.
+export function readHeaderItems(value) {
+  if (value === null || value === undefined) return { display: DEFAULT_HEADER_ITEMS.display, items: [...DEFAULT_HEADER_ITEMS.items] }
+  try {
+    return headerItems(value)
+  } catch (_) {
+    return { display: DEFAULT_HEADER_ITEMS.display, items: [...DEFAULT_HEADER_ITEMS.items] }
+  }
+}
+
 export function uniqueName(names, base) {
   const taken = new Set(names)
   if (!taken.has(base)) return base
@@ -116,39 +152,6 @@ export function normalizeBackgroundTasks(value) {
 }
 
 
-// Header shortcuts: { display, items }. The items are page ids — a Tavern tab
-// (dsh-tavern:*), a plugin tab (tavern-plugin:*), the export menu (header:export)
-// or any other id the right sidebar registers.
-const HEADER_ITEM_LIMIT = 24
-const HEADER_ITEM_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,79}$/
-const HEADER_DISPLAYS = ['icon', 'icon-text']
-export const DEFAULT_HEADER_ITEMS = Object.freeze({ display: 'icon-text', items: Object.freeze(['dsh-tavern:status', 'header:export']) })
-
-export function headerItems(value) {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('无效的顶栏设置')
-  const display = value.display === undefined ? DEFAULT_HEADER_ITEMS.display : value.display
-  if (!HEADER_DISPLAYS.includes(display)) throw new Error('无效的顶栏设置')
-  const source = value.items === undefined ? [] : value.items
-  if (!Array.isArray(source)) throw new Error('无效的顶栏设置')
-  const items = []
-  for (const item of source) {
-    if (typeof item !== 'string' || !HEADER_ITEM_PATTERN.test(item)) throw new Error('无效的顶栏设置')
-    if (!items.includes(item)) items.push(item)
-  }
-  return { display, items: items.slice(0, HEADER_ITEM_LIMIT) }
-}
-
-// Stored documents are read leniently: an older or hand-edited value falls back
-// to the default instead of breaking every settings read.
-export function readHeaderItems(value) {
-  if (value === null || value === undefined) return { display: DEFAULT_HEADER_ITEMS.display, items: [...DEFAULT_HEADER_ITEMS.items] }
-  try {
-    return headerItems(value)
-  } catch (_) {
-    return { display: DEFAULT_HEADER_ITEMS.display, items: [...DEFAULT_HEADER_ITEMS.items] }
-  }
-}
-
 export function normalizePlayDefaults(value) {
   const input = object(value)
   return { playerName: typeof input.playerName === 'string' ? input.playerName.trim().slice(0, 80) || '你' : '你',
@@ -200,6 +203,15 @@ export function applyTavernSettingsPatch(current, patch) {
   if (Object.hasOwn(input, 'autoOpenStatusPanel')) {
     if (typeof input.autoOpenStatusPanel !== 'boolean') throw new Error('自动打开酒馆状态面板设置必须是布尔值')
     next.autoOpenStatusPanel = input.autoOpenStatusPanel
+  }
+  if (Object.hasOwn(input, 'renderDepth')) {
+    if (!Number.isSafeInteger(input.renderDepth) || input.renderDepth < 0 || input.renderDepth > 100) throw new Error('渲染深度必须是 0 到 100 的整数')
+    next.renderDepth = input.renderDepth
+  }
+  if (Object.hasOwn(input, 'headerItems')) {
+    // null restores the shipped top bar.
+    if (input.headerItems === null) delete next.headerItems
+    else next.headerItems = headerItems(input.headerItems)
   }
   if (Object.hasOwn(input, 'castPresentation')) {
     if (typeof input.castPresentation !== 'boolean') throw new Error('对话头像设置必须是布尔值')
@@ -285,6 +297,8 @@ export function presentTavernSettings(document, defaults) {
     storyToolCall: object(document).storyToolCall === true,
     storyHistoryToolCall: object(document).storyHistoryToolCall === true,
     castPresentation: object(document).castPresentation === true,
+    // Only the latest floors run a card's HTML interface; 0 renders every floor.
+    renderDepth: renderDepthOf(object(document).renderDepth),
     autoOpenStatusPanel: object(document).autoOpenStatusPanel !== false,
     compatibilityMode: false,
     sillyModeEnabled: false,

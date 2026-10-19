@@ -124,3 +124,34 @@ test('共享磁盘索引的并发发布、同步、打开和删除保留各自�
   assert.equal(await store.readChat('removed'), undefined)
   assert.deepEqual(Object.keys(await store.readLinks()).sort(), ['session-a', 'session-b', 'session-c'])
 })
+
+test('磁盘上有、索引里没有的存档会重新登记，已登记和已关联的不受影响（#251）', async function () {
+  const store = memoryStore({
+    index: { schemaVersion: 2, cards: [], chats: [{ id: 'chat-new', cardName: '新', mode: 'story' }] },
+    links: { 'session-new': 'chat-new', 'session-taken': 'chat-new' },
+    chats: {
+      'chat-new': { id: 'chat-new', sessionId: 'session-new', cardName: '新', updatedAt: 30 },
+      'chat-lost': { id: 'chat-lost', sessionId: 'session-lost', cardName: '旧', title: '旧存档', mode: 'story', createdAt: 10, updatedAt: 20 },
+      'chat-taken': { id: 'chat-taken', sessionId: 'session-taken', cardName: '别名', updatedAt: 5 },
+    }
+  })
+  const registry = createTavernConversationRegistry({ store: store.adapter })
+  assert.deepEqual(await registry.recoverUnlisted(['chat-new', 'chat-lost', 'chat-taken', 'chat-gone']), ['chat-lost', 'chat-taken'])
+  const { index, links } = store.snapshot()
+  assert.deepEqual(index.chats.map(row => row.id), ['chat-new', 'chat-lost', 'chat-taken'])
+  assert.equal(index.schemaVersion, 2)
+  assert.equal(index.chats[1].title, '旧存档')
+  assert.equal(links['session-lost'], 'chat-lost')
+  assert.equal(links['session-taken'], 'chat-new', 'an existing link is never overwritten')
+  assert.deepEqual(await registry.recoverUnlisted(['chat-new', 'chat-lost']), [], 'a second pass changes nothing')
+})
+
+test('删除先删存档本体再删登记，删到一半中断也不会被重新登记', async function () {
+  const store = memoryStore({ failures: {} })
+  const registry = createTavernConversationRegistry({ store: store.adapter })
+  await registry.publish({ id: 'chat-x', sessionId: 'session-x', cardName: 'X', updatedAt: 1 })
+  store.adapter.updateIndex = async () => { throw new Error('interrupted') }
+  await assert.rejects(registry.remove('chat-x'), /interrupted/)
+  assert.equal(store.snapshot().chats['chat-x'], undefined)
+  assert.deepEqual(await registry.recoverUnlisted(['chat-x']), [])
+})

@@ -24,10 +24,8 @@ export const cordisToolNames = Object.freeze([
   'cordis_undefine'
 ])
 
-// DSH keeps the legacy editor package while the Web profile enables the newer
-// file-tool suite. Treat both generations as one capability boundary.
+// DSH's file-tool suite (dsh-tool-fs), treated as one capability boundary.
 export const dshFileToolNames = Object.freeze([
-  'str_replace_editor',
   'read',
   'write',
   'edit',

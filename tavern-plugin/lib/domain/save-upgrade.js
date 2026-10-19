@@ -4,7 +4,7 @@ import { migrateInstalledSessions } from './session-upgrade.js'
 // service then completes each game's journal cutover under its storage lock.
 export const prepareSaveUpgrade = migrateInstalledSessions
 
-export function createSaveUpgrade({ store, inspectSessions, assertIdle = () => {}, notify = () => {} }) {
+export function createSaveUpgrade({ store, inspectSessions, detachSessions, assertIdle = () => {}, notify = () => {} }) {
   const jobs = new Map(), pending = new Set()
   async function inspect(id) {
     const version = await store.version(id)
@@ -18,7 +18,8 @@ export function createSaveUpgrade({ store, inspectSessions, assertIdle = () => {
     const { sessions, storage } = await inspect(id)
     const job = jobs.get(id)
     const completed = sessions.ready && storage === 'current'
-    return { target: 'dsh-0.2.1', sessions, storage, phase: completed ? 'completed' : (job?.phase !== 'completed' && job?.phase) || (sessions.ready ? 'idle' : 'failed'),
+    const blocked = !sessions.ready && !(detachSessions && sessions.detachable?.length)
+    return { target: 'dsh-0.2.1', sessions, storage, phase: completed ? 'completed' : (job?.phase !== 'completed' && job?.phase) || (blocked ? 'failed' : 'idle'),
       stage: completed ? 'completed' : job?.stage || 'sessions',
       ...(!completed && (job?.error || sessions.error) ? { error: job?.error || sessions.error } : {}) }
   }
@@ -29,8 +30,14 @@ export function createSaveUpgrade({ store, inspectSessions, assertIdle = () => {
     jobs.set(id, job)
     const task = (async () => {
       try {
-        const { chat, sessions } = await inspect(id)
+        let { chat, sessions } = await inspect(id)
         await assertIdle(chat)
+        // Only the foreground session carries the story. A background worker or an undo
+        // snapshot whose old log cannot be upgraded is let go, so it no longer blocks the game.
+        if (!sessions.ready && detachSessions && sessions.detachable?.length) {
+          await detachSessions(id, sessions.detachable)
+          ;({ chat, sessions } = await inspect(id))
+        }
         if (!sessions.ready) throw new Error(sessions.error || '会话日志尚未升级，请重启酒馆后重试；原存档已保留')
         const result = await store.upgradeStorage(id, {
           assertCanMigrate: async current => {
@@ -70,4 +77,27 @@ export async function unreadySaveSessions(ids, { live, stored, prepared }) {
     if (version === null ? prepared(id)?.ready === false : version !== 4) failed.push(id)
   }
   return failed
+}
+
+// Drop references to sessions whose logs cannot be upgraded. A background worker
+// starts a new session (its memory of earlier turns is gone; the story and
+// variables live in the Chat). An undo snapshot that needs one is discarded.
+export function detachSaveSessions(chat, ids) {
+  const gone = new Set(ids)
+  if (gone.has(chat.sessionId)) throw new Error('前台会话不能跳过')
+  let changed = false
+  if (gone.has(chat.candidateAgent?.sessionId)) { chat.candidateAgent = null; changed = true }
+  for (const [role, participant] of Object.entries(chat.timeline?.participants || {})) {
+    if (!gone.has(participant?.sessionId)) continue
+    chat.timeline.participants[role] = { ...participant, sessionId: '', status: 'needs-session', boundary: null, rewindTo: null, syncedRevision: null }
+    changed = true
+  }
+  for (const checkpoint of chat.timeline?.checkpoints || []) {
+    for (const [role, participant] of Object.entries(checkpoint?.participants || {})) {
+      if (gone.has(participant?.sessionId) || gone.has(participant?.forkFrom?.sessionId)) { delete checkpoint.participants[role]; changed = true }
+    }
+  }
+  const undo = chat.rollbackUndo
+  if (undo && (gone.has(undo.foreground?.sessionId) || (undo.background || []).some(item => gone.has(item.sessionId)))) { delete chat.rollbackUndo; changed = true }
+  return changed ? chat : undefined
 }

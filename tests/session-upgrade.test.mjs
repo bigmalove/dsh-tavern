@@ -376,3 +376,36 @@ test('legacy compaction of a late system prompt preserves history and the effect
   broken.events[8].data.shadowedSeqs = [0, 3]
   assert.throws(() => prepareSessionUpgrade(broken, migration), /旧压缩范围本身不完整/)
 })
+
+const interruptedCompaction = turn => ({ type: 'compaction/start', data: { compactionId: 'c-interrupted', sourceCommandId: 'cmd-1', turn } })
+const secondTurn = () => [
+  { type: 'turn/start', data: { turn: 2 } }, { type: 'step/start', data: { turn: 2, step: 1 } },
+  { type: 'assistant/message', data: { turn: 2, step: 1, stream: [], message: message('assistant', '第二轮') }, surfaceOp: 'append' },
+  { type: 'step/end', data: { turn: 2, step: 1 } }, { type: 'turn/end', data: { turn: 2, reason: { kind: 'completed' } } },
+]
+
+test('an interrupted compaction is closed as failed before the next turn, keeping the story', () => {
+  const old = fixture()
+  old.events = [...old.events, interruptedCompaction(null), ...secondTurn()].map((row, seq) => ({ time: 1, ...row, seq }))
+  const artifact = prepareSessionUpgrade(old, migration).artifact
+  const end = artifact.events.find(row => row.type === 'compaction/end')
+  assert.equal(end.data.compactionId, 'c-interrupted')
+  assert.ok(end.data.error)
+  assert.equal(artifact.events[artifact.events.indexOf(end) + 1].type, 'turn/start')
+  assert.deepEqual(texts(openSession(artifact)), ['角色设定', '继续故事', '已编辑正文', '第二轮'])
+})
+
+test('a reserved opening before turn/start and an interrupted compaction are repaired together', () => {
+  const old = fixture()
+  old.events = [old.events[2], old.events[3], old.events[0], old.events[1], old.events[4], old.events[7], old.events[8],
+    interruptedCompaction(null), ...secondTurn()].map((row, seq) => ({ time: 1, ...row, seq }))
+  const artifact = prepareSessionUpgrade(old, migration).artifact
+  assert.deepEqual(texts(openSession(artifact)), ['角色设定', '继续故事', '旧正文', '第二轮'])
+  assert.deepEqual(artifact.events.filter(row => row.type === 'turn/start').map(row => row.data.turn), [1, 2])
+})
+
+test('a log the upgrader still refuses names the original event that fails', () => {
+  const old = fixture()
+  old.events = [...old.events, { type: 'turn/start', data: { turn: 2 } }, { type: 'step/start', data: { turn: 2, step: 3 } }].map((row, seq) => ({ time: 1, ...row, seq }))
+  assert.throws(() => prepareSessionUpgrade(old, migration), /step\/start[^]*原第 10 条事件 step\/start/)
+})
