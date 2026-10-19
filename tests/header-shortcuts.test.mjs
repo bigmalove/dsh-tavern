@@ -232,45 +232,48 @@ test('只折起一项且不比 ⋯ 宽时，直接显示它', () => {
   assert.deepEqual(Array.from(fold(['a', 'b'], () => 100, 48, options)), ['b'])
 })
 
-test("手机上最多保留两个快捷入口，其余进 ⋮ 菜单", () => {
+test("手机上最多保留三个快捷入口，其余进 ⋮ 菜单", () => {
   const foldStart = client.indexOf("function tavernHeaderMobileFold(")
   const source = client.slice(foldStart, foldStart + balancedLength(client.slice(foldStart)))
-  const fold = vm.runInNewContext("(" + source + ")", { TAVERN_HEADER_MOBILE_LIMIT: 2 })
-  // 两个以内不动。
-  assert.deepEqual(Array.from(fold(["dsh-tavern:status", "header:export"], 2)), [])
-  // 超过两个：保留导出 + 清单里第一个，其余全折。
+  const fold = vm.runInNewContext("(" + source + ")", { TAVERN_HEADER_MOBILE_LIMIT: 3 })
+  // 三个以内不动。
+  assert.deepEqual(Array.from(fold(["dsh-tavern:status", "header:export", "dsh-tavern:worldbooks"], 3)), [])
+  // 超过三个：保留导出 + 清单里前两个，其余全折。
   assert.deepEqual(
-    Array.from(fold(["dsh-tavern:status", "header:export", "dsh-tavern:worldbooks", "dsh-tavern:cards"], 2)),
-    ["dsh-tavern:worldbooks", "dsh-tavern:cards"]
+    Array.from(fold(["dsh-tavern:status", "header:export", "dsh-tavern:worldbooks", "dsh-tavern:cards"], 3)),
+    ["dsh-tavern:cards"]
   )
-  // 清单里没有导出时，按顺序保留前两个。
-  assert.deepEqual(Array.from(fold(["a", "b", "c"], 2)), ["c"])
+  // 清单里没有导出时，按顺序保留前三个。
+  assert.deepEqual(Array.from(fold(["a", "b", "c", "d"], 3)), ["d"])
   // 上限至少保留 1 个；传 0 视为「用默认上限」，不会让整排消失。
   assert.deepEqual(Array.from(fold(["a", "b"], 1)), ["b"])
   assert.deepEqual(Array.from(fold(["a", "b"], 0)), [])
 })
 
-test("标题被压到 48px 以下时才再收一个，且只收不放", () => {
+test("手机按行宽算槽位：最多 3 个，放不下就留一格给 ⋮", () => {
   const capacityStart = client.indexOf("function tavernHeaderMobileCapacity(")
   const source = client.slice(capacityStart, capacityStart + balancedLength(client.slice(capacityStart)))
-  const capacity = vm.runInNewContext("(" + source + ")", { TAVERN_HEADER_MOBILE_LIMIT: 2 })
-  // 标题还有 60px：保持 2 个。
-  assert.equal(capacity(2, 60, { limit: 2 }), 2)
-  // 标题只剩 30px：收一个。
-  assert.equal(capacity(2, 30, { limit: 2 }), 1)
-  // 已经只剩 1 个：不再往下收。
-  assert.equal(capacity(1, 20, { limit: 2 }), 1)
-  // 还没量到（宽度 0）时不改动。
-  assert.equal(capacity(2, 0, { limit: 2 }), 2)
-  // 上限不会超过设定值。
-  assert.equal(capacity(2, 400, { limit: 2 }), 2)
+  const capacity = vm.runInNewContext("(" + source + ")", { TAVERN_HEADER_MOBILE_LIMIT: 3, TAVERN_HEADER_MOBILE_SLOT: 42 })
+  // 行宽够 4 格：条目只有 3 个，全显示、不出现 ⋮。
+  assert.equal(capacity({ itemCount: 3, room: 180 }, { limit: 3 }), 3)
+  // 行宽只有 3 格、条目 5 个：留 2 个图标 + ⋮。
+  assert.equal(capacity({ itemCount: 5, room: 126 }, { limit: 3 }), 2)
+  // 行宽 4 格、条目 8 个：受上限限制，只留 3 个 + ⋮。
+  assert.equal(capacity({ itemCount: 8, room: 180 }, { limit: 3 }), 3)
+  // 行宽只有 2 格：1 个图标 + ⋮。
+  assert.equal(capacity({ itemCount: 5, room: 90 }, { limit: 3 }), 1)
+  // 一格都放不下也至少留 1 个（导出是独立下拉，折进 ⋮ 里点不到）。
+  assert.equal(capacity({ itemCount: 5, room: 0 }, { limit: 3 }), 1)
+  // 条目本来就少于槽位：全显示。
+  assert.equal(capacity({ itemCount: 1, room: 300 }, { limit: 3 }), 1)
 })
 
-test("顶栏把实测压盖暴露成 data 属性，夹具可直接断言", () => {
-  assert.match(client, /"data-tavern-header-collision": collision/)
+test("顶栏暴露实测预算与上限，夹具可直接断言", () => {
+  assert.match(client, /"data-tavern-header-budget": compact && mobileBudget !== null \? mobileBudget : ""/)
   assert.match(client, /"data-tavern-header-limit": compact \? mobileLimit : ""/)
-  // 角落在流内时不能再用旧的 [data-phase] 前缀（真实 DOM 里没有这个属性，
-  // 整条规则会静默失效——这正是手机上压住标签栏与按钮的原因）。
+  // 角落按钮必须在流内（真实 DOM 里没有 [data-phase]，带它的规则会静默失效）。
   assert.doesNotMatch(css, /\[data-mobile-nav="frame"\] \[data-phase\] header \[data-conversation-header-corner\]/)
   assert.match(css, /\[data-mobile-nav="frame"\] header \[data-conversation-header-corner\] \{\s*display: flex !important; position: static;/)
+  // 宿主右侧动作组要能吃下压缩，否则它溢出压住快捷入口（实测量到 27px 重叠）。
+  assert.match(css, /\[class\*="_headerActions"\] \{\s*gap: 0; flex: 0 1 auto; min-width: 40px;/)
 })

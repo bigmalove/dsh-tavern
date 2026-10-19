@@ -59,13 +59,21 @@ function tavernStartGroups(options, pluginGroups) {
 	return groups;
 }
 
-// 手机上顶栏一行只放得下几个图标：侧栏开关、标题、全屏，再加宿主右上角的角落按钮。
-// 规则定死为「最多 2 个快捷入口 + ⋮」，其余全部进 ⋮ 菜单——可预测，不会因为标题长短
-// 忽隐忽现。真的还压住宿主按钮（实测压盖 > 0）时再降到 1 个。
+// 手机上顶栏一行的固定开销（像素），全部是「不随保留数量变化」的常量：
+//   左右内边距 40 + 4、cluster 与 utilities 之间 4、utilities 与角落按钮之间 4、
+//   角落按钮 40 + 外边距 8、标题下限 16、右侧动作组最小宽 80（触发器 40 + 全屏 40）
+// 剩下的宽度按每格 42（40 + 2 间距）分给快捷入口，得到槽位数。
+const TAVERN_HEADER_MOBILE_FIXED = 196;
+const TAVERN_HEADER_MOBILE_SLOT = 42;
+// 放不下就少留图标——**预算一次算定**，不按当前渲染结果反推，避免收一个→标题变宽
+// →又想放回来这种来回跳。
 // 导出自带下拉菜单，折进「更多」里点不到，所以优先保留。
-const TAVERN_HEADER_MOBILE_LIMIT = 2;
+const TAVERN_HEADER_MOBILE_LIMIT = 3;
+// 标题至少要留这么多，否则认不出是哪一局。低于它就把位置让给 ⋮。
+const TAVERN_HEADER_TITLE_MIN = 16;
 function tavernHeaderMobileFold(ids, limit) {
 	const list = Array.isArray(ids) ? ids : [];
+	// 至少留 1 个：导出是独立下拉，折进 ⋮ 里点不到，所以永远保留第一位。
 	const max = Math.max(1, Number(limit) || TAVERN_HEADER_MOBILE_LIMIT);
 	if (list.length <= max) return [];
 	const keep = new Set();
@@ -77,29 +85,19 @@ function tavernHeaderMobileFold(ids, limit) {
 	return list.filter(id => !keep.has(id));
 }
 
-// 顶栏实际压盖多少像素：取这一排里最右那个还看得见的子元素的右边界，减去宿主角落
-// 按钮的左边界。容器本身被 flex 压窄了，子元素会溢出容器继续画——所以不能量容器。
-function tavernHeaderCollision(root, corner) {
-	if (!root || !corner) return 0
-	const right = Array.from(root.children).reduce(function (max, child) {
-		const rect = child.getBoundingClientRect()
-		return rect.width > 0 && rect.height > 0 ? Math.max(max, rect.right) : max
-	}, root.getBoundingClientRect().right)
-	return Math.round((right - corner.getBoundingClientRect().left) * 10) / 10
-}
-
-// 手机上保留几个快捷入口：默认最多 2 个（其余全进 ⋮），若实测标题被压到 48px 以下
-// （不到 3 个字，认不出是哪一局）再收一个。单调、只收不放，所以不会来回跳。
-// 不用「余量/压盖」推：按钮右对齐到预留边距，余量恒为 0；按行宽预算又会在
-// 标题与按钮数量之间互相追赶。
-function tavernHeaderMobileCapacity(shown, titleWidth, options) {
-	const min = Number(options && options.titleMin) > 0 ? Number(options.titleMin) : 48
+// 手机上一行能留几个快捷入口。**只做一次预算，不看当前渲染结果**：
+//   槽位数 = (标题行内容宽 - 固定开销) / 42
+//   全部放得下（且 ≤ 上限 3）→ 全显示，不出现 ⋮
+//   放不下                    → 留 slots-1 个图标，最后一个槽位给 ⋮（至少留 1 个）
+// 「标题行内容宽」与「固定开销」都不随当前保留数量变化，所以不会振荡。
+function tavernHeaderMobileCapacity(metrics, options) {
+	const slot = Number(options && options.slot) > 0 ? Number(options.slot) : TAVERN_HEADER_MOBILE_SLOT
 	const limit = Number(options && options.limit) > 0 ? Number(options.limit) : TAVERN_HEADER_MOBILE_LIMIT
-	const count = Math.max(1, Math.min(limit, Number(shown) || 1))
-	const width = Number(titleWidth) || 0
-	// width 为 0 表示还没量到（标题不存在），保持现状。
-	if (width > 0 && width < min && count > 1) return count - 1
-	return count
+	const count = Math.max(0, Number(metrics && metrics.itemCount) || 0)
+	const room = Math.max(0, Number(metrics && metrics.room) || 0)
+	const slots = Math.max(1, Math.floor(room / slot))
+	if (count <= Math.min(slots, limit)) return Math.min(count, limit)
+	return Math.max(1, Math.min(limit, slots - 1))
 }
 
 // How many trailing pinned pages no longer fit. Fixed buttons (酒馆状态, 导出)

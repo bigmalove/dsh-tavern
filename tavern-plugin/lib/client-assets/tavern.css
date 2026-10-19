@@ -2828,6 +2828,8 @@ body.dsh-tavern-shell-active [class*="_headerUtilities"]:has(.dsh-tavern-header-
   }
   body.dsh-tavern-shell-active [data-mobile-nav="frame"] header:has([class*="_headerUtilities"]) [class*="_titleRow"] {
     min-height: 40px; padding-left: 40px;
+    /* JS 按这个值算「一行还能放几个快捷入口」；窄屏的 media query 会改成 156px。 */
+    --dsh-tavern-header-fixed: 196px;
     padding-right: var(--dsh-tavern-header-corner, 4px);
     gap: 4px; align-items: center;
   }
@@ -2841,7 +2843,34 @@ body.dsh-tavern-shell-active [class*="_headerUtilities"]:has(.dsh-tavern-header-
   body.dsh-tavern-shell-active [data-mobile-nav="toggle"] {
     top: 2px !important; left: 4px !important; width: 40px; height: 40px;
   }
-  body.dsh-tavern-shell-active header:has([class*="_headerUtilities"]) [class*="_headerActions"] { gap: 0; }
+  /* 标题区右侧那一组（宿主「N 个子智能体」触发器 + 全屏）是不可缩的：实测 390 宽下
+     它要 131.4px，而 cluster 只分到 110px，多出的 21.4px 直接压到 utilities 的按钮上
+     （实测量到 27px 重叠、全屏按钮点不到）。这里允许它收缩，trigger 的文字用省略号，
+     把空间让给标题与快捷入口，而不是溢出压人。 */
+  body.dsh-tavern-shell-active header:has([class*="_headerUtilities"]) [class*="_headerActions"] {
+    gap: 0; flex: 0 1 auto; min-width: 40px;
+  }
+  body.dsh-tavern-shell-active header:has([class*="_headerUtilities"]) [class*="_headerActions"] > :not(.dsh-tavern-play-fullscreen) {
+    min-width: 40px; overflow: hidden;
+  }
+  body.dsh-tavern-shell-active header:has([class*="_headerUtilities"]) [class*="_headerActions"] > :not(.dsh-tavern-play-fullscreen) span {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* 标题面包屑吃剩余空间；不能让它把 actions 挤到内容宽度以下。 */
+  body.dsh-tavern-shell-active header:has([class*="_headerUtilities"]) [class*="_crumbs"] {
+    flex: 1 1 auto; min-width: 0; overflow: hidden;
+  }
+  /* 320px 级窄屏：宿主的「N 个子智能体」触发器（91px）和 1 个图标 + ⋮ 放不进同一行
+     （实测差 22px）。这里只藏它，把位置让给快捷入口；全屏按钮保留。
+     同时把「一行固定开销」从 196 降到 156，JS 读这个变量算槽位，避免两边各写一份。 */
+  @media (max-width: 389px) {
+    body.dsh-tavern-shell-active header:has([class*="_headerUtilities"]) [class*="_headerActions"] > :not(.dsh-tavern-play-fullscreen) {
+      display: none !important;
+    }
+    body.dsh-tavern-shell-active [data-mobile-nav="frame"] header:has([class*="_headerUtilities"]) [class*="_titleRow"] {
+      --dsh-tavern-header-fixed: 156px;
+    }
+  }
   /* 上游把整个 utilities 当作日志按钮隐藏；酒馆在此还提供设置和导出，需保留入口。 */
   body.dsh-tavern-shell-active [data-mobile-nav="frame"] header:has([class*="_headerUtilities"]) [class*="_headerUtilities"] {
     display: flex !important; flex: none; margin-left: 0; gap: 0;
