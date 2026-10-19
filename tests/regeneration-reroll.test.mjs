@@ -19,13 +19,18 @@ const NEW_BODY = '重掷后的新正文'
  * exact model-visible context at the moment the new request is sent. `reply`
  * decides what the provider writes back: null models a lost/empty generation.
  */
-async function run(t, { reroll, reply }) {
+async function run(t, { reroll, reply, legacyProjection = false }) {
   const root = await mkdtemp(join(tmpdir(), 'tavern-reroll-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const persistence = createChatPersistence({ store: createChatJournalStore({ dataRoot: root }) })
   const session = Session.create('reroll-session')
   appendSessionEvent(session, 'user/message', { id: 'original-user', role: 'user', content: [{ type: 'text', text: '继续' }], source: { kind: 'user' } }, { surfaceOp: 'append' })
-  appendSessionEvent(session, 'assistant/message', { turn: 2, step: 1, message: { id: 'original-assistant', role: 'assistant', content: [{ type: 'text', text: OLD_BODY }], source: model } }, { surfaceOp: 'append', sourceEventSeqs: [] })
+  // A reply projected by an older release sits in an edit turn and carries no
+  // story turn, so only its body still identifies the round.
+  appendSessionEvent(session, 'assistant/message', {
+    turn: legacyProjection ? 9 : 2, step: 1,
+    message: { id: 'original-assistant', role: 'assistant', content: [{ type: 'text', text: OLD_BODY }], source: model }
+  }, { surfaceOp: 'append', sourceEventSeqs: [] })
   await persistence.write({ id: 'chat', sessionId: session.id, mode: 'story', messages: [{ role: 'user', text: '继续' }, { role: 'assistant', turn: 2, text: OLD_BODY }], settleStatus: 'done' })
   const seen = { context: '', turn: 0 }
   const agent = {
@@ -97,4 +102,25 @@ test('重掷没有产出正文时把旧正文放回模型上下文', async t => 
   assert.match(visible, new RegExp(OLD_BODY), '撤销后模型必须重新看得到原正文')
   assert.equal(sessionEvents(session).some(event =>
     event.type === 'assistant/message' && JSON.stringify(event.data?.message?.content || '').includes(NEW_BODY)), false)
+})
+
+test('连续重掷：投影后的正文仍然能定位到同一剧情轮次', async t => {
+  const { history, persistence, session } = await run(t, { reroll: true, reply: NEW_BODY })
+  await history.regenerate('chat', '', 'reroll-session', { reroll: true })
+  // The projected body lives in an edit turn on the surface; its source keeps
+  // the story turn so the next reroll finds it without guessing.
+  const projected = session.snapshotEvents().filter(event => event.type === 'assistant/message' && event.surfaceOp?.op === 'replace').at(-1)
+  assert.equal(projected.data.message.source.tavernStoryTurn, 2)
+  assert.notEqual(projected.data.turn, 2)
+  const view = await history.regenerate('chat', '', 'reroll-session', { reroll: true })
+  assert.equal(view.adopted.text, NEW_BODY)
+  assert.equal((await persistence.read('chat')).messages.at(-1).turn, 2)
+})
+
+test('老存档的投影没记剧情轮次，也能靠正文找回并重掷', async t => {
+  const { history, seen } = await run(t, { reroll: true, reply: NEW_BODY, legacyProjection: true })
+  const view = await history.regenerate('chat', '', 'reroll-session', { reroll: true })
+  assert.equal(view.adopted.text, NEW_BODY)
+  assert.equal(view.adopted.hiddenTurn, 2)
+  assert.doesNotMatch(seen.context, new RegExp(OLD_BODY))
 })

@@ -184,6 +184,18 @@ export function supersededRegenerationErrorTurns(input) {
   return [...hidden].sort((a, b) => a - b)
 }
 
+/**
+ * Where the saved round's reply sits on the native surface.
+ *
+ * `turn` is the story round. A reply written by a projection (regeneration) may
+ * carry the edit turn in `data.turn` instead — `tavernStoryTurn` is the
+ * authoritative story turn and older releases did not write it. When no node
+ * claims the round, the saved body itself is the evidence: accept the newest
+ * model reply that still says exactly what the save says. Without that fallback
+ * one regeneration made the round permanently unregenerable ("原生消息流中找不到
+ * 与当前剧情轮次对应的正文消息"), because the save and the surface never agreed
+ * on a turn again.
+ */
 export function locateRegenerationSurface(input) {
   const events = Array.isArray(input && input.events) ? input.events : []
   const nodes = Array.isArray(input && input.nodes) ? input.nodes : []
@@ -196,6 +208,20 @@ export function locateRegenerationSurface(input) {
     if (source === null) continue
     // Current swipes leave a non-empty replacement; legacy swipes can be empty.
     // Plugin cleanup markers and messages from other turns are not the saved story body.
+    return Object.freeze({ assistantSeq: Number(nodes[index]), turn, source })
+  }
+  const wanted = (Array.isArray(input && input.texts) ? input.texts : [])
+    .filter(value => typeof value === 'string').map(value => value.trim()).filter(Boolean)
+  if (wanted.length === 0) return null
+  // Block joins and trailing whitespace differ between the save and the log.
+  const compact = value => value.replace(/\s+/g, '')
+  const matches = value => value !== '' && (wanted.includes(value) || wanted.some(text => compact(text) === compact(value)))
+  for (let index = nodes.length - 1; index >= 0; index -= 1) {
+    const event = eventAt(events, nodes[index])
+    if (!event || event.type !== 'assistant/message') continue
+    const source = modelSourceOf(event)
+    if (source === null) continue
+    if (!matches(contentText(event.data && event.data.message))) continue
     return Object.freeze({ assistantSeq: Number(nodes[index]), turn, source })
   }
   return null
