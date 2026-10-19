@@ -22057,7 +22057,10 @@ const worldBookSwitcherFeature = createWorldBookSwitcherFeatureModule();
 			for (let i = 0; i < rows.length; i++) {
 				const row = rows[i];
 				if (!set.has(row.getAttribute("data-chat-turn"))) continue;
-				if (row.getAttribute("data-chat-flow-kind") === "user") continue;
+				// 白名单：只藏回复。输入的 kind 可能是 user / steering / turn-trigger，
+				// 用黑名单迟早漏一个，玩家的话就会跟着被替换的正文一起消失。
+				const kind = row.getAttribute("data-chat-flow-kind");
+				if (kind !== "assistant-step" && kind !== "tool-call") continue;
 				hideRow(row);
 			}
 		}
