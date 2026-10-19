@@ -1620,22 +1620,6 @@
         // Width the shortcuts may use, read from the whole title row so it does
         // not depend on how many buttons are folded right now: the row, minus the
         // host's own buttons, minus a minimum share kept for the session title.
-        // 会话标题那一格是 flex:1，看起来「可以压」，但它的 min-content 由标题和
-        // 旁边的按钮决定，压不下去。早先按 row 宽度的 30% 估算，会把这一格算小了：
-        // 顶栏以为还有地方，实际已经被挤到右下角的宿主按钮上。这里量它的真实下限。
-        function tavernClusterMinWidth(cluster) {
-            const style = cluster.style;
-            const saved = { flex: style.flex, width: style.width, minWidth: style.minWidth };
-            style.flex = "0 0 auto";
-            style.width = "min-content";
-            style.minWidth = "0";
-            const width = cluster.offsetWidth;
-            style.flex = saved.flex;
-            style.width = saved.width;
-            style.minWidth = saved.minWidth;
-            return width;
-        }
-
         function tavernHeaderAvailableWidth(node) {
             const row = node.closest("[class*=\"_titleRow\"]");
             if (!row) return node.clientWidth;
@@ -1650,7 +1634,10 @@
                 if (child.contains(node)) { free -= Math.max(0, child.offsetWidth - node.offsetWidth); continue; }
                 if (/_titleCluster/.test(String(child.className))) {
                     // Everything in the cluster except the crumbs stays; the crumbs keep a minimum.
-                    free -= Math.max(tavernClusterMinWidth(child), Math.min(160, row.clientWidth * 0.3));
+                    const parts = Array.from(child.children).filter(part => window.getComputedStyle(part).display !== "none");
+                    free -= px(style.columnGap) * Math.max(0, parts.length - 1);
+                    for (const part of parts) if (!/_crumbs/.test(String(part.className))) free -= part.offsetWidth;
+                    free -= Math.min(160, row.clientWidth * 0.3);
                     continue;
                 }
                 free -= child.offsetWidth;
@@ -1813,10 +1800,15 @@
                     window.removeEventListener("scroll", close, true);
                 };
             }, [context, more]);
-            function activate(id) {
+            function activate(id, node) {
                 setMore(null);
                 if (id === "header:export") return;
                 if (id === "dsh-tavern:status") { props.openStatus(owner); return; }
+                // 世界书按钮弹出的快捷面板；「完整」再进右侧栏世界书库。
+                if (id === "dsh-tavern:worldbooks" && node) {
+                    worldBookSwitcherFeature.open(node, owner);
+                    return;
+                }
                 openTavernSidebarTab(props.ctx, { type: id }, { sessionId: owner });
             }
             function item(id) {
@@ -1826,7 +1818,7 @@
                     ? h(TavernConversationSettingsAction, { sessionId: owner, sessions: props.sessions, open: props.openStatus })
                     : id === "header:export"
                         ? h(TavernConversationExportAction, { sessionId: props.sessionId, sessions: props.sessions })
-                        : h("button", { type: "button", className: "dsh-tavern-btn dsh-tavern-header-page", title: label, "aria-label": label, onClick: function () { activate(id); } },
+                        : h("button", { type: "button", className: "dsh-tavern-btn dsh-tavern-header-page", title: label, "aria-label": label, onClick: function (event) { activate(id, event.currentTarget); } },
                             tavernStartIcon(id, entry, 18),
                             h("span", { className: "dsh-tavern-header-action-label" }, label));
                 return h("span", {
@@ -1843,7 +1835,7 @@
                     h("button", { type: "button", className: "dsh-tavern-btn dsh-tavern-header-more-button", "data-tavern-header-trigger": "more", "aria-label": "更多快捷入口", "aria-haspopup": "menu", "aria-expanded": Boolean(more), title: "更多快捷入口", onClick: function () { setContext(null); setMore(more ? null : { x: null, y: null }); } },
                         h("svg", { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2.4, strokeLinecap: "round", "aria-hidden": "true" }, h("path", { d: "M5 12h.01M12 12h.01M19 12h.01" }))),
                     more ? h("div", { className: "dsh-tavern-more-menu dsh-tavern-header-popup", role: "menu", "aria-label": "更多快捷入口" },
-                        foldedEntries.map(entry => h("button", { key: entry.id, type: "button", role: "menuitem", onClick: function () { setMore(null); activate(entry.id); } }, tavernStartIcon(entry.id, entries.get(entry.id), 15), entry.label)),
+                        foldedEntries.map(entry => h("button", { key: entry.id, type: "button", role: "menuitem", onClick: function () { setMore(null); activate(entry.id, host.current); } }, tavernStartIcon(entry.id, entries.get(entry.id), 15), entry.label)),
                         h("div", { className: "dsh-tavern-header-menu-sep", role: "separator" }),
                         tavernHeaderMenuButton(h, "顶栏设置…", TAVERN_HEADER_GEAR_PATH, false, function () { setMore(null); setDialog(true); })) : null) : null,
                 context ? h("div", { className: "dsh-tavern-more-menu dsh-tavern-header-popup dsh-tavern-header-context", role: "menu", style: { position: "fixed", left: Math.min(context.x, (window.innerWidth || 1024) - 190) + "px", top: Math.min(context.y, (window.innerHeight || 768) - 190) + "px", right: "auto", bottom: "auto" } },
