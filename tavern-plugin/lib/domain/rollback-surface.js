@@ -108,6 +108,53 @@ export function regenerationAttemptTurns(input) {
   return modelTurns(events, events.filter(event => event && belongs(event.seq) === OWNED).map(event => event.seq))
 }
 
+// A replaced reply does not disappear from the page by itself: the host keeps
+// drawing the row it already built for that native turn, even though the node is
+// gone from the surface. `replacingDshTurns` only covers the moment of
+// generation, and the mapping that names the surviving turn is keyed by the
+// STORY turn, which the host rows never carry. This list is the durable
+// statement "these native turns used to hold a body that has been replaced":
+// derived from the log, so it survives a reload.
+export function supersededRegenerationTurns({ events = [], nodes = [] } = {}) {
+  const visible = new Set(nodes.map(Number))
+  const turns = new Set()
+  for (const event of events) {
+    if (event?.type !== 'assistant/message' || event.surfaceOp?.op !== 'replace') continue
+    // Only the replacement that is still the current node speaks for the page;
+    // a chain of regenerations supersedes its own earlier replacements.
+    if (visible.size && !visible.has(Number(event.seq))) continue
+    // Only a regeneration writes a body for round N into a later turn; a seed or
+    // repair rewrite carries no story turn and leaves the opening alone.
+    if (!(Number(event.data?.message?.source?.tavernStoryTurn) > 0)) continue
+    for (const seq of event.sourceEventSeqs || []) {
+      const original = eventAt(events, seq)
+      if (!original || original.type !== 'assistant/message') continue
+      // Only a turn that actually showed a body leaves a visible row behind; the
+      // empty markers of earlier attempts never drew anything.
+      if (contentText(original.data?.message) === '') continue
+      const turn = Number(original.data?.turn)
+      // A row for the turn that now carries the replacement stays as it is.
+      if (Number.isSafeInteger(turn) && turn > 0 && turn !== Number(event.data?.turn)) turns.add(turn)
+    }
+  }
+  return [...turns].sort((left, right) => left - right)
+}
+
+// The native turn the committed body was written into: the projection's own
+// edit turn, not the synthetic generation turn the chat recorded first.
+export function projectedReplyTurns({ events = [], nodes = [] } = {}) {
+  const visible = new Set(nodes.map(Number))
+  const turns = new Map()
+  for (const event of events) {
+    if (event?.type !== 'assistant/message' || event.surfaceOp?.op !== 'replace') continue
+    if (visible.size && !visible.has(Number(event.seq))) continue
+    const story = Number(event.data?.message?.source?.tavernStoryTurn)
+    if (!Number.isSafeInteger(story) || story < 1) continue
+    turns.set(story, Number(event.data?.turn))
+  }
+  return turns
+}
+
 export function abortedRegenerationTurns(input) {
   const events = Array.isArray(input && input.events) ? input.events : []
   const seqs = []
@@ -196,6 +243,20 @@ export function locateRegenerationSurface(input) {
     if (source === null) continue
     // Current swipes leave a non-empty replacement; legacy swipes can be empty.
     // Plugin cleanup markers and messages from other turns are not the saved story body.
+    return Object.freeze({ assistantSeq: Number(nodes[index]), turn, source })
+  }
+  const wanted = (Array.isArray(input && input.texts) ? input.texts : [])
+    .filter(value => typeof value === 'string').map(value => value.trim()).filter(Boolean)
+  if (wanted.length === 0) return null
+  // Block joins and trailing whitespace differ between the save and the log.
+  const compact = value => value.replace(/\s+/g, '')
+  const matches = value => value !== '' && (wanted.includes(value) || wanted.some(text => compact(text) === compact(value)))
+  for (let index = nodes.length - 1; index >= 0; index -= 1) {
+    const event = eventAt(events, nodes[index])
+    if (!event || event.type !== 'assistant/message') continue
+    const source = modelSourceOf(event)
+    if (source === null) continue
+    if (!matches(contentText(event.data && event.data.message))) continue
     return Object.freeze({ assistantSeq: Number(nodes[index]), turn, source })
   }
   return null

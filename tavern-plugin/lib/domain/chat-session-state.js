@@ -2,7 +2,7 @@ import { createImmutableTurnFields } from './freeze-json.js'
 import { createMvuReceiptIndex } from './mvu-receipt-index.js'
 import { copyJsonTree } from './copy-json-tree.js'
 import { copyLazyHistoryHeader } from './lazy-history-read.js'
-import { rollbackAvailability, hasRollbackMessages, failedTurnReplayAvailability, foregroundSuppressedTurns, supersededRegenerationErrorTurns } from './rollback-surface.js'
+import { rollbackAvailability, hasRollbackMessages, failedTurnReplayAvailability, foregroundSuppressedTurns, supersededRegenerationErrorTurns, supersededRegenerationTurns, projectedReplyTurns } from './rollback-surface.js'
 import { isRescuedHistoryMessage } from './chat-history-rescue.js'
 import { canUndoRollback } from './surface-restoration.js'
 import { failedErrorTurnStates } from './failed-error-visibility.js'
@@ -117,10 +117,21 @@ export function createSessionStateView({ activity: activityOf, evidence: evidenc
     return [...turns].sort((left, right) => left - right)
   }
   function rollbackViewFields(chat, evidence = evidenceOf(chat.sessionId), changes) {
-    const mappings = normalizedMappings(chat, changes)
-    if (sharedMappings && !mappingIds.has(mappings)) mappingIds.set(mappings, ++mappingSequence)
     const session = evidence.session, events = evidence.events
     const nodes = session?.surface?.nodes
+    // The save records the synthetic generation turn, but the committed body is
+    // projected AFTER the commit, into an edit turn of its own. Hiding by the
+    // saved number therefore leaves the obsolete turn on screen next to the new
+    // body — two replies for one round, and a reload cannot help because both
+    // numbers are in the log. The projection event knows where the body really
+    // is (it carries the story turn), so the log wins over the header here.
+    const projected = Array.isArray(nodes) && Array.isArray(events) ? projectedReplyTurns({ events, nodes }) : new Map()
+    const savedMappings = normalizedMappings(chat, changes)
+    // Reuse the shared object whenever the log agrees with the header: building a
+    // fresh map on every read would defeat the shared-mapping cache.
+    const stale = [...projected].some(([story, turn]) => Number(savedMappings[String(story)]) !== Number(turn))
+    const mappings = stale ? { ...savedMappings, ...Object.fromEntries(projected) } : savedMappings
+    if (sharedMappings && !mappingIds.has(mappings)) mappingIds.set(mappings, ++mappingSequence)
     // Only the native immutable-log contract supplies a reliable O(1) stamp.
     // Legacy mutable evidence always runs the original inspection.
     const generation = session?.surface?.replaceGeneration
@@ -146,11 +157,17 @@ export function createSessionStateView({ activity: activityOf, evidence: evidenc
     const hasRound = hasRollbackMessages(chat.messages)
     const failures = failedErrorTurnStates(evidence.events || [], chat.suppressedDshTurns)
     const replacingTurns = replacingDshTurnsOf(chat)
+    // Native turns whose body was replaced by a projection. The host keeps painting
+    // the rows it already built for them, so the page shows the old body next to
+    // the new one until these turns are hidden. Read from the log, not from a
+    // transient marker: a reload must hide them too.
+    const supersededTurns = Array.isArray(nodes) ? supersededRegenerationTurns({ events: evidence.events || [], nodes }) : []
     const result = {
       hiddenDshErrorTurns: chat.hiddenDshErrorTurns || [],
       suppressedDshTurns: foregroundSuppressedTurns(chat, evidence.events || [])
         .filter(turn => !replacingTurns.includes(turn)),
       replacingDshTurns: replacingTurns,
+      supersededDshTurns: supersededTurns,
       regeneratedDshTurns: mappings,
       suppressedDshErrorTurns: supersededRegenerationErrorTurns({ events: evidence.events || [], suppressedDshTurns: chat.suppressedDshTurns }),
       staleDshErrorTurns: failures.staleTurns,
