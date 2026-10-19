@@ -2876,8 +2876,12 @@ body.dsh-tavern-shell-active [class*="_headerUtilities"]:has(.dsh-tavern-header-
   }
   body.dsh-tavern-shell-active header:has([class*="_headerUtilities"]) [role="tab"] { flex: none; min-height: 36px; padding-bottom: 6px; }
   html.dsh-tavern-play-fullscreen body.dsh-tavern-shell-active header:has([class*="_headerUtilities"]) [class*="_label"]:has(> svg) { display: none !important; }
-  body.dsh-tavern-shell-active [data-mobile-nav="frame"] header:has([class*="_headerUtilities"]) [data-mobile-nav="files"] { display: none !important; }
-  /* 文件入口已在移动抽屉中提供，顶栏保留会话标题和常用操作。 */
+  /* 顶上那个 28px 的 `data-mobile-nav="files"` 是 DSHA 自己的入口按钮（侧栏/文件抽屉），
+     不是宿主的多余图标。以前这条隐藏规则因选择器不命中而没生效；修好选择器后它开始
+     真的把它藏掉，用户看到的就是「侧边栏按钮没了」。这里明确放出来。 */
+  body.dsh-tavern-shell-active [data-mobile-nav="frame"] header:has([class*="_headerUtilities"]) [data-mobile-nav="files"] {
+    display: inline-flex !important; flex: none;
+  }
   body.dsh-tavern-shell-active header:has([class*="_headerUtilities"]) svg { display: block; flex-shrink: 0; }
   .dsh-tavern-sidebar { padding-top: 2px; padding-bottom: max(12px, env(safe-area-inset-bottom, 0px)); }
   .dsh-tavern-side-head { height: 48px; }

@@ -1620,22 +1620,6 @@
         // Width the shortcuts may use, read from the whole title row so it does
         // not depend on how many buttons are folded right now: the row, minus the
         // host's own buttons, minus a minimum share kept for the session title.
-        // 会话标题那一格是 flex:1，看起来「可以压」，但它的 min-content 由标题和
-        // 旁边的按钮决定，压不下去。早先按 row 宽度的 30% 估算，会把这一格算小了：
-        // 顶栏以为还有地方，实际已经被挤到右下角的宿主按钮上。这里量它的真实下限。
-        function tavernClusterMinWidth(cluster) {
-            const style = cluster.style;
-            const saved = { flex: style.flex, width: style.width, minWidth: style.minWidth };
-            style.flex = "0 0 auto";
-            style.width = "min-content";
-            style.minWidth = "0";
-            const width = cluster.offsetWidth;
-            style.flex = saved.flex;
-            style.width = saved.width;
-            style.minWidth = saved.minWidth;
-            return width;
-        }
-
         function tavernHeaderAvailableWidth(node) {
             const row = node.closest("[class*=\"_titleRow\"]");
             if (!row) return node.clientWidth;
@@ -1650,7 +1634,10 @@
                 if (child.contains(node)) { free -= Math.max(0, child.offsetWidth - node.offsetWidth); continue; }
                 if (/_titleCluster/.test(String(child.className))) {
                     // Everything in the cluster except the crumbs stays; the crumbs keep a minimum.
-                    free -= Math.max(tavernClusterMinWidth(child), Math.min(160, row.clientWidth * 0.3));
+                    // 以前这里按「标题的 min-content」或 160px 预留，360px 的手机上等于半行，
+                    // 结果两个固定按钮之外全被折进 ⋯，右边却留着一大片空白（标题被截断后
+                    // 只用到预留的一半）。标题现在允许截断，只留一个能认出是哪一局的下限。
+                    free -= Math.min(96, Math.max(48, Math.round(row.clientWidth * 0.13)));
                     continue;
                 }
                 free -= child.offsetWidth;

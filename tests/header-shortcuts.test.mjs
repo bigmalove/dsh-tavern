@@ -186,3 +186,28 @@ function balancedLength(source) {
   }
   throw new Error('unbalanced function body')
 }
+
+test('顶栏不藏宿主自己的入口按钮，折叠预算也不再整块留给标题', () => {
+  // DSHA 在顶栏角落挂的是 `data-mobile-nav="files"`（28px）。这条隐藏规则原本因为
+  // 选择器不命中而没生效；选择器修好后它开始真的把入口藏掉。改成明确显示。
+  assert.doesNotMatch(css, /header:has\(\[class\*="_headerUtilities"\]\) \[data-mobile-nav="files"\] \{\s*display: none/)
+  assert.match(css, /\[data-mobile-nav="files"\] \{\s*display: inline-flex !important; flex: none;/)
+  // 折叠预算：以前按标题 min-content（实测 209px）或 160px 预留，手机上整行被它吃掉，
+  // 结果两个固定按钮之外全进 ⋯，右边却空着。现在只留一个小下限。
+  assert.doesNotMatch(client, /Math\.min\(160, row\.clientWidth \* 0\.3\)/)
+  assert.doesNotMatch(client, /tavernClusterMinWidth/)
+  assert.match(client, /free -= Math\.min\(96, Math\.max\(48, Math\.round\(row\.clientWidth \* 0\.13\)\)\);/)
+})
+
+test('只折起一项且不比 ⋯ 宽时，直接显示它', () => {
+  const source = client.match(/function tavernHeaderFold\(ids[\s\S]*?\n\t\t\}/)[0]
+  const fold = vm.runInNewContext('(' + source + ')')
+  const width = () => 40
+  const options = { gap: 4, moreWidth: 44, fixed: ['a'] }
+  // 一项 40 ≤ ⋯ 44：不折叠，直接显示。
+  assert.deepEqual(Array.from(fold(['a', 'b'], width, 48, options)), [])
+  // 两项都折：仍然给 ⋯。
+  assert.deepEqual(Array.from(fold(['a', 'b', 'c'], width, 48, options)), ['b', 'c'])
+  // 单项比 ⋯ 宽时照旧折起来（省下的宽度是真实的）。
+  assert.deepEqual(Array.from(fold(['a', 'b'], () => 100, 48, options)), ['b'])
+})

@@ -81,6 +81,9 @@ function tavernHeaderFold(ids, widthOf, available, options) {
 		if (!folding && itemWidth + gap <= budget) budget -= itemWidth + gap;
 		else { folding = true; folded.push(id); }
 	}
+	// 只折起一项、且那一项不比 ⋯ 宽时，用省略号换一个能直接点的图标是纯亏：
+	// 直接显示它。
+	if (folded.length === 1 && width(folded[0]) <= moreWidth) return [];
 	return folded;
 }
 
