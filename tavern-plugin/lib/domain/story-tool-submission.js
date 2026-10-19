@@ -68,47 +68,35 @@ export function storySubmissionForTurn(session, turn) {
 }
 
 /**
- * Turn a finished submission into an ordinary reply. The appended text lets the
- * chat view show the step as an answer (it ignores surface replacements); the
- * replacement then leaves that one text where the call, receipt and copy were,
- * so the model sees the body once and rollback/regeneration see a normal round.
+ * Turn a finished submission into an ordinary reply.
+ *
+ * The appended text is the only legal carrier: DSH refuses an
+ * `assistant/message` that cites source events (`embeds its source stream and
+ * cannot carry sourceEventSeqs`) and refuses a replacement that leaves a
+ * shadowed node uncited, so the call/receipt nodes can never be folded away.
+ * Appending instead keeps the prose in the chat view; the cost is that the
+ * surface still holds the call and its receipt behind it.
  */
 export function foldStorySubmission(session, result, bodyText) {
+  // Nothing to fold into, or a host that cannot append: leave the receipt as-is.
+  if (!session || typeof session.append !== 'function' || !Array.isArray(session.surface?.nodes)) return
   const data = result.event.data
   const turn = Number(data.turn) || 0
   const step = Number(data.step) || 1
   const surface = createSessionSurfaceMutator(session)
-  // `submission.index` is the events-array position while the receipt is an
-  // event seq; the surface is a seq list, so the call is located by its own seq.
-  // A filtered or compacted log makes the two differ, and a positional lookup
-  // then fails with "消息替换目标已变化".
-  const start = Number(result.event?.seq ?? result.index)
-  const receipt = Number(result.receiptIndex)
-  const nodes = Array.isArray(session?.surface?.nodes) ? session.surface.nodes.map(Number) : []
-  const from = nodes.indexOf(start)
-  const to = nodes.indexOf(receipt)
-  // A step may dispatch several tools, so other receipts can sit between the
-  // call and this submission's receipt. The range must cite every node it
-  // removes or the replacement is refused with "缺少有效的来源引用".
-  if (from < 0 || to < from) return
-  // The appended copy and the replacement are one message. The chat view keys a
-  // round's actions by the message id it rendered and the fork map reads the id
-  // of the newest projection event, so two ids here hide the fork action.
+  // The chat view keys a round's actions by the message id it rendered and the
+  // fork map reads the id of the newest projection event, so the copy carries
+  // its own id instead of reusing the call's.
   const reply = {
     ...data.message,
     id: randomUUID(),
     source: { kind: 'model', provider: 'dsh-tavern', model: 'reply-projection' },
     content: [{ type: 'text', text: bodyText }]
   }
-  // Settlement runs after the submission's step closed: the copy and its replacement
-  // share one edit step, so the log stays loadable and the step still shows the answer.
+  // Settlement runs after the submission's step closed, so the copy goes into an
+  // edit step: the log stays loadable and the step still shows the answer.
   surface.editStep(() => {
-    const shown = surface.append('assistant/message', { turn, step, message: reply }, { surfaceOp: 'append', sourceEventSeqs: [] })
-    const shownSeq = Number(typeof shown === 'number' ? shown : shown.seq)
-    const end = session.surface.nodes.map(Number).indexOf(shownSeq)
-    if (end < to) return
-    surface.replace('assistant/message', { turn, step, message: reply },
-      { start, end: shownSeq, sourceEventSeqs: session.surface.nodes.slice(from, end + 1).map(Number) })
+    surface.append('assistant/message', { turn, step, message: reply }, { surfaceOp: 'append' })
   })
 }
 
