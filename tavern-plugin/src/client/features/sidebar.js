@@ -149,9 +149,6 @@
 			const sillyTavernChatFile = React.useRef(null);
 			const saveImportMenu = React.useRef(null);
 			const [saveImportMenuOpen, setSaveImportMenuOpen] = React.useState(false);
-			// Android has no reliable system picker inside the DSHA window: this lists
-			// the download folder instead. null = closed, otherwise the file kind.
-			const [mobileSavePicker, setMobileSavePicker] = React.useState(null);
 			// A SillyTavern chat chosen before its card: held until that card's opening page is ready.
 			const [pendingChatImport, setPendingChatImport] = React.useState(null);
 			const initialImportRef = React.useRef(null);
@@ -580,21 +577,11 @@
 				setError("");
 				let text;
 				try { text = await readChatImportFile(file); } catch (error) { setError(String(error.message || error)); return; }
-				await startSillyTavernChat(text, file.name);
-			}
-			async function startSillyTavernChat(text, fileName) {
 				let characterName = "";
 				try { characterName = String(JSON.parse(text.slice(0, text.indexOf("\n") >= 0 ? text.indexOf("\n") : text.length)).character_name || "").trim(); } catch (error) {}
-				setPendingChatImport({ text: text, fileName: fileName, characterName: characterName });
+				setPendingChatImport({ text: text, fileName: file.name, characterName: characterName });
 				const matches = characterName ? cards.filter(function (card) { return !card.readError && String(card.name || "").trim() === characterName; }) : [];
 				if (matches.length === 1) await preparePlayConversation(matches[0]);
-			}
-			async function chooseMobileChat(entry) {
-				if (busy) return;
-				const read = await call("readMobileChatImport", { id: entry.id });
-				if (read.text.length > 8 * 1024 * 1024) throw new Error("聊天文件最大支持 8 MB");
-				setMobileSavePicker(null);
-				await startSillyTavernChat(read.text, read.fileName || entry.name);
 			}			React.useEffect(function () {
 				if (!pendingChatImport || !openingPicker || openingPicker.preparing || busy) return;
 				const pending = pendingChatImport;
@@ -625,30 +612,12 @@
 				} catch (error) { setError("导入存档失败：" + String(error.message || error)); }
 				finally { setBusy(false); }
 			}
-			// Same import, but the server reads the file from the phone folder. The
-			// request body never carries the archive, so a 200 MB save stays cheap.
-			// Failures are rethrown: the folder picker shows them in place.
-			async function importMobileGameSave(entry) {
-				if (busy) return;
-				setBusy(true); setError("");
-				try {
-					const imported = await call("importMobileGameSave", { id: entry.id });
-					notifyDataChanged(["cards", "sessions"]);
-					setMobileSavePicker(null);
-					closePicker();
-					await finishPendingOpen({ sessionId: imported.sessionId, targetMode: imported.mode || "story" });
-				} catch (error) {
-					throw new Error("导入存档失败：" + String(error.message || error));
-				}
-				finally { setBusy(false); }
-			}
-			// Open the folder panel synchronously. Clicking the hidden input after an
-			// await loses the user gesture, and the browser then silently drops the
-			// picker — the panel's own button is a real click, so that one works.
-			function openSaveImport(kind) {
+			// Click the hidden input directly inside the menu's click handler: the
+			// gesture is still live, so the system picker opens.
+			function openSaveImport(input) {
 				setSaveImportMenuOpen(false);
 				setError("");
-				setMobileSavePicker(kind);
+				if (input && input.current) input.current.click();
 			}
 			// 一份记录一个新对话；人物卡、称呼与“仅导入正文”对这一批里的每份都一样。
 			async function importConversationEntry(request, entry) {
@@ -1110,19 +1079,8 @@
 					h("div", { className: "dsh-tavern-more-actions dsh-tavern-save-import-menu", ref: saveImportMenu },
 						h("button", { type: "button", className: "dsh-tavern-btn", disabled: busy, "aria-haspopup": "menu", "aria-expanded": saveImportMenuOpen, onClick: function () { setSaveImportMenuOpen(function (value) { return !value; }); } }, "导入存档"),
 						h("div", { className: "dsh-tavern-more-menu", role: "menu", "aria-label": "导入存档", hidden: !saveImportMenuOpen, onClick: function (event) { if (event.target.closest("button:not(:disabled)")) setSaveImportMenuOpen(false); } },
-							h("button", { type: "button", role: "menuitem", disabled: busy, title: "在其他电脑的 DSH Tavern 导出的存档，作为一局新游戏继续玩", onClick: function () { openSaveImport("save"); } }, "DSH Tavern 存档（.dshsave）"),
-							h("button", { type: "button", role: "menuitem", disabled: busy, title: "SillyTavern 导出的聊天记录，需要对应的人物卡", onClick: function () { openSaveImport("chat"); } }, "SillyTavern 聊天记录（.jsonl）"))),
-					mobileSavePicker ? h(MobileSaveImportPicker, {
-						kind: mobileSavePicker,
-						open: true,
-						onClose: function () { setMobileSavePicker(null); },
-						onChoose: function (entry) { return mobileSavePicker === "chat" ? chooseMobileChat(entry) : importMobileGameSave(entry); },
-						onUsePicker: function () {
-							const target = mobileSavePicker === "chat" ? sillyTavernChatFile : saveImportFile;
-							setMobileSavePicker(null);
-							if (target.current) target.current.click();
-						}
-					}) : null,
+							h("button", { type: "button", role: "menuitem", disabled: busy, title: "在其他电脑的 DSH Tavern 导出的存档，作为一局新游戏继续玩", onClick: function () { openSaveImport(saveImportFile); } }, "DSH Tavern 存档（.dshsave）"),
+							h("button", { type: "button", role: "menuitem", disabled: busy, title: "SillyTavern 导出的聊天记录，需要对应的人物卡", onClick: function () { openSaveImport(sillyTavernChatFile); } }, "SillyTavern 聊天记录（.jsonl）"))),
 					h("button", { className: "dsh-tavern-btn", onClick: closePicker }, "关闭")),
 				h("input", { ref: fileRef, type: "file", accept: TAVERN_CARD_FILE_ACCEPT, style: { display: "none" }, onChange: function (e) { const f = e.target.files && e.target.files[0]; if (f) importCard(f); e.target.value = ""; } }),
 				pendingChatImport ? h("div", { className: "dsh-tavern-side-empty", role: "status", style: { padding: "4px 6px", display: "flex", alignItems: "center", gap: "8px" } }, h("span", null, "选择这份 SillyTavern 聊天记录对应的人物卡" + (pendingChatImport.characterName ? "（记录里的角色：" + pendingChatImport.characterName + "）" : "")), h("button", { className: "dsh-tavern-btn", disabled: busy, onClick: function () { setPendingChatImport(null); } }, "取消")) : null,

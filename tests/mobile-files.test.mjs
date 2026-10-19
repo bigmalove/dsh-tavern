@@ -45,16 +45,18 @@ test('非 Android 宿主不提供手机目录', async function () {
   await assert.rejects(files.read('download:' + Buffer.from('a.dshsave').toString('base64url')), /不允许/)
 })
 
-test('存档导入的 RPC 与手机目录入口都接上了', async function () {
+test('存档与聊天记录走系统选择器，不再提供手机目录入口', async function () {
   const { readFile } = await import('node:fs/promises')
   const server = await readFile(new URL('../tavern-plugin/lib/index.js', import.meta.url), 'utf8')
-  assert.match(server, /case 'listMobileSaveImports': return await mobileSaveImport\.list\(\)/)
-  assert.match(server, /case 'importMobileGameSave': \{[\s\S]*?importGameSaveBuffer\(entry\.buffer\)/)
-  assert.match(server, /case 'readMobileChatImport': \{[\s\S]*?entry\.buffer\.toString\('utf8'\)/)
-  // The embedded window cannot always reach a system picker; the panel must ship.
+  for (const method of ['listMobileSaveImports', 'importMobileGameSave', 'readMobileChatImport']) {
+    assert.equal(server.includes("'" + method + "'"), false, method)
+  }
+  // The picker needs no accept list: Android SAF filters by MIME and `.dshsave`
+  // has no registered type, so any accept list hides the file being imported.
+  const sidebar = await readFile(new URL('../tavern-plugin/src/client/features/sidebar.js', import.meta.url), 'utf8')
+  assert.doesNotMatch(sidebar, /type: "file", accept: "\.dshsave/)
+  assert.doesNotMatch(sidebar, /type: "file", accept: "\.jsonl/)
   const client = await readFile(new URL('../tavern-plugin/lib/client.js', import.meta.url), 'utf8')
-  assert.match(client, /listMobileSaveImports/)
-  assert.match(client, /importMobileGameSave/)
-  assert.match(client, /readMobileChatImport/)
-  assert.match(client, /从手机 Download 选存档/)
+  assert.equal(client.includes('MobileSaveImportPicker'), false)
+  assert.match(client, /openSaveImport\(saveImportFile\)/)
 })
