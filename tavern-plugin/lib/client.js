@@ -15902,7 +15902,8 @@ async function runTavernTouchDiagnostics(host, onStatus) {
 				setPendingChatImport({ text: text, fileName: file.name, characterName: characterName });
 				const matches = characterName ? cards.filter(function (card) { return !card.readError && String(card.name || "").trim() === characterName; }) : [];
 				if (matches.length === 1) await preparePlayConversation(matches[0]);
-			}			React.useEffect(function () {
+			}
+			React.useEffect(function () {
 				if (!pendingChatImport || !openingPicker || openingPicker.preparing || busy) return;
 				const pending = pendingChatImport;
 				setPendingChatImport(null);
@@ -20534,7 +20535,7 @@ async function runTavernTouchDiagnostics(host, onStatus) {
 			function TavernConversationExportAction(props) {
                 // The header only needs session membership. Building a complete
                 // Tavern view here delays the button behind templates and history.
-                const owner = props.sessions.subagentAddress(props.sessionId)?.parentSessionId || props.sessionId;
+                const owner = (props.sessions && typeof props.sessions.subagentAddress === "function" ? props.sessions.subagentAddress(props.sessionId) : null)?.parentSessionId || props.sessionId;
                 const available = Boolean(useTavernSessionMode(owner));
                 const [busy, setBusy] = React.useState(false);
                 const [open, setOpen] = React.useState(false);
@@ -20554,8 +20555,8 @@ async function runTavernTouchDiagnostics(host, onStatus) {
 				async function exportText() {
 					setBusy(true);
 					try {
-						const snapshot = props.sessions.list.getSnapshot();
-						const summary = snapshot.byId && snapshot.byId[props.sessionId];
+						const snapshot = props.sessions && props.sessions.list ? props.sessions.list.getSnapshot() : null;
+						const summary = snapshot && snapshot.byId && snapshot.byId[props.sessionId];
 						const result = await rpc("exportConversation", { title: summary && summary.displayTitle || "" }, props.sessionId);
 						// With illustrations the Markdown and its pictures arrive together as a zip.
 						const blob = result.base64
@@ -21873,7 +21874,7 @@ async function runTavernTouchDiagnostics(host, onStatus) {
 
         function TavernConversationSettingsTab(props) {
             const h = React.createElement;
-            const owner = props.sessions.subagentAddress(props.sessionId)?.parentSessionId || props.sessionId;
+            const owner = (props.sessions && typeof props.sessions.subagentAddress === "function" ? props.sessions.subagentAddress(props.sessionId) : null)?.parentSessionId || props.sessionId;
             const mode = useTavernSessionMode(owner);
             return h("aside", { className: "dsh-tavern-status dsh-local-settings", "aria-label": "本局设置" },
                 h("div", { className: "dsh-tavern-status-head" }, h("strong", null, "本局设置")),
@@ -21893,7 +21894,7 @@ async function runTavernTouchDiagnostics(host, onStatus) {
         }
 
         function TavernConversationSettingsAction(props) {
-            const owner = props.sessions.subagentAddress(props.sessionId)?.parentSessionId || props.sessionId;
+            const owner = (props.sessions && typeof props.sessions.subagentAddress === "function" ? props.sessions.subagentAddress(props.sessionId) : null)?.parentSessionId || props.sessionId;
             const mode = useTavernSessionMode(owner);
             // Same as the slot above: an unknown mode is "not loaded yet", not "not Tavern".
             if (mode && !isBodyMode(mode)) return null;
@@ -22504,6 +22505,48 @@ async function runTavernTouchDiagnostics(host, onStatus) {
                     h(HeaderItemsSettings, { collapsible: false }))), document.body);
         }
 
+        // 宿主对 header slot 的注入内容因版本而异：0.2.1 会带 sessions，0.2.0 只带 sessionId。
+        // 一律自己解析一遍，缺什么用 ctx 补，绝不把宿主 API 当必定存在的对象用。
+        function resolveTavernHeaderSlot(slotProps, ctx) {
+            const props = slotProps || {};
+            let sessions = props.sessions;
+            if (!sessions || typeof sessions !== "object") sessions = ctx.sessions;
+            let sessionId = props.sessionId || "";
+            if (!sessionId) {
+                // 没有 slot props 时退回会话列表里的当前会话（手机上 header 先于列表面板渲染）。
+                try {
+                    const snapshot = sessions && sessions.list ? sessions.list.getSnapshot() : null;
+                    sessionId = (snapshot && (snapshot.current || snapshot.active || snapshot.selected)) || "";
+                } catch (_) { sessionId = ""; }
+            }
+            let owner = sessionId;
+            try {
+                const address = sessions && typeof sessions.subagentAddress === "function" ? sessions.subagentAddress(sessionId) : null;
+                if (address && address.parentSessionId) owner = address.parentSessionId;
+            } catch (_) { owner = sessionId; }
+            return {
+                props: props,
+                sessions: sessions,
+                sessionId: sessionId,
+                owner: owner,
+                openStatus: function (sessionIdOrOwner) { return openTavernSidebarTab(ctx, { type: "dsh-tavern:status" }, { sessionId: sessionIdOrOwner || owner || sessionId }); }
+            };
+        }
+
+        // 宿主的 SlotErrorBoundary 会把插件抛出的错误吞成空白：顶栏一旦异常就整排消失，
+        // 用户连入口都没了。这里自己兜一层，失败时退化成一个酒馆按钮。
+        class TavernHeaderBoundary extends React.Component {
+            constructor(props) { super(props); this.state = { failed: false }; }
+            static getDerivedStateFromError() { return { failed: true }; }
+            componentDidCatch(error) { try { tavernErrorHub.report("顶栏渲染", error); } catch (_) {} }
+            render() {
+                if (!this.state.failed) return this.props.children;
+                const h = React.createElement;
+                return h("button", { type: "button", className: "dsh-tavern-btn dsh-tavern-header-settings", "aria-label": "酒馆状态", title: "顶栏渲染失败，点这里打开酒馆状态", onClick: this.props.openStatus },
+                    h("span", { className: "dsh-tavern-header-action-label" }, "酒馆"));
+            }
+        }
+
         // One slot for every top-bar shortcut. 酒馆状态 and 导出 keep their own
         // components (the export one owns a menu); pinned pages open their tab.
         function TavernHeaderItems(props) {
@@ -22512,7 +22555,8 @@ async function runTavernTouchDiagnostics(host, onStatus) {
             const header = useTavernHeaderItems();
             const display = header.display === "icon" ? "icon" : "icon-text";
             const items = header.items;
-            const owner = props.sessions.subagentAddress(props.sessionId)?.parentSessionId || props.sessionId;
+            // 外层槽位已解析好 owner（含子会话回溯）；这里只用它，别重复依赖宿主 API。
+            const owner = props.owner || props.sessionId;
             const [folded, setFolded] = React.useState([]);
             const [context, setContext] = React.useState(null);
             const [more, setMore] = React.useState(null);
@@ -22605,7 +22649,7 @@ async function runTavernTouchDiagnostics(host, onStatus) {
                 const entry = entries.get(id) || { id: id, label: titleOf(id) };
                 const label = entry.label || titleOf(id);
                 const content = id === "dsh-tavern:status"
-                    ? h(TavernConversationSettingsAction, { sessionId: props.sessionId, sessions: props.sessions, open: props.openStatus })
+                    ? h(TavernConversationSettingsAction, { sessionId: owner, sessions: props.sessions, open: props.openStatus })
                     : id === "header:export"
                         ? h(TavernConversationExportAction, { sessionId: props.sessionId, sessions: props.sessions })
                         : h("button", { type: "button", className: "dsh-tavern-btn dsh-tavern-header-page", title: label, "aria-label": label, onClick: function () { activate(id); } },
@@ -22679,15 +22723,18 @@ async function runTavernTouchDiagnostics(host, onStatus) {
             )), "dsh-tavern: immersive header action");
             ctx.effect(() => slots.inject("conversation.session.header.utilities", () => slots.register(
                 { name: "conversation.session.header.utilities", id: "dsh-tavern-header-items", order: 80 },
-                function (props) {
-                    const owner = ctx.sessions.subagentAddress(props.sessionId)?.parentSessionId || props.sessionId;
-                    const mode = useTavernSessionMode(owner);
+                function (slotProps) {
+                    const resolved = resolveTavernHeaderSlot(slotProps, ctx);
+                    const mode = useTavernSessionMode(resolved.owner);
                     // Unknown mode means the session list has not arrived yet (the side
                     // panel publishes it, and on a phone that panel is not mounted until
                     // the drawer opens). Render anyway; only a known non-body mode hides
                     // the bar, otherwise the whole header disappears on mobile.
                     if (mode && !isBodyMode(mode)) return null;
-                    return React.createElement(TavernHeaderItems, Object.assign({}, props, { ctx: ctx, sessions: ctx.sessions, openStatus: sessionId => openTavernSidebarTab(ctx, { type: "dsh-tavern:status" }, { sessionId }) }));
+                    return React.createElement(TavernHeaderBoundary, { openStatus: resolved.openStatus },
+                        React.createElement(TavernHeaderItems, Object.assign({}, resolved.props, {
+                            ctx: ctx, sessions: resolved.sessions, owner: resolved.owner, sessionId: resolved.sessionId, openStatus: resolved.openStatus
+                        })));
                 }
             )), "dsh-tavern: header items");
 			ctx.effect(() => tavernPanelRegistry.onPin(sessionId => openTavernSidebarTab(ctx, { type: "dsh-tavern:status" }, { sessionId })), "dsh-tavern: reveal pinned panels");

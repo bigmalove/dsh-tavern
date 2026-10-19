@@ -582,7 +582,8 @@
 				setPendingChatImport({ text: text, fileName: file.name, characterName: characterName });
 				const matches = characterName ? cards.filter(function (card) { return !card.readError && String(card.name || "").trim() === characterName; }) : [];
 				if (matches.length === 1) await preparePlayConversation(matches[0]);
-			}			React.useEffect(function () {
+			}
+			React.useEffect(function () {
 				if (!pendingChatImport || !openingPicker || openingPicker.preparing || busy) return;
 				const pending = pendingChatImport;
 				setPendingChatImport(null);
