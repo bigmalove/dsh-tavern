@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "revision": "beffc8a9e4774c6d614594e4ca70a72efdc53acb",
-  "releaseSequence": 760,
+  "revision": "6f7b206344713f4d168c776cddd0a780dd5233e7",
+  "releaseSequence": 761,
   "version": "3.0.0",
   "files": [
     {
@@ -41,8 +41,8 @@
     },
     {
       "path": "android/dsh-tavern-entry/client.js",
-      "sha256": "12a4ee3f78a8958bb848ad23ff97dc6aafd2e2e9239d16dec46ecd7fd7c714fe",
-      "size": 13197
+      "sha256": "1ba46d462ad8143f1f320bfc11714abc9a9c0f5344e68417dfa5c8713dc090b7",
+      "size": 13648
     },
     {
       "path": "android/dsh-tavern-entry/cordis.patch.yml",
