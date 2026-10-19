@@ -22,7 +22,16 @@ function validContent(content) {
   return content
 }
 
-/** Only a model call with a matching successful durable result is a submission. */
+/**
+ * The body a submission carried, whether or not its receipt came back verbatim.
+ *
+ * Hosts differ in what they store for a tool result: some echo the returned
+ * string, some wrap or truncate it, some route it through a projector first.
+ * Requiring an exact echo made a successful submission invisible whenever the
+ * host reformatted the receipt, and the round then failed with "模型本轮没有返回
+ * 正文" while the body sat in the call arguments the whole time. A non-error
+ * receipt for this call is the proof of success; the text comes from the call.
+ */
 export function storySubmissionForTurn(session, turn) {
   const events = sessionEvents(session)
   const visible = Array.isArray(session?.surface?.nodes) ? new Set(session.surface.nodes.map(Number)) : null
@@ -52,8 +61,6 @@ export function storySubmissionForTurn(session, turn) {
       if (!model) continue
       let content
       try { content = validContent(JSON.parse(model.block.arguments).content) } catch { continue }
-      const resultText = (block.content || []).filter(part => part?.type === 'text').map(part => part.text).join('')
-      if (resultText !== content) continue
       return { index: model.index, receiptIndex: Number(event.seq ?? index), event: model.event, text: content.trim(), content, toolCallId: block.toolCallId, storyToolSubmission: true }
     }
   }
@@ -133,6 +140,8 @@ export function createStorySubmissionTool({ chatForSession, enabled, isBackgroun
       if (turn === null) throw new Error('当前没有正在生成的游玩回合')
       const content = validContent(args?.content)
       const previous = storySubmissionForTurn(session, turn)
+      // The same body twice is the model repeating itself after a lost receipt;
+      // returning it again is harmless and keeps the round from failing.
       if (previous && previous.content !== content) throw new Error('本轮已提交正文，不允许重复覆盖')
       if (typeof exec.concludeTurn !== 'function') throw new Error('当前 DSH 版本不支持工具提交后结束回合，请关闭正文走工具调用或更新 DSH')
       exec.signal?.throwIfAborted()

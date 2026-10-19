@@ -14,7 +14,9 @@ function fixture(content = '<game>正文\\引号"\n新行</game>', { error = fal
       { type: 'tool-call', id: 'submit-1', name: 'submit_story', arguments: raw }
     ] } } },
     { type: 'tool/call', data: { turn, callId: 'submit-1', name: 'submit_story', arguments: raw } },
-    { type: 'tool/result', data: { turn, message: { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'submit-1', isError: error, content: [{ type: 'text', text: result }] }] } } }
+    // 0.2.1 lifts the receipt into a first-class tool message: the call id and the
+    // text sit on the message itself, not in a `tool-result` block.
+    { type: 'tool/result', data: { turn, message: { role: 'tool', toolCallId: 'submit-1', isError: error, content: [{ type: 'text', text: result }] } } }
   ] }
 }
 
@@ -48,6 +50,20 @@ test('工具仅允许已开启的前台 story/script，拒绝空正文、后台�
   await assert.rejects(tool.execute({ content: '正文' }, { ...exec, signal: controller.signal }), { name: 'AbortError' })
   session.events.push({ type: 'turn/end', data: { turn: 1 } })
   await assert.rejects(tool.execute({ content: '正文' }, exec), /没有正在生成/)
+})
+
+test('提交回执的正文取自调用参数，宿主改写回执也认', () => {
+  const content = '她推开门。'
+  // The host stored a wrapped receipt, not the string the tool returned.
+  const session = fixture(content, { result: '已提交：她推开门。' })
+  const submission = storySubmissionForTurn(session, 2)
+  assert.ok(submission, '回执不逐字相等也必须是提交')
+  assert.equal(submission.text, content)
+  assert.equal(submission.content, content)
+})
+
+test('报错的回执仍不算提交', () => {
+  assert.equal(storySubmissionForTurn(fixture('她推开门。', { error: true }), 2), null)
 })
 
 const server = await readFile(new URL('../tavern-plugin/lib/index.js', import.meta.url), 'utf8')
