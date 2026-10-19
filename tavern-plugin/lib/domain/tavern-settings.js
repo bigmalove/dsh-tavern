@@ -195,10 +195,8 @@ export function applyTavernSettingsPatch(current, patch) {
   if (Object.hasOwn(input, 'storyToolCall')) {
     if (typeof input.storyToolCall !== 'boolean') throw new Error('正文走工具调用设置必须是布尔值')
     next.storyToolCall = input.storyToolCall
-  }
-  if (Object.hasOwn(input, 'storyHistoryToolCall')) {
-    if (typeof input.storyHistoryToolCall !== 'boolean') throw new Error('历史正文走工具调用设置必须是布尔值')
-    next.storyHistoryToolCall = input.storyHistoryToolCall
+    // History replay used to be a switch of its own; it now follows this one.
+    delete next.storyHistoryToolCall
   }
   if (Object.hasOwn(input, 'autoOpenStatusPanel')) {
     if (typeof input.autoOpenStatusPanel !== 'boolean') throw new Error('自动打开酒馆状态面板设置必须是布尔值')
@@ -294,8 +292,9 @@ export function presentTavernSettings(document, defaults) {
     hideContextAndReasoning: object(document).hideContextAndReasoning !== false,
     headerItems: readHeaderItems(object(document).headerItems),
     candidateDismissMode: object(document).candidateDismissMode === 'after-fill' ? 'after-fill' : 'after-send',
-    storyToolCall: object(document).storyToolCall === true,
-    storyHistoryToolCall: object(document).storyHistoryToolCall === true,
+    // One switch for both: new bodies submitted as tool calls, history replayed as
+    // them. A save that turned on either of the two former switches keeps it on.
+    storyToolCall: object(document).storyToolCall === true || object(document).storyHistoryToolCall === true,
     castPresentation: object(document).castPresentation === true,
     // Only the latest floors run a card's HTML interface; 0 renders every floor.
     renderDepth: renderDepthOf(object(document).renderDepth),

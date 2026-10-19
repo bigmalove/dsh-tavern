@@ -2033,6 +2033,8 @@ body.dsh-tavern-shell-active > :is([role="tree"], [role="menu"], [role="listbox"
 /* Presentation only: keep request/history data and actionable tool rows intact. */
 html.dsh-tavern-hide-process [data-chat-flow-kind="context"],
 html.dsh-tavern-hide-process [data-chat-flow-kind="system-prompt"],
+/* 宿主的「上下文已压缩」行：自动压缩与 /compact 两种形态都按行内的压缩标记认。 */
+html.dsh-tavern-hide-process [data-chat-flow-kind]:has([class*="_compactionRow"]),
 html.dsh-tavern-hide-process .dsh-tavern-assistant-reasoning,
 html.dsh-tavern-hide-process [data-chat-flow-kind="turn-process"]:has([data-turn-process-tool-calls="0"][data-turn-process-subagents="0"]) { display: none !important; }
 
@@ -3023,8 +3025,6 @@ details.dsh-tavern-recall-guide > summary .dsh-tavern-recall-guide-heading > spa
 .dsh-tavern-recall-notes > b { color: var(--dsw-alias-label-primary); font-size: 12px; font-weight: 650; }
 .dsh-tavern-recall-notes ul { margin: 6px 0 0; padding-left: 18px; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 1.7; }
 
-/* 侧边卡片是 better-sidebar 的开发者设置，玩家无需看到。 */
-[data-dsh-better-sidebar-settings-nav] { display: none !important; }
 .dsh-tavern-plugin-overlay {
   box-sizing: border-box; position: fixed; inset: 0; z-index: 2000; overflow: auto;
   background: var(--dsw-specific-sidebar-fill); color: var(--dsw-alias-label-primary);

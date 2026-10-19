@@ -56,3 +56,13 @@ test('系统提示词方案：复制、重名加后缀、不能删除正在使�
   assert.deepEqual(document.promptOverrides, { story: 'C' })
   assert.equal(document.systemAppendEnabled, false)
 })
+
+test('正文与历史回放合成一个工具调用开关：旧存档任一开着都算开，改动后旧字段清掉', () => {
+  assert.equal(presentTavernSettings({}, {}).storyToolCall, false)
+  assert.equal(presentTavernSettings({ storyHistoryToolCall: true }, {}).storyToolCall, true)
+  assert.equal(presentTavernSettings({ storyToolCall: true }, {}).storyToolCall, true)
+  assert.equal(Object.hasOwn(presentTavernSettings({ storyHistoryToolCall: true }, {}), 'storyHistoryToolCall'), false)
+  const off = applyTavernSettingsPatch({ storyHistoryToolCall: true }, { storyToolCall: false })
+  assert.deepEqual(off, { storyToolCall: false })
+  assert.equal(presentTavernSettings(off, {}).storyToolCall, false)
+})

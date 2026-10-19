@@ -1,5 +1,5 @@
 import { createImportContextPreparation } from '../domain/import-context-preparation.js'
-import { createStoryCompactionRequest, nativelyRetainedRounds, retainRecentStoryRounds, storyVolumePlan, usesStoryCompaction } from '../domain/story-compaction.js'
+import { createStoryCompactionRequest, nativelyRetainedRounds, retainRecentStoryRounds, storyVolumeMerge, storyVolumePlan, usesStoryCompaction } from '../domain/story-compaction.js'
 import { installCompactionRequestProjection } from '../domain/compaction-request.js'
 import { installWorkspaceInstructionPresentation } from '../domain/workspace-instruction-presentation.js'
 import { presentModelError } from '../domain/model-error-presentation.js'
@@ -64,8 +64,30 @@ export function registerModelStreamHooks({
     const volumes = storyVolumePlan(request, { through: turns[turns.length - 1 - kept - natively], budget: retention.volumeBudget, estimate: retention.estimate })
     const instruction = [runtimePrompt('story-compaction'), volumes.instruction, ...(notes.length ? ['【插件附加的摘要要求】', ...notes.map(note => note.text)] : [])].join('\n\n')
     const story = createStoryCompactionRequest(request, instruction)
-    return { ...retainRecentStoryRounds(story, retention.rounds - natively, retention), prefix: volumes.prefix }
+    let prefix = volumes.prefix
+    if (volumes.merge) {
+      // Only the oldest volumes are rewritten, in their own call; a failed merge keeps them all.
+      try { prefix = [prefix[0], await mergeStoryVolumes(volumes.merge, request), ...prefix.slice(1)] }
+      catch (error) {
+        console.warn('dsh-tavern: 合并旧卷失败，本次原样保留全部旧卷：', error?.message || error)
+        prefix = [prefix[0], ...volumes.merge.volumes.map(volume => volume.text), ...prefix.slice(1)]
+      }
+    }
+    return { ...retainRecentStoryRounds(story, retention.rounds - natively, retention), prefix }
   })
+  async function mergeStoryVolumes(merge, request) {
+    const { header, prompt } = storyVolumeMerge(merge)
+    let text = ''
+    for await (const event of ctx.llm.stream({ provider: request.provider, model: request.model, purpose: 'compaction', signal: request.signal,
+      ...(request.maxTokens ? { maxTokens: request.maxTokens } : {}),
+      messages: [{ id: 'tavern-story-volume-merge', role: 'user', content: [{ type: 'text', text: prompt }] }] })) {
+      if (event?.type === 'block-end' && event.block?.type === 'text') text += event.block.text
+      if (event?.type === 'finish' && event.reason?.kind !== 'stop') throw new Error('合并未完成：' + (event.reason?.failure?.message || event.reason?.kind))
+    }
+    text = text.trim()
+    if (!text) throw new Error('合并没有返回文字')
+    return text.startsWith('【前情总览') ? text : header + '\n' + text
+  }
 
   async function gameChildSession(sessionId) {
     const parentSessionId = str((sessionStore.get(sessionId) || agentRegistry.get(sessionId)?.session)?.header?.parentSession)

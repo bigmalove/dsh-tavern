@@ -115,7 +115,7 @@ import { sessionOpeningDescriptor, prepareSessionOpening } from './domain/sessio
 import { scriptPromptScanText } from './domain/tavern-script-prompts.js'
 import { createOpeningPreparation } from './domain/opening-preparation.js'
 import { createChatHistoryImportService } from './domain/chat-history-import-service.js'
-import { sessionEvents } from './domain/session-events.js'
+import { appendSessionEvent, sessionEvents } from './domain/session-events.js'
 import { setAgentResolver } from './domain/agent-lookup.js'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createHash, randomUUID } from 'node:crypto'
@@ -2736,6 +2736,42 @@ export async function apply(ctx) {
         fileName: str(args.fileName) || 'import.jsonl', ...(args.userName ? { userName: str(args.userName) } : {}) })
     } finally { await handle.dispose() }
   }
+  // For long-run tests (bin/eval-compaction-memory.mjs --grow): append finished rounds to a game
+  // as if they had been played, without a model, so the same story can be compacted again later.
+  async function appendStoryRounds(args) {
+    const sessionId = str(args?.sessionId)
+    const rounds = Array.isArray(args?.rounds) ? args.rounds.filter(round => str(round?.assistant).trim()) : []
+    const chat = await chatForSession(sessionId)
+    if (!chat || !rounds.length) throw new Error('缺少对话或要追加的轮次')
+    const appended = await withCompactionSession(sessionId, async agent => {
+      if (agent.phase?.kind === 'running') throw new Error('这一局正在生成，请稍后再追加')
+      const session = agent.session, now = Date.now()
+      let turn = Math.max(0, ...sessionEvents(session).filter(event => event.type === 'turn/start').map(event => event.data.turn))
+      const messages = []
+      for (const round of rounds) {
+        turn++
+        const user = str(round.user).trim() || '继续', body = str(round.assistant)
+        appendSessionEvent(session, 'turn/start', { turn })
+        appendSessionEvent(session, 'step/start', { turn, step: 1 })
+        appendSessionEvent(session, 'user/message', { id: `tavern-appended:${turn}:user`, role: 'user', content: [{ type: 'text', text: user }], source: { kind: 'user' } }, { surfaceOp: 'append' })
+        const input = sessionEvents(session).at(-1).seq
+        appendSessionEvent(session, 'assistant/message', { turn, step: 1, message: { id: `tavern-appended:${turn}:body`, role: 'assistant', content: [{ type: 'text', text: body }],
+          source: { kind: 'model', provider: 'dsh-tavern', model: 'appended-rounds' } } }, { surfaceOp: 'append' })
+        // The anchor ties the saved round to its native events, so reconcile does not rewrite it.
+        const nativeAnchor = { turn, input, reply: sessionEvents(session).at(-1).seq }
+        appendSessionEvent(session, 'step/end', { turn, step: 1 })
+        appendSessionEvent(session, 'turn/end', { turn, reason: { kind: 'completed' } })
+        messages.push({ role: 'user', text: user, ts: now }, { role: 'assistant', turn, text: body, sourceText: body, projectionText: body, sessionText: body,
+          displayText: body, displayMode: 'markdown', ts: now, native: true, swipeId: 0, swipes: [body], nativeAnchor })
+      }
+      await sessionStore.flush(session)
+      return { messages, lastTurn: turn }
+    })
+    // Write the save only after the native rounds are flushed and released, so the reconcile
+    // that follows a save write reads them instead of a stale Session.
+    await updateChat(chat.id, current => { current.messages = [...(current.messages || []), ...appended.messages]; return current }, { source: 'test.append-rounds' })
+    return { appended: rounds.length, lastTurn: appended.lastTurn }
+  }
   async function prepareConversationFork(sourceChatId, sourceSessionId, requestedTurn) {
     const source = str(sourceChatId) === '' ? await chatForSession(str(sourceSessionId)) : await readChat(str(sourceChatId))
     if (!source) throw new Error('找不到要分叉的源对话')
@@ -3288,7 +3324,9 @@ export async function apply(ctx) {
       rounds,
       budget: Number.isFinite(window) && window > 0 ? Math.floor(window * RETAINED_ROUNDS_WINDOW_SHARE) : Infinity,
       // An unknown window still merges old volumes eventually rather than letting them grow without end.
-      volumeBudget: Number.isFinite(window) && window > 0 ? Math.floor(window * STORY_VOLUMES_WINDOW_SHARE) : 30000,
+      // DSH_TAVERN_STORY_VOLUME_BUDGET (tokens) overrides it, to test the merge on a large-window model.
+      volumeBudget: Number(process.env.DSH_TAVERN_STORY_VOLUME_BUDGET) > 0 ? Number(process.env.DSH_TAVERN_STORY_VOLUME_BUDGET)
+        : Number.isFinite(window) && window > 0 ? Math.floor(window * STORY_VOLUMES_WINDOW_SHARE) : 30000,
       estimate: text => meter?.estimateMessage ? meter.estimateMessage({ role: 'user', content: [{ type: 'text', text }] }) : Math.ceil(text.length / 4)
     }
   }
@@ -4295,7 +4333,7 @@ export async function apply(ctx) {
   const turnOrchestrator = createTurnOrchestrator({
     captureSceneWorldbook,
     storyToolCall: async () => (await readTavernSettings()).storyToolCall,
-    historyToolCall: async () => (await readTavernSettings()).storyHistoryToolCall,
+    historyToolCall: async () => (await readTavernSettings()).storyToolCall,
     store: {
       chatForSession,
       storyContextForSession: sessionId => storyContext({ sessionId }),
@@ -5024,7 +5062,7 @@ case 'getDisplayPreferences': { const settings = await readTavernSettings(); ret
         const send = /^\/send\s+([\s\S]+)\|\s*\/trigger\s*$/.exec(text)
         if (send || /^\/trigger\s*$/.test(text)) {
           await ctx.get('sessionController').prompt({ sessionId: args.sessionId, requestId: randomUUID(),
-            content: send ? [{ type: 'text', text: send[1].trim() }] : [], mode: 'followup' })
+            content: send ? [{ type: 'text', text: send[1].trim() }] : [], mode: 'followup' }, new AbortController().signal)
           return { pipe: '' }
         }
         if (/^\/setinput(?:\s|$)/.test(text)) throw new Error('服务端模板不能操作网页输入框，请使用 /send … | /trigger')
@@ -5072,6 +5110,15 @@ case 'getDisplayPreferences': { const settings = await readTavernSettings(); ret
 	  case 'releaseTavernHelperRuntime': return { released: tavernScriptHostAdapter.releaseRuntime(args && args.sessionId, args && args.runtimeId) }
       case 'previewChatImport': return await chatHistoryImporter.preview(args || {})
       case 'importChatHistoryText': return await importChatHistoryText(args || {})
+      case 'appendStoryRounds': return await appendStoryRounds(args || {})
+      // For tools: send a player input as the page does; the turn runs like any other.
+      case 'sendPlayerInput': {
+        const sessionId = str(args?.sessionId), text = str(args?.text).trim()
+        if (!sessionId || !text) throw new Error('缺少会话或输入内容')
+        const requestId = randomUUID()
+        await ctx.get('sessionController').prompt({ sessionId, requestId, content: [{ type: 'text', text }], mode: 'followup' }, new AbortController().signal)
+        return { requestId }
+      }
       case 'rescueChatHistory': return await chatHistoryImporter.rescue(args || {})
       case 'importChatHistory': return await chatHistoryImporter.import(args || {})
       case 'startChat': {
@@ -5237,7 +5284,6 @@ case 'getDisplayPreferences': { const settings = await readTavernSettings(); ret
       }
       case 'regenBody': {
         await reconcileStory(args && args.sessionId)
-        // rewrite: revise the current body with the guidance; omitted is a fresh sample.
         const view = await regenBody(args && args.chatId, args && args.guidance, args && args.sessionId)
         notifyPluginTimeline(args && args.sessionId, 'regenerate')
         return { view }
@@ -5667,14 +5713,11 @@ case 'getDisplayPreferences': { const settings = await readTavernSettings(); ret
       projectMessages: compatibilityMessages
     },
     nativePlay: {
-      historyToolCall: async () => (await readTavernSettings()).storyHistoryToolCall,
+      // History is replayed as calls of the same submission tool, so it follows that switch.
+      historyToolCall: async () => (await readTavernSettings()).storyToolCall,
       systemAppend: () => runtimePrompt('system-append'),
       stagedRequests: runtimePresetSnapshots,
       modeFor: async function (sessionId) { return await turnOrchestrator.modeFor(sessionId) },
-      // The request projection reads both switches; without them wired here the
-      // history switch never reaches a request at all.
-      storyToolCall: async () => (await readTavernSettings()).storyToolCall,
-      historyToolCall: async () => (await readTavernSettings()).storyHistoryToolCall,
       filterMessages: appendWritingSkillState,
       resolvePreset: resolveChatRuntimePreset,
       prepareTurn: async function (input) { return await foregroundHandoff.prepare(input) },

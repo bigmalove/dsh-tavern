@@ -165,20 +165,34 @@ export function storySummaryVolumes(history) {
  */
 export function storyVolumePlan(request, { through, budget = Infinity, estimate = text => Math.ceil(text.length / 4) } = {}) {
   const volumes = storySummaryVolumes(Array.isArray(request?.messages) ? request.messages.slice(0, -1) : [])
-  const merge = volumes.length > 0 && estimate(volumes.map(volume => volume.text).join('\n\n')) > budget
   const last = volumes.at(-1)
   const from = volumes.length === 0 ? 1 : (Number.isInteger(last.through) ? last.through + 1 : null)
   const end = Number.isInteger(through) && through > 0 ? through : null
   const range = end === null ? '' : from !== null && from <= end ? `第 ${from}–${end} 轮` : `截至第 ${end} 轮`
-  if (merge) {
-    const header = `【前情总览${end === null ? '' : `（截至第 ${end} 轮）`}】`
-    return { prefix: [STORY_SUMMARY_NOTE], instruction: `【本次摘要的写法】旧卷已超出篇幅预算。把 <compacted-summary> 中的全部旧卷与之后的新剧情合并成一份，第一行单独写「${header}」；合并重复内容，省略琐碎和已失效的细节，使总篇幅明显短于旧卷之和。` }
-  }
   const header = `【${range || '新一卷'}剧情摘要】`
+  const instruction = volumes.length === 0
+    ? `【本次摘要的写法】第一行单独写「${header}」。`
+    : `【本次摘要的写法】<compacted-summary> 中的旧卷会原样保留在新摘要里，不要复述旧卷内容。只总结旧卷之后的新剧情，第一行单独写「${header}」，写成新的一卷：只写本段新增和变化的内容，人物、关系、物品等只记本段有变化的条目；与旧卷冲突时以本卷为准。`
+  // Over budget, only the oldest volumes are merged (by a separate call, see storyVolumeMerge):
+  // as few as leave the newer ones within half the budget, so recent volumes stay word for word.
+  const size = list => estimate(list.map(volume => volume.text).join('\n\n'))
+  let count = 0
+  if (volumes.length && size(volumes) > budget) while (count < volumes.length && (count === 0 || size(volumes.slice(count)) > budget / 2)) count++
+  const kept = volumes.slice(count)
   return {
-    prefix: [STORY_SUMMARY_NOTE, ...volumes.map(volume => volume.text)],
-    instruction: volumes.length === 0
-      ? `【本次摘要的写法】第一行单独写「${header}」。`
-      : `【本次摘要的写法】<compacted-summary> 中的旧卷会原样保留在新摘要里，不要复述旧卷内容。只总结旧卷之后的新剧情，第一行单独写「${header}」，写成新的一卷：只写本段新增和变化的内容，人物、关系、物品等只记本段有变化的条目；与旧卷冲突时以本卷为准。`
+    prefix: [STORY_SUMMARY_NOTE, ...kept.map(volume => volume.text)],
+    instruction,
+    ...(count ? { merge: { volumes: volumes.slice(0, count), through: volumes[count - 1].through } } : {})
+  }
+}
+
+/** The request that merges the oldest volumes into one 前情总览 of about half their length. */
+export function storyVolumeMerge(merge) {
+  const text = merge.volumes.map(volume => volume.text).join('\n\n')
+  const header = `【前情总览${Number.isInteger(merge.through) ? `（截至第 ${merge.through} 轮）` : ''}】`
+  return {
+    header,
+    prompt: `以下是按时间顺序排列的旧剧情摘要卷。把它们合并成一份前情总览，第一行单独写「${header}」，之后沿用原来的分段。\n`
+      + `保留所有专名、数字、约定、人物关系、未解决的伏笔和用户意志；删去各卷之间的重复，省略已经失效的细节；篇幅约为原文的一半（约 ${Math.round(text.length / 2)} 字），不要压得更短。只输出总览本身。\n\n${text}`
   }
 }
