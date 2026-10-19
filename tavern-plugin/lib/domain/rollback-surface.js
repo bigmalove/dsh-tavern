@@ -485,32 +485,29 @@ export function regenerationProjection(replacement, data, operationId) {
 /**
  * Idempotent: each replacement reuses its id and sources, so a retry after a crash writes nothing twice.
  *
- * The transcript draws append-origin events only; a replacement stays model-only.
- * A round whose body exists only as a replacement (it was submitted through a tool
- * call, so it never streamed an answer of its own) therefore renders as nothing
- * after regenerating. Give it a transcript copy, then shadow the range including
- * that copy — the same shape the fold writes for a live submission.
+ * A tool-submitted round has no streamed answer of its own: its body only ever
+ * existed as a replacement copy, and the human transcript renders append-origin
+ * events ("replacement copies stay model-only"). Regenerating such a round hides
+ * the old turn and leaves the new one empty — the body is nowhere on screen.
+ * Give it a transcript copy first, then shadow the whole range including that
+ * copy, exactly like the fold does for a live submission.
  */
 export function applyRegenerationProjection(session, projection) {
-  const events = sessionEvents(session)
+  const fromSubmission = projection.data?.message?.source?.model === 'reply-projection'
   const blocks = Array.isArray(projection.data?.message?.content) ? projection.data.message.content : []
   const body = blocks.filter(block => block?.type === 'text').map(block => block.text).join('')
-  // Judge by the shape the range ends on, never by the message source: a
-  // projection inherits the source of the reply it replaces.
-  const endEvent = events.find(event => Number(event?.seq) === Number(projection.range?.end))
-  const needsTranscriptCopy = body !== '' && endEvent?.type === 'assistant/message' && endEvent.surfaceOp !== 'append'
-  // The transcript draws every append-origin body, so one is enough: if any
-  // append already carries this text — the fold writes one for a live submission —
-  // a second copy would put the same round on screen twice.
-  const shown = needsTranscriptCopy
-    ? events.find(event => event?.type === 'assistant/message' && event.surfaceOp === 'append' &&
+  // A fold that won the race already appended this body into the attempt's turn;
+  // appending a second copy would show the round twice.
+  const shown = fromSubmission && body !== ''
+    ? sessionEvents(session).find(event => event?.type === 'assistant/message' && event.surfaceOp === 'append' &&
+        Number(event.seq) > Number(projection.range?.end) &&
         (event.data?.message?.content || []).some(block => block?.type === 'text' && block.text === body))
     : undefined
   const nodes = Array.isArray(session?.surface?.nodes) ? session.surface.nodes.map(Number) : []
   const replaceCleanups = () => {
     for (const cleanup of projection.cleanups || []) replaceSessionSurface(session, 'user/message', cleanup.data, cleanup.range)
   }
-  if (!needsTranscriptCopy) {
+  if (!fromSubmission) {
     replaceSessionSurface(session, 'assistant/message', projection.data, projection.range)
     replaceCleanups()
     return
