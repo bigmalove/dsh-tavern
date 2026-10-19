@@ -207,3 +207,30 @@ test('工具回合的重新生成投影补一条可见正文，重试不重复',
   assert.equal(sessionEvents(session).filter(event => event.type === 'assistant/message' &&
     event.surfaceOp === 'append' && textOf(event.data) === '新正文').length, 1)
 })
+
+// 轮次修复把无法重写的尾部遮蔽成一条空节点；这条空节点不是别人的正文，
+// 重新生成必须能把它一起清掉，否则这一轮永远报「归属不一致」。
+test('轮次修复留下的空墓碑不妨碍重新生成清理', async () => {
+  const { planRegenerationSurface } = await import('../tavern-plugin/lib/domain/rollback-surface.js')
+  const session = Session.create('regen-after-repair')
+  appendSessionEvent(session, 'turn/start', { turn: 1 })
+  const input = appendSessionEvent(session, 'user/message', user('input-1'), { surfaceOp: 'append' })
+  const reply = appendSessionEvent(session, 'assistant/message', body('old', 1), { surfaceOp: 'append' })
+  appendSessionEvent(session, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+  const tombstone = appendSessionEvent(session, 'assistant/message', {
+    turn: 2, step: 1,
+    message: { id: 'tavern-native-repair:r1:empty', role: 'assistant', content: [], source: { kind: 'model', provider: 'dsh-tavern', model: 'native-repair' } },
+  }, { surfaceOp: { op: 'replace', startSeq: reply.seq, endSeq: reply.seq }, sourceEventSeqs: [reply.seq] })
+
+  const eventStart = sessionEvents(session).length
+  appendSessionEvent(session, 'turn/start', { turn: 3 })
+  appendSessionEvent(session, 'user/message', user('regen', 'dsh-tavern-regen'), { surfaceOp: 'append' })
+  const fresh = appendSessionEvent(session, 'assistant/message', body('new', 3), { surfaceOp: 'append' })
+  appendSessionEvent(session, 'turn/end', { turn: 3, reason: { kind: 'completed' } })
+
+  const plan = planRegenerationSurface({ events: sessionEvents(session), nodes: session.surface.nodes, oldAssistantSeq: tombstone.seq, eventStart })
+  assert.equal(plan.start, tombstone.seq)
+  assert.equal(plan.end, fresh.seq)
+  assert.ok(plan.shadowedSeqs.includes(tombstone.seq))
+  assert.equal(input.seq, session.surface.nodes[0])
+})

@@ -83,6 +83,10 @@ function isRollbackAssistantTombstone(event, events) {
   const content = event.data && event.data.message && event.data.message.content
   const op = event.surfaceOp
   if (!Array.isArray(content) || content.length !== 0 || !op || op.op !== 'replace') return false
+  // A stale tail the native repair could not rewrite is shadowed by an empty node
+  // of its own. It holds no story, so a later regeneration may remove it freely —
+  // refusing here left such a round permanently un-regenerable ("归属不一致").
+  if (String(event.data?.message?.source?.model || '') === 'native-repair') return true
   const sources = Array.isArray(event.sourceEventSeqs) ? event.sourceEventSeqs : []
   return sources.some(function (seq) {
     const sourceEvent = eventAt(events, seq)
@@ -561,25 +565,35 @@ export function ensureTranscriptCopy(session) {
   const nodes = Array.isArray(session.surface?.nodes) ? session.surface.nodes.map(Number) : []
   if (!nodes.length) return false
   const events = sessionEvents(session)
-  const bySeq = new Map(events.map(event => [Number(event?.seq), event]))
-  const tail = bySeq.get(nodes.at(-1))
-  if (!tail || tail.type !== 'assistant/message' || tail.surfaceOp === 'append') return false
-  const blocks = Array.isArray(tail.data?.message?.content) ? tail.data.message.content : []
-  const body = blocks.filter(block => block?.type === 'text').map(block => block.text).join('')
-  if (body.trim() === '') return false
+  const textOfEvent = event => (event?.data?.message?.content || [])
+    .filter(block => block?.type === 'text').map(block => block.text).join('')
+  // The newest body the log still holds, whatever node currently stands for it:
+  // a projection replace carries it, and so does a copy the repair later emptied.
+  let host
+  let body = ''
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index]
+    if (event?.type !== 'assistant/message') continue
+    const text = textOfEvent(event)
+    if (text.trim() === '') continue
+    host = event
+    body = text
+    break
+  }
+  if (!host) return false
+  // Only a copy the transcript would actually draw counts as published: an
+  // append-origin node still on the surface. A shadowed copy, or a projection
+  // replace, is invisible to the chat view.
   const visible = new Set(nodes)
-  // The log may already hold a copy that this very replacement shadowed; only a
-  // copy still on the surface counts as drawn.
-  const drawn = events.some(event => visible.has(Number(event?.seq)) && event.type === 'assistant/message' &&
-    event.surfaceOp === 'append' &&
-    (event.data?.message?.content || []).some(block => block?.type === 'text' && block.text === body))
+  const drawn = events.some(event => visible.has(Number(event?.seq)) &&
+    event.type === 'assistant/message' && event.surfaceOp === 'append' && textOfEvent(event) === body)
   if (drawn) return false
   const copy = {
-    ...tail.data,
+    ...host.data,
     message: {
-      ...tail.data.message,
+      ...host.data.message,
       id: 'tavern-transcript:' + randomUUID(),
-      content: blocks.map(block => ({ ...block })),
+      content: (host.data.message.content || []).map(block => ({ ...block })),
     },
   }
   const surface = createSessionSurfaceMutator(session)

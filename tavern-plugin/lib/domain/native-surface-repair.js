@@ -32,9 +32,18 @@ function chatRounds(chat) {
   return rounds
 }
 
+// The transcript copy Tavern publishes for a round whose body only exists as a
+// projection: it repeats the reply above it, so it is not residue to shadow.
+function isTranscriptCopy(event) {
+  return event?.type === 'assistant/message' && event.surfaceOp === 'append' &&
+    String(event.data?.message?.id || '').startsWith('tavern-transcript:')
+}
+
 // What a model would read as story after the last reply: a pending input, more
-// prose, or tool traffic. Injected context and empty tombstones are harmless.
+// prose, or tool traffic. Injected context, empty tombstones and transcript
+// copies are harmless.
 function isStoryResidue(event) {
+  if (isTranscriptCopy(event)) return false
   if (event?.type === 'tool/result') return true
   if (event?.type === 'user/message') return isTurnInput(event.data) && textOf(event.data.content) !== ''
   if (event?.type === 'assistant/message') return textOf(event.data?.message?.content) !== ''

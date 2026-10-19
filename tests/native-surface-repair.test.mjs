@@ -211,3 +211,16 @@ test('失败、中断或仍在进行的回合留在末尾：交给失败回合�
     assert.equal(plan(h).status, 'intact', String(reason))
   }
 })
+
+test('最后一轮之后的可见正文副本不算残留：轮次修复不遮蔽它', () => {
+  const h = game(2)
+  // Tavern 为「正文只以替换形式存在」的回合补的可见副本。
+  appendSessionEvent(h.session, 'assistant/message', {
+    turn: 2, step: 1,
+    message: { id: 'tavern-transcript:copy', role: 'assistant', content: [{ type: 'text', text: '正文3' }], source: model },
+  }, { surfaceOp: 'append' })
+  assert.equal(plan(h).status, 'intact')
+  const before = h.session.surface.nodes.slice()
+  assert.equal(repair(h).applied, false)
+  assert.deepEqual(h.session.surface.nodes, before, 'copy must survive the repair')
+})
