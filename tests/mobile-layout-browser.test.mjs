@@ -202,6 +202,7 @@ test('移动端实际样式：顶栏、键盘、候选、面板、编辑器与�
       assert.ok(!entry.includes(removed), `内嵌窗口不渲染 ${removed}`)
     }
     assert.ok(/role: "dialog", "aria-modal": "true"/.test(entry), '外壳声明为模态对话框，宿主返回键判定为已处理')
+    assert.ok(/reactDom\.createPortal\(shell, document\.body\)/.test(entry), '全屏壳挂到 body，不被侧栏抽屉的 transform 困住')
     assert.ok(!/onPopState\(\) \{ close\(\)/.test(entry), '返回键不再关闭窗口')
     assert.ok(/function onPopState\(\) \{ if \(!frameRoot\.current\) return; guard\(\)/.test(entry), '历史回退会被哨兵条目挡回')
     const style = entry.slice(entry.indexOf('const CSS = `') + 'const CSS = `'.length, entry.indexOf('`;', entry.indexOf('const CSS = `')))
@@ -224,6 +225,15 @@ test('移动端实际样式：顶栏、键盘、候选、面板、编辑器与�
     await page.evaluate(() => { window.releaseEmbedded(); window.testViewport.height = 300; window.testViewport.dispatchEvent(new Event('resize')) })
     await settle()
     assert.equal(await page.locator('.dsh-tavern-embed').evaluate(el => el.style.height), '')
+    // 回归：手机侧栏抽屉带 transform，会成为 position:fixed 的包含块。壳若留在抽屉里，
+    // 宽度被 max-width:92vw 截断，右侧露出约 8% 的遮罩缺口（2026-10-19 反馈）。
+    await page.setContent(`<style>body{margin:0}${style}
+      .drawer{position:absolute;inset:0 auto 0 0;width:max-content;max-width:92vw;transform:translateX(0)}
+      .drawer-body{width:92vw}</style>
+      <div class="drawer"><div class="drawer-body"><div class="dsh-tavern-embed" id="in-drawer"></div></div></div>`)
+    assert.ok(Math.abs((await box('#in-drawer')).width - 360 * 0.92) <= 2, '抽屉内的 fixed 壳会被截到 92vw')
+    await page.evaluate(() => document.body.appendChild(document.getElementById('in-drawer')))
+    assert.equal(Math.round((await box('#in-drawer')).width), 360, '挂到 body 后铺满视口')
   })
   assert.deepEqual(errors, [])
 })

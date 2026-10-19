@@ -82,6 +82,10 @@ window.__ModuleLoader__.load({
 		var exports = module.exports;
 		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 		let react = require("react");
+		// 全屏壳必须挂在 body 上：插槽位于手机侧栏抽屉内，抽屉带 transform，
+		// 会把 position:fixed 的包含块从视口换成抽屉（右侧露出 8% 遮罩缺口）。
+		let reactDom = null;
+		try { reactDom = require("react-dom"); } catch (_error) { reactDom = null; }
 
 		const CSS = `
 .dsh-tavern-embed { position:fixed; inset:0; z-index:2147483000; background:#14110d; display:flex; flex-direction:column; box-sizing:border-box; padding-top:env(safe-area-inset-top,0px); }
@@ -227,13 +231,17 @@ window.__ModuleLoader__.load({
 							: updateFailed
 								? (state.update.error || "更新失败，请重试。")
 								: state.online === false ? "酒馆未启动，可点击更新/修复。" : "";
+					const shell = frame ? react.createElement("div", {
+					  className: "dsh-tavern-embed", ref: frameRoot,
+					  role: "dialog", "aria-modal": "true", "aria-label": "酒馆工作台"
+					},
+					  react.createElement("iframe", { title: "酒馆工作台", src: frame, referrerPolicy: "no-referrer", allow: "clipboard-read; clipboard-write; fullscreen", allowFullScreen: true })
+					) : null;
+					const shellLayer = shell && reactDom && typeof reactDom.createPortal === "function"
+						? reactDom.createPortal(shell, document.body)
+						: shell;
 					return react.createElement("div", null,
-						frame ? react.createElement("div", {
-						  className: "dsh-tavern-embed", ref: frameRoot,
-						  role: "dialog", "aria-modal": "true", "aria-label": "酒馆工作台"
-						},
-						  react.createElement("iframe", { title: "酒馆工作台", src: frame, referrerPolicy: "no-referrer", allow: "clipboard-read; clipboard-write; fullscreen", allowFullScreen: true })
-						) : null,
+						shellLayer,
 						react.createElement("div", { className: "dsh-tavern-entry-actions" },
 							react.createElement("button", {
 								type: "button", className: "dsh-tavern-entry-btn",
