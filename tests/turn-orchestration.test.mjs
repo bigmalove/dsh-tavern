@@ -332,3 +332,20 @@ test('漏写的一轮可以按它自己的请求号补记进存档（#196 自愈
   assert.deepEqual(run.chat().messages.map(message => message.text), ['推开窗', '雨水扑进房间。', '关上窗', '窗关上了。'])
   assert.equal(Number(run.chat().messages.at(-1).turn), 3)
 })
+
+// 玩局模式要能打开玩家交上来的附件（图片/文本），但只读：写入和 shell 留在卡片模式。
+for (const mode of ['story', 'script']) test(mode + ' 模式挂载只读文件工具，不放开写入', async () => {
+  const run = harness(mode)
+  const tools = await run.orchestrator.visibleTools('session-1')
+  assert.ok(tools.includes('read'), 'read')
+  assert.ok(tools.includes('read_image'), 'read_image')
+  assert.equal(tools.includes('write'), false)
+  assert.equal(tools.includes('edit'), false)
+})
+
+test('卡片模式仍保留完整文件工具与 shell', async () => {
+  const run = harness('card')
+  const tools = await run.orchestrator.visibleTools('session-1')
+  for (const name of ['read', 'write', 'edit', 'read_image']) assert.ok(tools.includes(name), name)
+  assert.ok(tools.includes('bash') || tools.includes('pwsh'))
+})
