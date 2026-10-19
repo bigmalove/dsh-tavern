@@ -2,7 +2,7 @@ import { storyEventTurn } from './session-upgrade-references.js'
 import { isCompactionCheckpoint } from './compaction-checkpoint.js'
 import { inputAttachments } from './player-input-content.js'
 import { isRescuedHistoryMessage } from './chat-history-rescue.js'
-import { createSessionSurfaceMutator, replaceSessionSurface } from './session-surface-mutations.js'
+import { replaceSessionSurface } from './session-surface-mutations.js'
 import { restoredSurfaceSeqs } from './surface-restoration.js'
 import { sessionEvents, surfaceReplacementRange } from './session-events.js'
 import { createSurfaceOwnership, planSurfaceRecovery, planSurfaceRange, SurfaceRecoveryError, OWNED } from './surface-recovery.js'
@@ -83,10 +83,6 @@ function isRollbackAssistantTombstone(event, events) {
   const content = event.data && event.data.message && event.data.message.content
   const op = event.surfaceOp
   if (!Array.isArray(content) || content.length !== 0 || !op || op.op !== 'replace') return false
-  // A stale tail the native repair could not rewrite is shadowed by an empty node
-  // of its own. It holds no story, so a later regeneration may remove it freely —
-  // refusing here left such a round permanently un-regenerable ("归属不一致").
-  if (String(event.data?.message?.source?.model || '') === 'native-repair') return true
   const sources = Array.isArray(event.sourceEventSeqs) ? event.sourceEventSeqs : []
   return sources.some(function (seq) {
     const sourceEvent = eventAt(events, seq)
@@ -122,23 +118,6 @@ export function regenerationAttemptTurns(input) {
 export function supersededRegenerationTurns({ events = [], nodes = [] } = {}) {
   const visible = new Set(nodes.map(Number))
   const turns = new Set()
-  const bySeq = new Map()
-  for (const event of events) if (Number.isSafeInteger(event?.seq)) bySeq.set(event.seq, event)
-  // A chat view paints every append-origin body it was handed, including bodies a
-  // later replacement shadowed. Rerolls chain: the replacement that stands now
-  // shadowed an earlier replacement, which shadowed the bodies the player first
-  // saw. Reading only the current replacement's own sources therefore loses the
-  // original turns — two refusals stayed on the page above the real answer.
-  const displacedBodies = (event, into = new Set(), depth = 0) => {
-    if (!event || depth > 16) return into
-    for (const seq of event.sourceEventSeqs || []) {
-      const original = bySeq.get(Number(seq))
-      if (!original || original.type !== 'assistant/message' || into.has(Number(original.seq))) continue
-      into.add(Number(original.seq))
-      if (original.surfaceOp?.op === 'replace') displacedBodies(original, into, depth + 1)
-    }
-    return into
-  }
   for (const event of events) {
     if (event?.type !== 'assistant/message' || event.surfaceOp?.op !== 'replace') continue
     // Only the replacement that is still the current node speaks for the page;
@@ -147,31 +126,16 @@ export function supersededRegenerationTurns({ events = [], nodes = [] } = {}) {
     // Only a regeneration writes a body for round N into a later turn; a seed or
     // repair rewrite carries no story turn and leaves the opening alone.
     if (!(Number(event.data?.message?.source?.tavernStoryTurn) > 0)) continue
-    const winning = contentText(event.data?.message)
-    for (const seq of displacedBodies(event)) {
-      const original = bySeq.get(seq)
+    for (const seq of event.sourceEventSeqs || []) {
+      const original = eventAt(events, seq)
+      if (!original || original.type !== 'assistant/message') continue
       // Only a turn that actually showed a body leaves a visible row behind; the
       // empty markers of earlier attempts never drew anything.
-      const text = contentText(original?.data?.message)
-      if (text === '') continue
-      // A row that carries this very body is the one the page should keep drawing.
-      if (winning !== '' && text === winning) continue
+      if (contentText(original.data?.message) === '') continue
       const turn = Number(original.data?.turn)
       // A row for the turn that now carries the replacement stays as it is.
       if (Number.isSafeInteger(turn) && turn > 0 && turn !== Number(event.data?.turn)) turns.add(turn)
     }
-  }
-  // A published copy that repeats a body an earlier row already carries is a
-  // duplicate: keep the earlier row and hide the copy.
-  const firstTurnByBody = new Map()
-  for (const event of events) {
-    if (event?.type !== 'assistant/message' || event.surfaceOp !== 'append') continue
-    const text = contentText(event.data?.message)
-    if (text === '') continue
-    const turn = Number(event.data?.turn)
-    if (!firstTurnByBody.has(text)) { firstTurnByBody.set(text, turn); continue }
-    if (!String(event.data?.message?.id || '').startsWith('tavern-transcript:')) continue
-    if (Number.isSafeInteger(turn) && turn > 0 && turn !== firstTurnByBody.get(text)) turns.add(turn)
   }
   return [...turns].sort((left, right) => left - right)
 }
@@ -518,66 +482,10 @@ export function regenerationProjection(replacement, data, operationId) {
   }
 }
 
-/**
- * Idempotent: each replacement reuses its id and sources, so a retry after a crash writes nothing twice.
- *
- * A tool-submitted round has no streamed answer of its own: its body only ever
- * existed as a replacement copy, and the human transcript renders append-origin
- * events ("replacement copies stay model-only"). Regenerating such a round hides
- * the old turn and leaves the new one empty — the body is nowhere on screen.
- * Give it a transcript copy first, then shadow the whole range including that
- * copy, exactly like the fold does for a live submission.
- *
- * The projection inherits the replaced reply's `source`, so ownership cannot be
- * read off the message. The shape can: an ordinary round ends its range on the
- * model's own streamed reply (an `append` node), while a tool round ends it on
- * the fold's replacement copy — a node the transcript never draws.
- */
+/** Idempotent: each replacement reuses its id and sources, so a retry after a crash writes nothing twice. */
 export function applyRegenerationProjection(session, projection) {
-  const events = sessionEvents(session)
-  const blocks = Array.isArray(projection.data?.message?.content) ? projection.data.message.content : []
-  const body = blocks.filter(block => block?.type === 'text').map(block => block.text).join('')
-  const endEvent = events.find(event => Number(event?.seq) === Number(projection.range?.end))
-  const needsTranscriptCopy = body !== '' && endEvent?.type === 'assistant/message' && endEvent.surfaceOp !== 'append'
-  // A fold that won the race already appended this body into the attempt's turn;
-  // appending a second copy would show the round twice.
-  const shown = needsTranscriptCopy
-    ? events.find(event => event?.type === 'assistant/message' && event.surfaceOp === 'append' &&
-        Number(event.seq) > Number(projection.range?.end) &&
-        (event.data?.message?.content || []).some(block => block?.type === 'text' && block.text === body))
-    : undefined
-  const nodes = Array.isArray(session?.surface?.nodes) ? session.surface.nodes.map(Number) : []
-  const replaceCleanups = () => {
-    for (const cleanup of projection.cleanups || []) replaceSessionSurface(session, 'user/message', cleanup.data, cleanup.range)
-  }
-  if (!needsTranscriptCopy) {
-    replaceSessionSurface(session, 'assistant/message', projection.data, projection.range)
-    replaceCleanups()
-    return
-  }
-  // Retry after a crash: the copy is on the surface already, and the old range
-  // may already be shadowed. Nothing left to write then.
-  const copySeq = shown ? Number(shown.seq) : -1
-  const from = nodes.indexOf(Number(projection.range?.start))
-  if (from < 0) {
-    if (copySeq < 0) replaceSessionSurface(session, 'assistant/message', projection.data, projection.range)
-    replaceCleanups()
-    return
-  }
-  const surface = createSessionSurfaceMutator(session)
-  surface.editStep(() => {
-    const shownSeq = copySeq >= 0
-      ? copySeq
-      : Number((entry => (typeof entry === 'number' ? entry : entry.seq))(surface.append('assistant/message', projection.data, { surfaceOp: 'append' })))
-    const to = session.surface.nodes.map(Number).indexOf(shownSeq)
-    if (to < from) return
-    surface.replace('assistant/message', projection.data, {
-      start: projection.range.start,
-      end: shownSeq,
-      sourceEventSeqs: session.surface.nodes.slice(from, to + 1).map(Number),
-    })
-  })
-  replaceCleanups()
+  replaceSessionSurface(session, 'assistant/message', projection.data, projection.range)
+  for (const cleanup of projection.cleanups || []) replaceSessionSurface(session, 'user/message', cleanup.data, cleanup.range)
 }
 
 /** Turns cut off without ending (the server stopped mid-reply) whose nodes the model still sees. */

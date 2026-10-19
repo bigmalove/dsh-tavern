@@ -1637,11 +1637,7 @@
                     const parts = Array.from(child.children).filter(part => window.getComputedStyle(part).display !== "none");
                     free -= px(style.columnGap) * Math.max(0, parts.length - 1);
                     for (const part of parts) if (!/_crumbs/.test(String(part.className))) free -= part.offsetWidth;
-                    // 以前这里还按「标题的 min-content」（实测 209px）或 160px 预留，360px 的
-                    // 手机上等于半行，结果两个固定按钮之外全被折进 ⋯，右边却留着一大片空白
-                    // （标题被截断后只用到预留的一半）。标题现在允许截断，只留一个能认出
-                    // 是哪一局的下限，剩下的都给快捷入口。
-                    free -= Math.min(96, Math.max(48, Math.round(row.clientWidth * 0.13)));
+                    free -= Math.min(160, row.clientWidth * 0.3);
                     continue;
                 }
                 free -= child.offsetWidth;
@@ -1723,10 +1719,6 @@
             // 外层槽位已解析好 owner（含子会话回溯）；这里只用它，别重复依赖宿主 API。
             const owner = props.owner || props.sessionId;
             const [folded, setFolded] = React.useState([]);
-            // 手机上先按上限排，量到还压着宿主角落按钮就再折一项。
-            const [mobileLimit, setMobileLimit] = React.useState(TAVERN_HEADER_MOBILE_LIMIT);
-            // 预算（像素）：一行里留给快捷入口的宽度，实测后写进 data 属性供夹具断言。
-            const [mobileBudget, setMobileBudget] = React.useState(null);
             const [context, setContext] = React.useState(null);
             const [more, setMore] = React.useState(null);
             const [dialog, setDialog] = React.useState(false);
@@ -1760,14 +1752,6 @@
             // Natural widths are cached: a folded button is display:none, so it
             // cannot be measured again until the display mode changes.
             React.useLayoutEffect(function () {
-                // 手机上不量宽度：一行只放三个，其余直接进 ⋮。量出来的结果会随
-                // 标题长度浮动，反而让按钮时隐时现。
-                if (compact) {
-                    const next = tavernHeaderMobileFold(visible, mobileLimit);
-                    setFolded(current => current.length === next.length && current.every((id, index) => id === next[index]) ? current : next);
-                    return undefined;
-                }
-                setMobileLimit(TAVERN_HEADER_MOBILE_LIMIT);
                 const node = host.current;
                 if (!node) return undefined;
                 let frame = 0;
@@ -1798,75 +1782,7 @@
                 const row = node.closest("[class*=\"_titleRow\"]");
                 if (row) observer.observe(row);
                 return function () { observer.disconnect(); cancelAnimationFrame(frame); };
-            }, [visible.join("|"), display, catalog, compact, mobileLimit]);
-            // 折叠之后实测：先把宿主角落按钮的实际占位写进 CSS 变量（顶栏右侧预留），
-            // 再用一次固定预算算出「还能放几个」。预算只依赖标题行内容盒左边、角落按钮
-            // 左边界和全屏按钮宽度，与当前保留数量、标题实际宽度都无关，所以不会振荡。
-            const [measureNonce, setMeasureNonce] = React.useState(0);
-            
-            React.useLayoutEffect(function () {
-                if (!compact) { setMobileBudget(null); return undefined; }
-                let frame = window.requestAnimationFrame(function () {
-                    const node = host.current;
-                    const header = node && node.closest("header");
-                    if (!node || !header) return;
-                    // 只在当前顶栏里找：页面里可能同时挂着桌面/移动两套 header，
-                    // 用 document 查会量到另一套的角落按钮。
-                    const corner = header.querySelector("[data-conversation-header-corner]");
-                    // 角落按钮若是绝对定位（宿主默认），行内不会算它，要在右侧预留；
-                    // 若已被我们放回流内（本项目的移动端规则），它自己占宽度，只留个间距。
-                    let reserve = 4;
-                    if (corner) {
-                        const style = window.getComputedStyle(corner);
-                        const floating = style.position === "absolute" || style.position === "fixed";
-                        if (floating) {
-                            const width = Math.round(corner.getBoundingClientRect().width);
-                            reserve = width > 0 ? width + 4 : 44;
-                        }
-                    }
-                    header.style.setProperty("--dsh-tavern-header-corner", reserve + "px");
-                    // 刚写的 padding 还没进布局，等下一帧再量。
-                    frame = window.requestAnimationFrame(function () {
-                        // 一次性预算：标题行内容宽 - 固定开销（内边距、间距、角落按钮、
-                        // 右侧动作组最小宽、标题下限），剩下按每格 42 分。
-                        // 全部是常量或行宽，与当前保留数量和标题实际宽度无关。
-                        const row = node.closest("[class*=\"_titleRow\"]");
-                        // 固定开销由 CSS 变量给出（窄屏隐藏了宿主的子智能体触发器，开销更小），
-                        // 这样布局规则与预算算法只有一份来源。
-                        const fixed = row
-                            ? Number.parseFloat(window.getComputedStyle(row).getPropertyValue("--dsh-tavern-header-fixed")) || TAVERN_HEADER_MOBILE_FIXED
-                            : TAVERN_HEADER_MOBILE_FIXED;
-                        const room = row ? row.clientWidth - fixed : 0;
-                        const capacity = tavernHeaderMobileCapacity(
-                            { itemCount: visible.length, room: room },
-                            { limit: TAVERN_HEADER_MOBILE_LIMIT }
-                        );
-                        if (capacity !== mobileLimit) setMobileLimit(capacity);
-                        const nextBudget = Math.round(room);
-                        setMobileBudget(current => current === nextBudget ? current : nextBudget);
-                    });
-                });
-                return function () { window.cancelAnimationFrame(frame); };
-            }, [compact, mobileLimit, folded.join("|"), visible.join("|"), measureNonce]);
-            // 旋屏 / 分屏 / 输入法改变行宽后重新量一次。只认窗口尺寸变化，
-            // 不观察 header 自身——那会和「改 padding → 尺寸变 → 再量」互相触发。
-            React.useEffect(function () {
-                if (!compact) return undefined;
-                let timer = 0;
-                function onResize() {
-                    window.clearTimeout(timer);
-                    // 行宽变了就回到「3 个」重新量一次：旋屏回来不该一直停在收窄后的状态。
-                    setMobileLimit(TAVERN_HEADER_MOBILE_LIMIT);
-                    timer = window.setTimeout(function () { setMeasureNonce(function (value) { return value + 1; }); }, 120);
-                }
-                window.addEventListener("resize", onResize);
-                window.addEventListener("orientationchange", onResize);
-                return function () {
-                    window.clearTimeout(timer);
-                    window.removeEventListener("resize", onResize);
-                    window.removeEventListener("orientationchange", onResize);
-                };
-            }, [compact]);
+            }, [visible.join("|"), display, catalog]);
             React.useEffect(function () {
                 if (!context && !more) return undefined;
                 function close(event) {
@@ -1913,17 +1829,11 @@
                 }, content);
             }
             const foldedEntries = folded.map(id => ({ id: id, label: titleOf(id) })).filter(entry => entry.id !== "header:export");
-            return h("div", {
-                ref: host,
-                className: "dsh-tavern-header-items" + (display === "icon" ? " is-icon" : ""),
-                // 实测预算（留给快捷入口的像素）与手机保留上限；夹具和线上排查都读这两个值。
-                "data-tavern-header-budget": compact && mobileBudget !== null ? mobileBudget : "",
-                "data-tavern-header-limit": compact ? mobileLimit : ""
-            },
+            return h("div", { ref: host, className: "dsh-tavern-header-items" + (display === "icon" ? " is-icon" : "") },
                 visible.map(item),
                 foldedEntries.length ? h("div", { className: "dsh-tavern-more-actions dsh-tavern-header-more" },
                     h("button", { type: "button", className: "dsh-tavern-btn dsh-tavern-header-more-button", "data-tavern-header-trigger": "more", "aria-label": "更多快捷入口", "aria-haspopup": "menu", "aria-expanded": Boolean(more), title: "更多快捷入口", onClick: function () { setContext(null); setMore(more ? null : { x: null, y: null }); } },
-                        h("svg", { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2.4, strokeLinecap: "round", "aria-hidden": "true" }, h("path", { d: compact ? "M12 5h.01M12 12h.01M12 19h.01" : "M5 12h.01M12 12h.01M19 12h.01" }))),
+                        h("svg", { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2.4, strokeLinecap: "round", "aria-hidden": "true" }, h("path", { d: "M5 12h.01M12 12h.01M19 12h.01" }))),
                     more ? h("div", { className: "dsh-tavern-more-menu dsh-tavern-header-popup", role: "menu", "aria-label": "更多快捷入口" },
                         foldedEntries.map(entry => h("button", { key: entry.id, type: "button", role: "menuitem", onClick: function () { setMore(null); activate(entry.id, host.current); } }, tavernStartIcon(entry.id, entries.get(entry.id), 15), entry.label)),
                         h("div", { className: "dsh-tavern-header-menu-sep", role: "separator" }),

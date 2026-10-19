@@ -298,11 +298,7 @@
 			for (let i = 0; i < rows.length; i++) {
 				const row = rows[i];
 				if (!set.has(row.getAttribute("data-chat-turn"))) continue;
-				// 只藏回复。玩家的输入在宿主里可能是 "user"，也可能被折叠成
-				// "turn-trigger"（收到执行请求）；按「非回复」判断，别只认 user，
-				// 否则玩家自己的话会跟着被替换的正文一起消失。
-				const kind = row.getAttribute("data-chat-flow-kind");
-				if (kind === "user" || kind === "turn-trigger") continue;
+				if (row.getAttribute("data-chat-flow-kind") === "user") continue;
 				hideRow(row);
 			}
 		}

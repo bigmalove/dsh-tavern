@@ -60,39 +60,3 @@ test('没有投影时保持存档里的映射与空的待清理列表', () => {
   assert.equal(view.regeneratedDshTurns[4], 11)
   assert.deepEqual(view.supersededDshTurns, [])
 })
-
-// 重 roll 是链式的：当前生效的替换遮蔽了上一次替换，上一次替换才遮蔽了玩家最早看到的
-// 两条正文。只看当前替换自己的来源会丢掉最早的回合，页面上就会上下堆着旧正文。
-test('重 roll 链式遮蔽：最早被替换的回合也要隐藏', async () => {
-  const { Session } = await import('./fixtures/dsh-session-host.mjs')
-  const { appendSessionEvent, sessionEvents } = await import('../tavern-plugin/lib/domain/session-events.js')
-  const { supersededRegenerationTurns } = await import('../tavern-plugin/lib/domain/rollback-surface.js')
-  const source = { kind: 'model', provider: 'test', model: 'test' }
-  const reply = (turn, text, extra = {}) => ({
-    turn, step: 1,
-    message: { id: 'r' + turn, role: 'assistant', content: [{ type: 'text', text }], source: { ...source, ...extra } },
-  })
-  const session = Session.create('chain')
-  appendSessionEvent(session, 'turn/start', { turn: 2 })
-  appendSessionEvent(session, 'user/message', { id: 'in', role: 'user', content: [{ type: 'text', text: '输入' }], source: { kind: 'user' } }, { surfaceOp: 'append' })
-  const first = appendSessionEvent(session, 'assistant/message', reply(2, '第一次的拒答'), { surfaceOp: 'append' })
-  appendSessionEvent(session, 'turn/end', { turn: 2, reason: { kind: 'completed' } })
-  appendSessionEvent(session, 'turn/start', { turn: 3 })
-  const second = appendSessionEvent(session, 'assistant/message', reply(3, '第二次的拒答'), { surfaceOp: 'append' })
-  appendSessionEvent(session, 'turn/end', { turn: 3, reason: { kind: 'completed' } })
-
-  // 第一次重 roll：替换上面两条，正文落在回合 4。
-  appendSessionEvent(session, 'turn/start', { turn: 4 })
-  const chain1 = appendSessionEvent(session, 'assistant/message', reply(4, '第一次重 roll', { tavernStoryTurn: 2 }),
-    { surfaceOp: { op: 'replace', startSeq: first.seq, endSeq: second.seq }, sourceEventSeqs: [first.seq, second.seq] })
-  appendSessionEvent(session, 'turn/end', { turn: 4, reason: { kind: 'completed' } })
-
-  // 第二次重 roll：替换上一次替换，正文落在回合 5。
-  appendSessionEvent(session, 'turn/start', { turn: 5 })
-  appendSessionEvent(session, 'assistant/message', reply(5, '第二次重 roll', { tavernStoryTurn: 2 }),
-    { surfaceOp: { op: 'replace', startSeq: chain1.seq, endSeq: chain1.seq }, sourceEventSeqs: [chain1.seq] })
-  appendSessionEvent(session, 'turn/end', { turn: 5, reason: { kind: 'completed' } })
-
-  const turns = supersededRegenerationTurns({ events: sessionEvents(session), nodes: session.surface.nodes.map(Number) })
-  assert.deepEqual(turns, [2, 3, 4], '那两次拒答和第一次重 roll 的回合都不能留在页面上')
-})
