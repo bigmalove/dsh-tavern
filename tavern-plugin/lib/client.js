@@ -14483,7 +14483,7 @@ async function runTavernTouchDiagnostics(host, onStatus) {
 				const liveState = useScopedLiveTavernView(props.sessionId, String(props.messageId || ""), [["mode"], ["releaseCapabilities"], ["forkTurnsByMessageId", String(props.messageId || "")]]);
 				const view = liveState.view;
 				const turn = Number(view && view.forkTurnsByMessageId && view.forkTurnsByMessageId[String(props.messageId || "")]) || 0;
-				// 正文模式（含写作）都可以为这一轮生成插图；能否启用由本局开关与生图渠道决定。
+				// 正文会话都可以为这一轮生成插图；能否启用由本局开关与生图渠道决定。
 				const shown = Boolean(view && isBodyMode(view.mode) && view.releaseCapabilities && view.releaseCapabilities.sceneImages && turn > 0);
 				return shown ? React.createElement(SceneImageAction, { key: props.sessionId + ":" + turn, sessionId: props.sessionId, turn: turn }) : null;
 			}
@@ -21669,7 +21669,7 @@ async function runTavernTouchDiagnostics(host, onStatus) {
 			const imageTurn = Number(live.view && live.view.latestAssistantTurn) || 0;
 			const h = React.createElement;
 			if (!sessionMode) return null;
-			// 生图等正文类子会话（写作也一样）共用这一套停后台/撤销入口。
+			// 生图等正文类子会话共用这一套停后台/撤销入口。
 			if (address) return isBodyMode(sessionMode) ? h("div", { className: "dsh-tavern-dock-actions" },
 				h(TavernStopBackgroundAction, { sessionId: ownerSessionId }),
 				h(TavernImageAgentUndoAction, { parentSessionId: ownerSessionId, agentSessionId: props.sessionId, running })) : null;

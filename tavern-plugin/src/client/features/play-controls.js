@@ -1212,7 +1212,7 @@
 			const imageTurn = Number(live.view && live.view.latestAssistantTurn) || 0;
 			const h = React.createElement;
 			if (!sessionMode) return null;
-			// 生图等正文类子会话（写作也一样）共用这一套停后台/撤销入口。
+			// 生图等正文类子会话共用这一套停后台/撤销入口。
 			if (address) return isBodyMode(sessionMode) ? h("div", { className: "dsh-tavern-dock-actions" },
 				h(TavernStopBackgroundAction, { sessionId: ownerSessionId }),
 				h(TavernImageAgentUndoAction, { parentSessionId: ownerSessionId, agentSessionId: props.sessionId, running })) : null;

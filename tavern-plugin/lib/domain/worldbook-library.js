@@ -248,7 +248,7 @@ export function createWorldBookLibrary(options = {}) {
     // This resolver lives for one bound read only. Binding metadata, the view
     // and the exported document must describe the same resource observation.
     const records = new Map()
-    // A conversation without a character card (写作模式) has no card binding to
+    // A conversation without a character card has no card binding to
     // resolve: only standalone books marked 全局生效 apply. Same merge, same view.
     const cardless = str(cardPath) === ''
     const normalizedCardPath = cardless ? '' : normalizePath(cardPath, 'card')

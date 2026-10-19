@@ -3608,7 +3608,7 @@ export async function apply(ctx) {
     catch { return Infinity }
   }
   // What recall, world book search and screening read: the bound book plus plugin entries (tavern.worldbookEntries).
-  // 没有人物卡的会话（写作模式）没有卡绑定，World Book Library 只解析全局生效的独立世界书。
+  // 没有人物卡的会话没有卡绑定，World Book Library 只解析全局生效的独立世界书。
   async function playWorldBook(chat, card) {
     const record = await worldBooks.bound(chat.cardPath, card, chat)
     if (!chat?.sessionId) return record

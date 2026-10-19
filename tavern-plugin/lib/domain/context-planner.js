@@ -87,7 +87,7 @@ export function createContextPlanner(options = {}) {
     const warnings = []
     if (input.purpose === 'play-card-snapshot') {
       const projectText = playProjector(input, warnings)
-      // 写作模式没有人物卡：固定背景只冻结常驻世界书（全局生效的独立世界书）。
+      // 无人物卡的会话只冻结常驻世界书（全局生效的独立世界书）。
       if (input.card === null || input.card === undefined) {
         const projectedWorldBook = projectText(input.worldBookContext)
         const label = str(input.worldBookLabel) || '本轮世界书上下文'

@@ -245,9 +245,8 @@ export function createSceneIllustrations(deps) {
     if (!chat || !['story', 'script'].includes(chat.mode || 'story')) return null
     const latest = chat.sceneTargets ? Number(chat.sceneLatestTurn)
       : Number([...(chat.messages || [])].reverse().find(item => item?.role === 'assistant')?.turn || 0)
-    // 游玩的开场白是人物卡自带的第 1 轮，可画轮次从 2 开始；写作没有开场白，第 1 轮就是正文。
-    const firstRound = 2
-    if (!(latest >= firstRound)) return null
+    // The opening is the card's own text; rounds start at turn 2.
+    if (!(latest >= 2)) return null
     const state = await status(sessionId, latest)
     if (!state.key || state.status !== 'idle' || state.versions.length || state.hasDeletedImages || state.recovery === 'save' || state.outcome === 'unconfirmed') return null
     return start(sessionId, latest, state.key, { kind: 'generate', requestId: 'auto-' + state.key.slice(0, 48) })

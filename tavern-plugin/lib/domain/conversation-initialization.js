@@ -12,8 +12,7 @@ import { ensureSessionSeedTrajectory } from './session-seed-trajectory.js'
 import { defaultUserPreferenceProfile } from './user-preference-profile.js'
 
 function str(value) { return value === undefined || value === null ? '' : String(value) }
-function isBodyMode(mode) { return mode === 'story' || mode === 'script' }
-function groupOfMode(mode) { return !mode || isBodyMode(mode) ? 'play' : 'card' }
+function groupOfMode(mode) { return !mode || mode === 'story' || mode === 'script' ? 'play' : 'card' }
 
 /** Owns initialization, repeat-entry and opening recovery; never generates a model turn. */
 export function createConversationInitialization(options) {
@@ -37,11 +36,10 @@ export function createConversationInitialization(options) {
   function newChat(card, mode, requestMode) {
     const chatMode = mode === 'card' ? 'card' : (mode === 'script' ? 'script' : 'story')
     const hasCard = card !== null && card !== undefined && str(card.path) !== ''
-    const cardName = hasCard ? card.name : '卡片工作台'
     const chat = {
       id: id('chat'),
       cardPath: hasCard ? card.path : '',
-      cardName: cardName,
+      cardName: hasCard ? card.name : '卡片工作台',
       mode: chatMode,
       requestMode: requestMode === 'sillytavern' && chatMode !== 'card' ? 'sillytavern' : 'dsh',
       scriptState: chatMode === 'script' ? { cursor: 0, recalledChunkIds: [], prepared: null, lastReference: null, totalChunks: 0, title: '', scriptVersion: 0 } : null,
@@ -116,10 +114,10 @@ export function createConversationInitialization(options) {
     const macroState = { userName: str(userName).trim().slice(0, 80) || defaults.playerName, local: {}, global: {} }
     const runtimePresetSnapshot = groupOfMode(chatMode) !== 'play' ? null
       : cardDefaults?.presetPath ? await presets.fullSnapshot(cardDefaults.presetPath).catch(() => playPresetSnapshot()) : await playPresetSnapshot()
-    const blankOpening = chatMode === 'card'
-    let openingSourceText = blankOpening ? '' : resolveCardOpening(card, openingId)
-    const openingExtensions = blankOpening ? null : await cards.extensions(cardPath)
-    const openingChoices = blankOpening ? [] : cardOpeningChoices(card)
+    // The card workbench opens empty: no greeting is shown or sent to the model.
+    let openingSourceText = chatMode === 'card' ? '' : resolveCardOpening(card, openingId)
+    const openingExtensions = chatMode === 'card' ? null : await cards.extensions(cardPath)
+    const openingChoices = chatMode === 'card' ? [] : cardOpeningChoices(card)
     const selectedOpeningIndex = str(openingId) === '' ? 0 : Math.max(0, openingChoices.findIndex(function (choice) { return choice.id === str(openingId) }))
     const usesMvu = chatMode !== 'card' && (
       (Array.isArray(openingExtensions && openingExtensions.mvuResources) && openingExtensions.mvuResources.some(function (item) { return item.enabled !== false }))
@@ -135,8 +133,8 @@ export function createConversationInitialization(options) {
     const openingRegexScripts = (Array.isArray(openingExtensions && openingExtensions.regexScripts) ? openingExtensions.regexScripts : []).concat(
       Array.isArray(runtimePresetSnapshot && runtimePresetSnapshot.regexScripts) ? runtimePresetSnapshot.regexScripts : []
     )
-    const openingProjection = blankOpening
-      ? { agentText: openingSourceText, renderedText: openingSourceText, sessionText: openingSourceText, displayText: openingSourceText, displayMode: 'markdown', displayParts: openingSourceText === '' ? [] : [{ kind: 'markdown', text: openingSourceText }], warnings: [], macroState }
+    const openingProjection = chatMode === 'card'
+      ? { agentText: openingSourceText, renderedText: openingSourceText, sessionText: openingSourceText, displayText: openingSourceText, displayMode: 'markdown', displayParts: [{ kind: 'markdown', text: openingSourceText }], warnings: [], macroState }
       : projectOpeningCommit(openingSourceText, {
           charName: str(card.name),
           macroState,
@@ -315,7 +313,7 @@ export function createConversationInitialization(options) {
     const target = readyTarget || await native.wait(sessionId)
     if (groupOfMode(chat.mode) === 'play' && chat.requestMode !== 'sillytavern') {
       await native.ensurePrefix(target.session, await snapshots.ensure(chat, card))
-      await ensureSessionSeedTrajectory(target.session, chat.mode)
+      await ensureSessionSeedTrajectory(target.session)
       await native.flush(target.session)
     }
     if (groupOfMode(chat.mode) === 'card') {
