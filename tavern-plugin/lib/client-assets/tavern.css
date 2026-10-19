@@ -2558,12 +2558,13 @@ button.dsh-tavern-play-fullscreen {
 /* 顶栏快捷入口：一个容器按用户顺序渲染；放不下的页面从尾部收进「⋯」。
    宿主把 utilities 设为 flex:none，这里让它在窄窗口里可以收缩，容器才能量出可用宽度。 */
 body.dsh-tavern-shell-active [data-slot="conversation.session.header.utilities"]:has(> .dsh-tavern-header-items) { display: contents; }
-body.dsh-tavern-shell-active [class*="_headerUtilities"]:has(.dsh-tavern-header-items) { flex: 1 1 0; min-width: 0; justify-content: flex-end; }
+body.dsh-tavern-shell-active [class*="_headerUtilities"]:has(.dsh-tavern-header-items) { flex: 0 1 auto; min-width: 0; justify-content: flex-end; }
 .dsh-tavern-header-items {
   /* 尺寸走变量：手机和图标模式只改变量，不用和宿主规则比特异性。 */
   --dsh-tavern-header-button: 32px; --dsh-tavern-header-gap: 2px;
   display: flex; align-items: center; justify-content: flex-end; gap: var(--dsh-tavern-header-gap);
-  min-width: 0; max-width: 100%; margin-left: auto;
+  /* 按内容宽度；可用空间由脚本从整行算出，不随收起数量变化，放宽窗口后页面会回来。 */
+  flex: 0 1 auto; min-width: 0; max-width: 100%; margin-left: auto;
 }
 .dsh-tavern-header-items:empty { display: none; }
 .dsh-tavern-header-item { display: inline-flex; align-items: center; flex: none; min-width: 0; }
@@ -2595,6 +2596,17 @@ body.dsh-tavern-shell-active [class*="_headerUtilities"]:has(.dsh-tavern-header-
 .dsh-tavern-header-more { flex: none; }
 .dsh-tavern-header-more .dsh-tavern-more-menu { top: calc(100% + 6px); bottom: auto; }
 .dsh-tavern-header-context { z-index: 60; }
+.dsh-tavern-header-popup button { display: flex; align-items: center; gap: 8px; }
+.dsh-tavern-header-popup button svg { flex: none; }
+.dsh-tavern-header-menu-sep { height: 1px; margin: 4px 2px; background: var(--dsw-alias-border-l2); }
+.dsh-tavern-header-dialog-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 16px; background: rgba(0,0,0,.32); }
+.dsh-tavern-header-dialog {
+  box-sizing: border-box; width: min(560px, 100%); max-height: min(86vh, calc(var(--dsh-vv-height, 100dvh) - 32px)); overflow: auto;
+  padding: 4px 20px 8px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 14px;
+  background: var(--dsw-alias-bg-layer-2, var(--dsw-specific-sidebar-fill)); color: var(--dsw-alias-label-primary);
+  box-shadow: 0 18px 48px rgba(0,0,0,.25);
+}
+.dsh-tavern-header-dialog-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; padding: 12px 0 8px; background: inherit; font-size: 15px; }
 .dsh-tavern-play-fullscreen:focus-visible { outline: 2px solid #a66b35; outline-offset: -2px; }
 
 /* 布局按宽度，触控命中区按输入设备：宽屏平板保留多栏，同时适应软键盘。 */
@@ -2747,7 +2759,7 @@ body.dsh-tavern-shell-active [class*="_headerUtilities"]:has(.dsh-tavern-header-
   }
   /* 有快捷入口时留出固定的一份宽度，量出来的可用空间才不会随收起数量变化。 */
   body.dsh-tavern-shell-active [data-mobile-nav="frame"] :is([data-phase] > header, [data-slot="conversation.session.header"] > header) [class*="_headerUtilities"]:has(.dsh-tavern-header-items) {
-    flex: 1 1 0; min-width: 0;
+    flex: 0 1 auto; min-width: 0;
   }
   body.dsh-tavern-shell-active :is([data-phase] > header, [data-slot="conversation.session.header"] > header) .dsh-tavern-header-action-label { display: none; }
   body.dsh-tavern-shell-active :is([data-phase] > header, [data-slot="conversation.session.header"] > header) :is(.dsh-tavern-header-settings, .dsh-tavern-export-action) {
@@ -2755,6 +2767,7 @@ body.dsh-tavern-shell-active [class*="_headerUtilities"]:has(.dsh-tavern-header-
     border-radius: 7px; background: transparent; color: var(--dsw-alias-label-secondary);
   }
   .dsh-tavern-header-items { --dsh-tavern-header-button: 40px; }
+  .dsh-tavern-header-divider { display: none; }
   body.dsh-tavern-shell-active :is([data-phase] > header, [data-slot="conversation.session.header"] > header) [class*="_headerUtilities"] > :not(.dsh-tavern-header-settings):not(.dsh-tavern-export-menu):not(.dsh-tavern-header-items) { display: none; }
   /* utilities 也有 display:contents 插槽；保留插槽本身，隐藏已在抽屉提供的日志入口。 */
   body.dsh-tavern-shell-active [data-slot="conversation.session.header.utilities"] { display: contents !important; }
