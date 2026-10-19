@@ -4,9 +4,10 @@ import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 
 const source = readFileSync(new URL('../bin/service-lifecycle.mjs', import.meta.url), 'utf8')
-const alive = source.slice(source.indexOf('function isProcessAlive('), source.indexOf('export function isPortOpen('))
-const state = source.slice(source.indexOf('async function serviceState('), source.indexOf('function findLegacyService('))
-const stop = source.slice(source.indexOf('export async function stopService('), source.indexOf('export async function startService(')).replace('export ', '')
+const strip = text => text.replace(/^export /gm, '')
+const alive = strip(source.slice(source.indexOf('function isProcessAlive('), source.indexOf('export function isPortOpen(')))
+const state = strip(source.slice(source.indexOf('async function serviceState('), source.indexOf('function findLegacyService(')))
+const stop = source.slice(source.indexOf('export async function stopService('), source.indexOf('export async function startService(')).replace(/^export /gm, '')
 const denied = () => { throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' }) }
 
 function sandbox(identity, portOpen = false) {
