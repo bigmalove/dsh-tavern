@@ -903,6 +903,19 @@ function createWorldBookSwitcherFeatureModule() {
 		const [geometry, setGeometry] = React.useState(null);
 		const rootRef = React.useRef(null);
 		const bookCache = React.useRef(new Map());
+		// 设置与文件夹是临时面板：关掉后回到打开前的详情。
+		const paneReturn = React.useRef(null);
+
+		function openSettings() {
+			paneReturn.current = pane && (pane.kind === "detail" ? pane : null);
+			setPane({ kind: "settings" });
+		}
+
+		function closeSettings() {
+			const back = paneReturn.current;
+			paneReturn.current = null;
+			setPane(back || null);
+		}
 
 		function updateConfig(patchValue) {
 			const next = normalizeWbSwitcherConfig(Object.assign({}, configRef.current, patchValue));
@@ -997,7 +1010,9 @@ function createWorldBookSwitcherFeatureModule() {
 			function onKey(event) {
 				if (event.key !== "Escape") return;
 				if (editor) return;
-				if (pane) { setPane(null); return; }
+				if (pane && pane.kind === "detail") { setPane(null); return; }
+				if (pane && (pane.kind === "settings" || pane.kind === "folders")) { closeSettings(); return; }
+				if (frequentOpen) { setFrequentOpen(false); persistPanels({ frequentEntries: false }); return; }
 				if (allOpen) { setAllOpen(false); persistPanels({ allWorldbooks: false }); return; }
 				closeWorldBookSwitcher();
 			}
@@ -1235,7 +1250,7 @@ function createWorldBookSwitcherFeatureModule() {
 				config: config,
 				onChange: function (patchValue) { updateConfig(patchValue); },
 				onFolders: function () { setPane({ kind: "folders" }); },
-				onClose: function () { setPane(null); },
+				onClose: backLabel ? function () { setPane(null); } : closeSettings,
 				backLabel: backLabel
 			});
 		}
@@ -1305,7 +1320,7 @@ function createWorldBookSwitcherFeatureModule() {
 					})),
 				h(WbSearchFooter, {
 					visible: config.visibleElements, value: query, onChange: setQuery,
-					placeholder: "搜索条目…", settings: function () { setPane({ kind: "settings" }); }
+					placeholder: "搜索条目…", settings: function () { openSettings(); }
 				}));
 		}
 
