@@ -182,3 +182,29 @@ test('空回合被收掉后，新正文挂上来要能恢复', () => {
   projection.apply('session', [], {}, [])
   assert.equal(tail.style.display, '', '出生效的正文后尾行要回来')
 })
+
+// 生成失败（模型报错、没有正文）同样会留下「有玩家输入、没有正文行、有尾行」的回合。
+// 这不是编辑留下的空回合：把它当空回合清理，玩家刚发的那句话会跟着一起消失。
+test('生成失败、没有正文的回合不能连同玩家输入一起藏', () => {
+  const user = row({ 'data-chat-flow-kind': 'user', 'data-chat-turn': '2' })
+  const tail = row({ 'data-chat-flow-kind': 'turn-tail', 'data-chat-turn': '2', 'data-turn-tail': '2' })
+  const rows = linked([user, tail])
+  const projection = harness(rows)
+  projection.apply('session', [], {}, [])
+  assert.equal(user.style.display, '', '玩家输入必须保留')
+  assert.equal(tail.style.display, '', '失败回合的尾行留给宿主显示，不按空回合收掉')
+})
+
+// 宿主的输入行不止 `user` 一种：turn-trigger（「收到执行请求」）与 steering（插话）
+// 都不带 user 这个 kind，黑名单式跳过必然漏。
+test('非 user 的输入行也不在空回合清理范围里', () => {
+  const trigger = row({ 'data-chat-flow-kind': 'turn-trigger', 'data-chat-turn': '3' })
+  const steering = row({ 'data-chat-flow-kind': 'steering', 'data-chat-turn': '3' })
+  const tail = row({ 'data-chat-flow-kind': 'turn-tail', 'data-chat-turn': '3', 'data-turn-tail': '3' })
+  const rows = linked([trigger, steering, tail])
+  const projection = harness(rows)
+  projection.apply('session', [], {}, [])
+  assert.equal(trigger.style.display, '', 'turn-trigger 不能算空回合')
+  assert.equal(steering.style.display, '', 'steering 不能算空回合')
+  assert.equal(tail.style.display, '', '尾行同样保留')
+})

@@ -174,3 +174,57 @@ test('工具回合的重新生成投影补一条可见正文，重试不重复',
   assert.equal(sessionEvents(session).filter(event => event.type === 'assistant/message' &&
     event.surfaceOp === 'append' && textOf(event.data) === '新正文').length, 1)
 })
+
+// 折叠在场时，副本落在被替换的旧回合里：那个回合随后会作为 superseded 被隐藏。
+// 投影若把这份副本当成「已经画过」而复用，页面上唯一能画的行正好被藏掉，
+// 最终只剩替换事件（对话不渲染）——轨迹有正文、对话没有。必须另补一份。
+test('折叠副本落在被替换的回合里时，投影仍要补一份新的可画正文', async () => {
+  const { foldStorySubmission } = await import('../tavern-plugin/lib/domain/story-tool-submission.js')
+  const { applyRegenerationProjection, supersededRegenerationTurns } = await import('../tavern-plugin/lib/domain/rollback-surface.js')
+  const session = Session.create('regen-fold-inside-range')
+  appendSessionEvent(session, 'turn/start', { turn: 1 })
+  appendSessionEvent(session, 'user/message', user('input-1'), { surfaceOp: 'append' })
+  const old = storyBody(session, 1, 'old', '旧正文')
+  foldStorySubmission(session, { event: old.call, index: 0, receiptIndex: old.receipt.seq }, '旧正文')
+  appendSessionEvent(session, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+  const oldFolded = session.surface.nodes.map(Number).at(-1)
+
+  appendSessionEvent(session, 'turn/start', { turn: 2 })
+  appendSessionEvent(session, 'user/message', user('regen', 'dsh-tavern-regen'), { surfaceOp: 'append' })
+  const attempt = storyBody(session, 2, 'new', '新正文')
+  // 这一次折叠到场：它在 turn 2 里写了一份 append 正文，再把它替换掉。
+  foldStorySubmission(session, { event: attempt.call, index: 0, receiptIndex: attempt.receipt.seq }, '新正文')
+  appendSessionEvent(session, 'turn/end', { turn: 2, reason: { kind: 'completed' } })
+  const foldCopy = sessionEvents(session).find(event => event.type === 'assistant/message' &&
+    event.surfaceOp === 'append' && textOfOf(event.data) === '新正文')
+  const foldReplace = session.surface.nodes.map(Number).at(-1)
+  assert.ok(foldCopy && foldCopy.seq < foldReplace, '折叠副本落在被替换的范围里')
+
+  const projection = {
+    data: {
+      turn: 2, step: 1,
+      message: {
+        id: 'tavern-regen:op2', role: 'assistant', content: [{ type: 'text', text: '新正文' }],
+        source: { kind: 'model', provider: 'test', model: 'test', tavernStoryTurn: 2 },
+      },
+    },
+    range: { start: oldFolded, end: foldReplace, sourceEventSeqs: session.surface.nodes.slice(session.surface.nodes.indexOf(oldFolded)) },
+    cleanups: [],
+  }
+  applyRegenerationProjection(session, projection)
+  const afterRange = sessionEvents(session).filter(event => event.type === 'assistant/message' &&
+    event.surfaceOp === 'append' && event.seq > foldReplace && textOfOf(event.data) === '新正文')
+  assert.equal(afterRange.length, 1, '被隐藏回合里的副本不能当成交付')
+  // 旧回合（turn 2）确实会被隐藏；新副本必须落在另一个回合里，页面才有正文。
+  const superseded = supersededRegenerationTurns({ events: sessionEvents(session), nodes: session.surface.nodes })
+  assert.ok(superseded.includes(2), '被替换的旧回合仍在隐藏名单里')
+  assert.ok(!superseded.includes(Number(afterRange[0].data.turn)), '新副本所在回合不能被隐藏')
+  // 重试幂等：range 之后已有同文副本就不再写。
+  applyRegenerationProjection(session, projection)
+  assert.equal(sessionEvents(session).filter(event => event.type === 'assistant/message' &&
+    event.surfaceOp === 'append' && event.seq > foldReplace && textOfOf(event.data) === '新正文').length, 1)
+})
+
+function textOfOf(data) {
+  return (data?.message?.content || []).filter(block => block.type === 'text' && typeof block.text === 'string').map(block => block.text).join('')
+}

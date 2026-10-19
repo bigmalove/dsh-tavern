@@ -60,3 +60,33 @@ test('没有投影时保持存档里的映射与空的待清理列表', () => {
   assert.equal(view.regeneratedDshTurns[4], 11)
   assert.deepEqual(view.supersededDshTurns, [])
 })
+
+// 「正文走工具调用」的回合没有自己的流式正文：唯一能画的是折叠写下的那份 append。
+// 重新生成后那份副本仍在被替换的回合里。若把它连同旧回合一起隐藏，页面上就一条正文
+// 都不剩（替换副本只给模型），表现为「轨迹里有、对话里没有」。宁可保留那一回合。
+const foldOnlyEvents = [
+  { seq: 0, type: 'user/message', data: { role: 'user', source: { kind: 'user' } } },
+  { seq: 1, type: 'assistant/message', surfaceOp: 'append', data: { turn: 1, message: { source: { kind: 'model', provider: 'p', model: 'm' }, content: [{ type: 'text', text: '开场' }] } } },
+  { seq: 2, type: 'assistant/message', surfaceOp: 'append', data: { turn: 4, message: { source: { kind: 'model', provider: 'p', model: 'm' }, content: [{ type: 'text', text: 'Pass' }] } } },
+  { seq: 3, type: 'assistant/message', surfaceOp: 'append', data: { turn: 6, message: { source: { kind: 'model', provider: 'dsh-tavern', model: 'reply-projection' }, content: [{ type: 'text', text: '正文' }] } } },
+  { seq: 4, type: 'assistant/message', surfaceOp: { op: 'replace', startSeq: 2, endSeq: 3 }, sourceEventSeqs: [2, 3],
+    data: { turn: 7, message: { source: { kind: 'model', provider: 'p', model: 'm', tavernStoryTurn: 4 }, content: [{ type: 'text', text: '正文' }] } } }
+]
+const foldOnlySession = { id: 's', events: foldOnlyEvents, surface: { nodes: [0, 1, 4] } }
+
+test('唯一可画的正文落在被替换回合里时，不隐藏那一回合', () => {
+  const view = fields.rollback({ id: 'c', sessionId: 's', mode: 'story', messages: [] },
+    { session: foldOnlySession, events: foldOnlyEvents })
+  assert.deepEqual(view.supersededDshTurns, [4], '只藏真正没有可画正文的旧回合')
+  assert.equal(view.regeneratedDshTurns[4], 7)
+})
+
+test('最终投影自己带 append 副本时，旧回合照常隐藏', () => {
+  const events = [
+    ...foldOnlyEvents,
+    { seq: 5, type: 'assistant/message', surfaceOp: 'append', data: { turn: 7, message: { source: { kind: 'model', provider: 'p', model: 'm' }, content: [{ type: 'text', text: '正文' }] } } }
+  ]
+  const session = { id: 's', events, surface: { nodes: [0, 1, 4, 5] } }
+  const view = fields.rollback({ id: 'c', sessionId: 's', mode: 'story', messages: [] }, { session, events })
+  assert.deepEqual(view.supersededDshTurns, [4, 6], '新副本可画，旧回合都可以收掉')
+})

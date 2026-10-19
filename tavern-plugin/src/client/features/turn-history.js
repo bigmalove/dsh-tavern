@@ -332,18 +332,30 @@
 			}
 			return false;
 		}
+		// 玩家自己的话永远不属于「空回合」的清理范围。宿主的输入行不止一种 kind：
+		// `user` 之外还有 turn-trigger（「收到执行请求」）、steering（插话）等，
+		// 只认 user 必然漏，于是生成失败那种「有输入、没正文」的回合会被整轮抹掉。
+		function isInputFlowKind(kind) {
+			if (typeof kind !== "string" || kind === "") return false;
+			return kind === "user" || kind.indexOf("user") === 0
+				|| kind.indexOf("steering") >= 0 || kind.indexOf("trigger") >= 0
+				|| /(?:^|-)input$/.test(kind);
+		}
 		// 0.2.1 给 surface 编辑（删除标记、撤销删除）另开一个 turn，宿主于是为它画出
 		// turn-process 和一行空 turn-tail：正文一条没有，页面上却多一排「已完成」。
-		// 判据是「这一回合在页面上没有任何正文行」，不依赖回合编号。
+		// 判据是「这一回合在页面上既没有正文行、也没有玩家输入」，不依赖回合编号。
 		function applyEmptyTurnRows() {
 			const scope = root();
 			const steps = scope.querySelectorAll('[data-chat-flow-kind]');
 			const turnsWithBody = new Set();
+			const turnsWithInput = new Set();
 			for (let i = 0; i < steps.length; i++) {
 				const node = steps[i];
-				if (!isAssistantFlowKind(node.getAttribute && node.getAttribute("data-chat-flow-kind"))) continue;
-				const turn = String(node.getAttribute("data-chat-turn") || "");
-				if (turn !== "") turnsWithBody.add(turn);
+				const kind = node.getAttribute && node.getAttribute("data-chat-flow-kind");
+				const turn = String(node.getAttribute && node.getAttribute("data-chat-turn") || "");
+				if (turn === "") continue;
+				if (isAssistantFlowKind(kind)) turnsWithBody.add(turn);
+				else if (isInputFlowKind(kind)) turnsWithInput.add(turn);
 			}
 			const rows = scope.querySelectorAll('[data-chat-flow-kind="turn-tail"], [data-turn-tail]');
 			for (let i = 0; i < rows.length; i++) {
@@ -352,14 +364,19 @@
 				// 编号缺失、或者这一回合有正文：都不动。尾行只有回合结束后才画，所以
 				// 「尾行已存在但没有正文」就足以说明这是编辑留下的空回合。
 				if (turn === "" || turnsWithBody.has(turn)) continue;
+				// 有玩家输入的回合是「生成失败」，不是编辑留下的空回合：连玩家刚发的
+				// 那句话一起收掉，看起来就像自己没说过。输入与尾行都留给宿主原样显示。
+				if (turnsWithInput.has(turn)) continue;
 				hideRow(node);
 				// 同回合的过程行也一起收掉，否则只留下一条「已完成」。
 				const sameTurn = scope.querySelectorAll('[data-chat-flow-kind]');
 				for (let j = 0; j < sameTurn.length; j++) {
 					const row = sameTurn[j];
 					if (String(row.getAttribute && row.getAttribute("data-chat-turn") || "") !== turn) continue;
-					if (row.getAttribute && row.getAttribute("data-chat-flow-kind") === "turn-tail") continue;
-					if (isAssistantFlowKind(row.getAttribute && row.getAttribute("data-chat-flow-kind"))) continue;
+					const kind = row.getAttribute && row.getAttribute("data-chat-flow-kind");
+					if (kind === "turn-tail") continue;
+					if (isAssistantFlowKind(kind)) continue;
+					if (isInputFlowKind(kind)) continue;
 					hideRow(row);
 				}
 			}
