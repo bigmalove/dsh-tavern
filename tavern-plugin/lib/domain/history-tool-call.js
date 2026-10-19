@@ -8,7 +8,12 @@ import { createHash } from 'node:crypto'
 // accepted as tool arguments, so this projection is a containment measure, not a
 // cosmetic one. The identifier is derived from the message id so repeated
 // requests produce byte-identical history and keep provider caches warm.
-export const HISTORY_CALL_PREFIX = 'tavern-history:'
+//
+// The id must also survive transport: OpenAI-compatible gateways cap call ids at
+// 40 characters and many only pass `[A-Za-z0-9_-]`, silently turning anything else
+// into an unmatched call or a 400. `tvh_` plus 32 hex digits is 36 characters of
+// that alphabet, so the pair stays legal on every backend this plugin talks to.
+export const HISTORY_CALL_PREFIX = 'tvh_'
 export const HISTORY_RECEIPT_TEXT = '已收到。'
 
 function str(value) {
