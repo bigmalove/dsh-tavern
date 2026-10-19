@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "revision": "5c7ced438933e40c3e1d1445ec276b119814c8bf",
-  "releaseSequence": 751,
+  "revision": "4ac9541b4152fb024fcb81e0edb63987b6de509c",
+  "releaseSequence": 752,
   "version": "3.0.0",
   "files": [
     {
@@ -486,13 +486,13 @@
     },
     {
       "path": "tavern-plugin/lib/client-assets/tavern.css",
-      "sha256": "daccff9bb492c7eab5b1bffee1f32307e9960b8b74aa28c5df49a3274b811d9d",
-      "size": 303397
+      "sha256": "c2f961efab94d4e6e8ecd5645a9c6490fb2f3bb2f18f5f9c9ae795eba7989959",
+      "size": 304236
     },
     {
       "path": "tavern-plugin/lib/client.js",
-      "sha256": "c5aeada1fbcf8e5ffe458878e122a99ef9903ec49325ae62bd7bcdd0deb00f2e",
-      "size": 1984522
+      "sha256": "00809b5e79bedaee764159d5969080391c80f5903c1a7718a1bc98eb81d8ddc8",
+      "size": 1989422
     },
     {
       "path": "tavern-plugin/lib/cordis-inspect.js",
@@ -4921,8 +4921,8 @@
     },
     {
       "path": "tavern-plugin/src/client/features/play-controls.js",
-      "sha256": "644c5961b695688ae1974795848a14884190cb9eff5a661374dcfe3932c3d0d4",
-      "size": 144920
+      "sha256": "adeddfb0303fb31063f28bde63428e7fd9c7b3719d2f4f6d51f73ee1d960904c",
+      "size": 148094
     },
     {
       "path": "tavern-plugin/src/client/features/plugin-extensions.js",
@@ -4966,8 +4966,8 @@
     },
     {
       "path": "tavern-plugin/src/client/features/sidebar.js",
-      "sha256": "87b5c59d8a666a48f71ffa8ac4478c95b49a7651bd281097dc39563296b436b2",
-      "size": 103695
+      "sha256": "3ba84d74fb88c7452b48c3a7cee400348257d63fd0363b85748bb70b083067c3",
+      "size": 103696
     },
     {
       "path": "tavern-plugin/src/client/features/skills.js",
@@ -5051,8 +5051,8 @@
     },
     {
       "path": "tavern-plugin/src/client/main.js",
-      "sha256": "fa23a441d0f1316698d0b7c05344bb78d56cf9011a4d9d035afafa8789cf8e66",
-      "size": 67270
+      "sha256": "ec67f17088512b201fc4f017878c71e235ef66ad846f8a0ab76d685ebc27b782",
+      "size": 68143
     },
     {
       "path": "tavern-plugin/src/client/modules/assistant-visibility.js",
