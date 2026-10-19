@@ -18,15 +18,9 @@ export function storyToolCallEnabled(chat, enabled) {
 }
 
 function validContent(content) {
-  if (typeof content !== 'string' || content.trim() === '') throw new Error('正文不能为空，content 必须是非空字符串' + FALLBACK_HINT)
+  if (typeof content !== 'string' || content.trim() === '') throw new Error('正文不能为空，content 必须是非空字符串')
   return content
 }
-
-// A failing submission must not turn into a retry loop: the model reads the
-// error as a tool result and would otherwise call again, step after step, until
-// the request times out with no text on screen. Every rejection therefore ends by
-// telling it to answer directly, which is what the player sees anyway.
-const FALLBACK_HINT = '；不要再调用本工具，请直接把完整正文作为回复输出。'
 
 /**
  * The body a submission carried, whether or not its receipt came back verbatim.
@@ -163,17 +157,17 @@ export function createStorySubmissionTool({ chatForSession, enabled, isBackgroun
       exec?.signal?.throwIfAborted()
       const session = exec?.agent?.session
       const sessionId = session?.id || ''
-      if (!sessionId || isBackground(sessionId)) throw new Error('正文提交只用于前台游玩回合' + FALLBACK_HINT)
+      if (!sessionId || isBackground(sessionId)) throw new Error('正文提交只用于前台游玩回合')
       const chat = await chatForSession(sessionId)
-      if (!storyToolCallEnabled(chat, await enabled())) throw new Error('未开启正文走工具调用' + FALLBACK_HINT)
+      if (!storyToolCallEnabled(chat, await enabled())) throw new Error('未开启正文走工具调用')
       const turn = activeStoryTurn(session)
-      if (turn === null) throw new Error('当前没有正在生成的游玩回合' + FALLBACK_HINT)
+      if (turn === null) throw new Error('当前没有正在生成的游玩回合')
       const content = validContent(args?.content)
       const previous = storySubmissionForTurn(session, turn)
       // The same body twice is the model repeating itself after a lost receipt;
       // returning it again is harmless and keeps the round from failing.
-      if (previous && previous.content !== content) throw new Error('本轮已提交正文，不允许重复覆盖' + FALLBACK_HINT)
-      if (typeof exec.concludeTurn !== 'function') throw new Error('当前 DSH 版本不支持工具提交后结束回合，请关闭正文走工具调用或更新 DSH' + FALLBACK_HINT)
+      if (previous && previous.content !== content) throw new Error('本轮已提交正文，不允许重复覆盖')
+      if (typeof exec.concludeTurn !== 'function') throw new Error('当前 DSH 版本不支持工具提交后结束回合，请关闭正文走工具调用或更新 DSH')
       exec.signal?.throwIfAborted()
       exec.concludeTurn()
       return content

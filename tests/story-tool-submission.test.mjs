@@ -84,11 +84,13 @@ test('折叠失败返回 false 而不是抛错，调用方才能退化成普通�
   assert.equal(foldStorySubmission({ surface: { nodes: [] }, events: [] }, result, '正文'), false)
 })
 
-test('工具被拒时的提示要求模型改为直接输出，避免反复调用直到超时', async () => {
-  const tool = createStorySubmissionTool({ chatForSession: async () => ({ mode: 'card' }), enabled: async () => true, isBackground: () => false })
+test('工具被拒时只返回原始错误，不再附带「改为直接输出」的提示', async () => {
+  const off = createStorySubmissionTool({ chatForSession: async () => ({ mode: 'card' }), enabled: async () => true, isBackground: () => false })
   const exec = { agent: { session: { id: 's', events: [] } }, signal: new AbortController().signal, concludeTurn() {} }
-  await assert.rejects(tool.execute({ content: '正文' }, exec), /直接|输出/)
-  await assert.rejects(tool.execute({ content: '' }, exec), /直接|输出/)
+  await assert.rejects(off.execute({ content: '正文' }, exec), error => error.message === '未开启正文走工具调用')
+  const on = createStorySubmissionTool({ chatForSession: async () => ({ mode: 'story' }), enabled: async () => true, isBackground: () => false })
+  const live = { agent: { session: { id: 's', events: [{ type: 'turn/start', data: { turn: 1 } }] } }, signal: new AbortController().signal, concludeTurn() {} }
+  await assert.rejects(on.execute({ content: '' }, live), error => error.message === '正文不能为空，content 必须是非空字符串')
 })
 
 const server = await readFile(new URL('../tavern-plugin/lib/index.js', import.meta.url), 'utf8')
