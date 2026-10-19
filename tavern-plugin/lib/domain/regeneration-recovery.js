@@ -52,6 +52,7 @@ export function createRegenerationRecovery({ chats, sessions, timeline, isActive
       const next = timeline.apply({ chat: current, intent: { kind: 'replacement.abort', restoreChat: originalChat } }).chat
       delete next.regenInProgress
       delete next.regenRecovery
+      // replacingDshTurns comes back from the restored snapshot with the round it marks.
       next.tavernHelperLifecycleRevision = Number(current.tavernHelperLifecycleRevision || 0) + 1
       next.suppressedDshTurns = [...new Set([...(next.suppressedDshTurns || []), ...abortedTurns])].sort((a, b) => a - b)
       return next

@@ -1373,6 +1373,9 @@
 			const suppressedDshTurnsRevision = suppressedDshTurns.join(",");
 			const regeneratedDshTurns = suppressionState.view && suppressionState.view.regeneratedDshTurns || {};
 			const regeneratedDshTurnsRevision = JSON.stringify(regeneratedDshTurns);
+			// 正在被重生成替换的那一楼：只藏旧正文，玩家输入留着。
+			const replacingDshTurns = suppressionState.view && Array.isArray(suppressionState.view.replacingDshTurns) ? suppressionState.view.replacingDshTurns : [];
+			const replacingDshTurnsRevision = replacingDshTurns.join(",");
 			// 单条删除后要藏掉宿主那条尾行（复制/分支/用时/时间）。
 			const deletedReplyTurns = suppressionState.view && Array.isArray(suppressionState.view.deletedReplyTurns) ? suppressionState.view.deletedReplyTurns : [];
 			const deletedReplyTurnsRevision = deletedReplyTurns.join(",");
@@ -1380,7 +1383,7 @@
 				let frame = null;
 				function applyProjectionState() {
 					frame = null;
-					historyProjection.apply(props.sessionId, suppressedDshTurns, regeneratedDshTurns, deletedReplyTurns);
+					historyProjection.apply(props.sessionId, suppressedDshTurns, regeneratedDshTurns, deletedReplyTurns, replacingDshTurns);
 				}
 				function scheduleProjection() {
 					if (frame === null) frame = window.requestAnimationFrame(applyProjectionState);
@@ -1399,7 +1402,7 @@
 				});
 				observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-chat-flow-kind", "data-chat-turn", "data-turn-tail"] });
 				return function () { observer.disconnect(); if (frame !== null) window.cancelAnimationFrame(frame); };
-			}, [props.sessionId, latestMessageId, running, suppressedDshTurnsRevision, regeneratedDshTurnsRevision, deletedReplyTurnsRevision]);
+			}, [props.sessionId, latestMessageId, running, suppressedDshTurnsRevision, regeneratedDshTurnsRevision, deletedReplyTurnsRevision, replacingDshTurnsRevision]);
 			return null;
 		}
 		function CandidateQuestion(props) {

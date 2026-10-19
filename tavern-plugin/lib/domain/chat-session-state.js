@@ -30,7 +30,7 @@ export function projectChatSessionState(chat, options = {}) {
   for (const key of ['id', 'sessionId', '_storageRevision', 'mode', 'cardPath', 'cardContextRevision',
     'backgroundConfigVersion', 'conversationFeaturesVersion', 'disabledWritingSkills', 'contextCompaction', 'updatedAt', 'timeline', 'candidateAgent',
     'cardName', 'requestMode', 'statusBarPlacement', 'statusSections', 'webSearchEnabled', 'candidates', 'taskMailbox', 'regenInProgress',
-    'settleError', 'scriptState', 'hiddenDshErrorTurns', 'suppressedDshTurns', 'regeneratedDshTurns', 'tavernHelperLifecycleRevision',
+    'settleError', 'scriptState', 'hiddenDshErrorTurns', 'suppressedDshTurns', 'replacingDshTurns', 'regeneratedDshTurns', 'tavernHelperLifecycleRevision',
     // 撤销删除是 header 里的事实，视图每次都从它算 canUndoDeletion。这份裁剪投影是
     // 缓存命中路径唯一的 Chat 来源，漏掉它，删除后「撤销删除」就永远不出现——
     // 磁盘上删完确实还留着 deletionUndo，只是没有一个读者能看到它。
@@ -106,6 +106,21 @@ export function createSessionStateView({ activity: activityOf, evidence: evidenc
   }
 
   function mvuReceiptsOf(chat, changes) { return receiptIndex(chat,activityOf(chat),changes) }
+  // Rounds whose old reply is being replaced right now. Only the reply is hidden;
+  // the player's own input stays visible, otherwise the page reads as if the
+  // message he just sent was deleted. `suppressedDshTurns` is the other thing:
+  // a whole turn that is void (failed residue, rolled-back surface).
+  function replacingDshTurnsOf(chat) {
+    const turns = new Set((Array.isArray(chat.replacingDshTurns) ? chat.replacingDshTurns : [])
+      .map(Number).filter(turn => Number.isSafeInteger(turn) && turn > 0))
+    // Old saves wrote the temporary suppression into suppressedDshTurns; the
+    // marker in regenRecovery still says which turn was only being replaced.
+    if (chat.regenInProgress === true) {
+      const temporary = Number(chat.regenRecovery?.temporarySuppressedTurn)
+      if (Number.isSafeInteger(temporary) && temporary > 0) turns.add(temporary)
+    }
+    return [...turns].sort((left, right) => left - right)
+  }
   function rollbackViewFields(chat, evidence = evidenceOf(chat.sessionId), changes) {
     const mappings = normalizedMappings(chat, changes)
     if (sharedMappings && !mappingIds.has(mappings)) mappingIds.set(mappings, ++mappingSequence)
@@ -117,7 +132,9 @@ export function createSessionStateView({ activity: activityOf, evidence: evidenc
     const native = session?.header?.version >= 3 && typeof session.snapshotEvents === 'function'
       && Array.isArray(events) && Object.isFrozen(events) && Array.isArray(nodes) && Number.isSafeInteger(generation)
     const key = native ? JSON.stringify([chat.sessionId,chat.messages?.length,chat.tavernHelperLifecycleRevision,
-      chat.importHistory?.rescue,chat.importHistory?.operationId,chat.hiddenDshErrorTurns,chat.suppressedDshTurns,sharedMappings ? mappingIds.get(mappings) : chat.regeneratedDshTurns,
+      chat.importHistory?.rescue,chat.importHistory?.operationId,chat.hiddenDshErrorTurns,chat.suppressedDshTurns,
+      chat.replacingDshTurns, chat.regenInProgress, chat.regenRecovery?.temporarySuppressedTurn,
+      sharedMappings ? mappingIds.get(mappings) : chat.regeneratedDshTurns,
       nodes.length,nodes[0],nodes.at(-1),generation]) : null
     const previous = rollbackCache.get(chat.id)
     if (native && changes?.layoutChanged === false && previous?.session.deref() === session
@@ -135,9 +152,12 @@ export function createSessionStateView({ activity: activityOf, evidence: evidenc
     const replayTarget = Array.isArray(nodes) ? failedTurnReplayAvailability({ events: evidence.events || [], nodes, cleared: chat.suppressedDshTurns || [] }).target : null
     const hasRound = hasRollbackMessages(chat.messages)
     const failures = failedErrorTurnStates(evidence.events || [], chat.suppressedDshTurns)
+    const replacingTurns = replacingDshTurnsOf(chat)
     const result = {
       hiddenDshErrorTurns: chat.hiddenDshErrorTurns || [],
-      suppressedDshTurns: foregroundSuppressedTurns(chat, evidence.events || []),
+      suppressedDshTurns: foregroundSuppressedTurns(chat, evidence.events || [])
+        .filter(turn => !replacingTurns.includes(turn)),
+      replacingDshTurns: replacingTurns,
       regeneratedDshTurns: mappings,
       suppressedDshErrorTurns: supersededRegenerationErrorTurns({ events: evidence.events || [], suppressedDshTurns: chat.suppressedDshTurns }),
       staleDshErrorTurns: failures.staleTurns,

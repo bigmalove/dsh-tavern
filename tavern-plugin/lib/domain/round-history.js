@@ -219,13 +219,15 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
         sessionId: chat.sessionId, eventStart }
       next.tavernHelperLifecycleRevision = lifecycleRevision
       next.regenInProgress = true
-      // 生成期间就把被重做的原生回合藏起来：否则旧的正文一直挂在页面上，
-      // 看上去像"没有在生成、只是把新内容叠上去"。这是临时压制，提交时撤销
-      // （只记住本函数临时加进去的那一次，别动原本就该隐藏的回合）。
-      const suppressedBefore = Array.isArray(next.suppressedDshTurns) ? next.suppressedDshTurns : []
-      const alreadySuppressed = suppressedBefore.some(function (turn) { return Number(turn) === Number(oldTurn) })
-      next.regenRecovery.temporarySuppressedTurn = alreadySuppressed ? null : oldTurn
-      if (!alreadySuppressed) next.suppressedDshTurns = Array.from(new Set(suppressedBefore.concat([oldTurn]))).sort(function (left, right) { return left - right })
+      // 生成期间就把被重做的旧正文藏起来：否则旧的正文一直挂在页面上，
+      // 看上去像"没有在生成、只是把新内容叠上去"。注意只藏正文——玩家输入是
+      // 他自己发的，留着才看得见这条在等谁的回复。所以走 replacingDshTurns
+      // 单独一个字段，别混进 suppressedDshTurns（那是"整轮作废"，连输入一起收）。
+      // 只记住本函数临时加进去的那一次，别动原本就该隐藏的回合。
+      const replacingBefore = Array.isArray(next.replacingDshTurns) ? next.replacingDshTurns : []
+      const alreadyReplacing = replacingBefore.some(function (turn) { return Number(turn) === Number(oldTurn) })
+      next.regenRecovery.temporarySuppressedTurn = alreadyReplacing ? null : oldTurn
+      if (!alreadyReplacing) next.replacingDshTurns = Array.from(new Set(replacingBefore.concat([oldTurn]))).sort(function (left, right) { return left - right })
       return next
     }, { source: 'rollback.regen' })
     const rolledMessageCount = (chat.messages || []).length
@@ -289,8 +291,13 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
         next.settleStatus = 'pending'
         next.settleError = null
         next.tavernHelperLifecycleRevision = lifecycleRevision + 1
-        // 撤销生成期对旧回合的临时隐藏；它此后由 regeneratedDshTurns 的键负责。
+        // 撤销生成期对旧正文的临时隐藏；它此后由 regeneratedDshTurns 的键负责。
         const temporaryTurn = Number(next.regenRecovery && next.regenRecovery.temporarySuppressedTurn)
+        const keptReplacing = (Array.isArray(next.replacingDshTurns) ? next.replacingDshTurns : [])
+          .filter(function (turn) { return !Number.isSafeInteger(temporaryTurn) || Number(turn) !== temporaryTurn })
+        if (keptReplacing.length) next.replacingDshTurns = keptReplacing
+        else delete next.replacingDshTurns
+        // 旧存档把临时压制写进了 suppressedDshTurns，这里一并清理。
         const keptSuppressed = (Array.isArray(next.suppressedDshTurns) ? next.suppressedDshTurns : [])
           .filter(function (turn) { return !Number.isSafeInteger(temporaryTurn) || Number(turn) !== temporaryTurn })
         if (next.regenRecovery) delete next.regenRecovery.temporarySuppressedTurn
@@ -401,11 +408,11 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
     rolled.regenRecovery = { id: operationId, beforeRevision: revision, sessionId: chat.sessionId, eventStart }
     rolled.tavernHelperLifecycleRevision = lifecycleRevision
     rolled.regenInProgress = true
-    // 同上（完整路径）：生成期间临时隐藏被重做的原生回合，提交时撤销。
-    const rolledSuppressedBefore = Array.isArray(rolled.suppressedDshTurns) ? rolled.suppressedDshTurns : []
-    const rolledAlreadySuppressed = rolledSuppressedBefore.some(function (turn) { return Number(turn) === Number(oldTurn) })
-    rolled.regenRecovery.temporarySuppressedTurn = rolledAlreadySuppressed ? null : oldTurn
-    if (!rolledAlreadySuppressed) rolled.suppressedDshTurns = Array.from(new Set(rolledSuppressedBefore.concat([oldTurn]))).sort(function (left, right) { return left - right })
+    // 同上（完整路径）：生成期间只藏被重做的旧正文，玩家输入留着。
+    const rolledReplacingBefore = Array.isArray(rolled.replacingDshTurns) ? rolled.replacingDshTurns : []
+    const rolledAlreadyReplacing = rolledReplacingBefore.some(function (turn) { return Number(turn) === Number(oldTurn) })
+    rolled.regenRecovery.temporarySuppressedTurn = rolledAlreadyReplacing ? null : oldTurn
+    if (!rolledAlreadyReplacing) rolled.replacingDshTurns = Array.from(new Set(rolledReplacingBefore.concat([oldTurn]))).sort(function (left, right) { return left - right })
     const rollbackChanges = headerChanges(originalHeader, rolled)
     if (rollbackChanges.some(change => change.path[0] === 'messages' || change.path[0] === 'id')) return undefined
     if (msgs0.length > rolledMessageCount) rollbackChanges.push({ op: 'splice', path: ['messages'], index: rolledMessageCount, deleteCount: msgs0.length - rolledMessageCount, items: [] })
@@ -467,6 +474,11 @@ export function createRoundHistory({ chats, sessions, scripts, timeline, queueSe
       next.settleError = null
       next.tavernHelperLifecycleRevision = lifecycleRevision + 1
       const temporaryTurn = Number(next.regenRecovery && next.regenRecovery.temporarySuppressedTurn)
+      const keptReplacing = (Array.isArray(next.replacingDshTurns) ? next.replacingDshTurns : [])
+        .filter(function (turn) { return !Number.isSafeInteger(temporaryTurn) || Number(turn) !== temporaryTurn })
+      if (keptReplacing.length) next.replacingDshTurns = keptReplacing
+      else delete next.replacingDshTurns
+      // 旧存档把临时压制写进了 suppressedDshTurns，这里一并清理。
       const keptSuppressed = (Array.isArray(next.suppressedDshTurns) ? next.suppressedDshTurns : [])
         .filter(function (turn) { return !Number.isSafeInteger(temporaryTurn) || Number(turn) !== temporaryTurn })
       if (next.regenRecovery) delete next.regenRecovery.temporarySuppressedTurn

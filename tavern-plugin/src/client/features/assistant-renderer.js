@@ -692,9 +692,11 @@
 				// 重新生成期间，被重做的这一楼只留宿主的"生成中"占位：旧正文还挂在
 				// 页面上会让玩家以为没有在生成、只是把新内容叠了上去。压制列表记的是
 				// native turn，这里要 native 与 story turn 都比一遍（重生成过的回合两者不同）。
+				// 两种来源都算：replacingDshTurns 是"只换正文"，suppressedDshTurns 是整轮作废。
+				const replacingTurns = liveState.view && Array.isArray(liveState.view.replacingDshTurns) ? liveState.view.replacingDshTurns : [];
+				const suppressedTurns = liveState.view && Array.isArray(liveState.view.suppressedDshTurns) ? liveState.view.suppressedDshTurns : [];
 				const regenerating = liveState.view && liveState.view.regenInProgress === true
-					&& Array.isArray(liveState.view.suppressedDshTurns)
-					&& liveState.view.suppressedDshTurns.some(function (value) { return Number(value) === Number(turn) || Number(value) === Number(storyTurn); });
+					&& replacingTurns.concat(suppressedTurns).some(function (value) { return Number(value) === Number(turn) || Number(value) === Number(storyTurn); });
                 const rendered = sessionTransitioning ? [React.createElement("div", { key: "switching", className: "dsh-tavern-session-switching", role: "status" }, "正在完成游戏初始化…")] : waitingForHistory ? [React.createElement("div", {key:"history",role:"status"}, "正在读取历史内容…")] : renderTavernAssistantBlocks({
 					blocks: data.blocks,
 					streaming: data.status === "running",

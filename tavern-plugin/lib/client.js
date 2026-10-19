@@ -14390,9 +14390,11 @@ async function runTavernTouchDiagnostics(host, onStatus) {
 				// 重新生成期间，被重做的这一楼只留宿主的"生成中"占位：旧正文还挂在
 				// 页面上会让玩家以为没有在生成、只是把新内容叠了上去。压制列表记的是
 				// native turn，这里要 native 与 story turn 都比一遍（重生成过的回合两者不同）。
+				// 两种来源都算：replacingDshTurns 是"只换正文"，suppressedDshTurns 是整轮作废。
+				const replacingTurns = liveState.view && Array.isArray(liveState.view.replacingDshTurns) ? liveState.view.replacingDshTurns : [];
+				const suppressedTurns = liveState.view && Array.isArray(liveState.view.suppressedDshTurns) ? liveState.view.suppressedDshTurns : [];
 				const regenerating = liveState.view && liveState.view.regenInProgress === true
-					&& Array.isArray(liveState.view.suppressedDshTurns)
-					&& liveState.view.suppressedDshTurns.some(function (value) { return Number(value) === Number(turn) || Number(value) === Number(storyTurn); });
+					&& replacingTurns.concat(suppressedTurns).some(function (value) { return Number(value) === Number(turn) || Number(value) === Number(storyTurn); });
                 const rendered = sessionTransitioning ? [React.createElement("div", { key: "switching", className: "dsh-tavern-session-switching", role: "status" }, "正在完成游戏初始化…")] : waitingForHistory ? [React.createElement("div", {key:"history",role:"status"}, "正在读取历史内容…")] : renderTavernAssistantBlocks({
 					blocks: data.blocks,
 					streaming: data.status === "running",
@@ -19978,6 +19980,27 @@ async function runTavernTouchDiagnostics(host, onStatus) {
 				} else hideTurnTailWithUser(tail);
 			}
 		}
+		// 重生成期间的那一楼：只藏会被替代的旧正文（和它的尾行），玩家输入留着。
+		// 整轮隐掉输入会让页面看起来像"我刚发的那条被删了"，这是他自己的话。
+		function hideReplacingReply(tail, turn) {
+			hideRow(tail);
+			const rows = turnRowsBefore(tail, turn);
+			for (let i = 0; i < rows.length; i++) {
+				if (rows[i].getAttribute("data-chat-flow-kind") === "user") continue;
+				hideRow(rows[i]);
+			}
+		}
+		function applyReplacingDshTurns(turns) {
+			const set = new Set((Array.isArray(turns) ? turns : []).map(String));
+			if (set.size === 0) return;
+			const tails = root().querySelectorAll('[data-chat-flow-kind="turn-tail"]');
+			for (let i = 0; i < tails.length; i++) {
+				const tail = tails[i];
+				const turn = tailTurnOf(tail);
+				if (!set.has(turn)) continue;
+				hideReplacingReply(tail, turn);
+			}
+		}
 		function applyRegeneratedDshTurns(regeneratedDshTurns) {
 			const mappings = regeneratedDshTurns && typeof regeneratedDshTurns === "object" ? regeneratedDshTurns : {};
 			const hiddenStoryTurns = new Set(Object.keys(mappings).map(String));
@@ -20087,23 +20110,27 @@ async function runTavernTouchDiagnostics(host, onStatus) {
 				if (typeof rpc === "function") rpc("reportDeletedTailDiagnostics", { payload: payload }, sessionId).catch(function () {});
 			} catch (error) { /* 诊断绝不打断渲染 */ }
 		}
-			function apply(sessionId, turns, regeneratedDshTurns, deletedReplyTurns) {
+			function apply(sessionId, turns, regeneratedDshTurns, deletedReplyTurns, replacingTurns) {
                 // Reconcile both directions: an older observer may have hidden a
                 // restored turn after the action's immediate DOM update.
                 restoreHiddenRows();
 				applySuppressedDshTurns(turns, regeneratedDshTurns);
+				applyReplacingDshTurns(replacingTurns);
 				applyRegeneratedDshTurns(regeneratedDshTurns);
 				applyDeletedReplyTurns(deletedReplyTurns);
 				if (Array.isArray(deletedReplyTurns) && deletedReplyTurns.length) reportTailDiagnostics(sessionId, deletedReplyTurns);
                 // Native rows can mount without their turn tail. Explicit ownership
                 // must remain authoritative during streaming and partial hydration.
                 const suppressed = new Set((Array.isArray(turns) ? turns : []).map(String));
+                const replacing = new Set((Array.isArray(replacingTurns) ? replacingTurns : []).map(String));
                 const mappings = regeneratedDshTurns || {};
                 const replacements = new Set(Object.values(mappings).map(String));
                 for (const row of root().querySelectorAll('[data-chat-turn]')) {
                     const turn = row.getAttribute("data-chat-turn");
                     const kind = row.getAttribute("data-chat-flow-kind");
                     if (!kind) continue;
+                    // 正在被替换的那一楼只藏回复，玩家的输入永远留着。
+                    if (replacing.has(turn) && kind === "user") continue;
                     if (suppressed.has(turn) && (!replacements.has(turn) || kind === "user")) hideRow(row);
                     if (Object.prototype.hasOwnProperty.call(mappings, turn) && kind !== "user") hideRow(row);
                 }
@@ -20119,7 +20146,7 @@ async function runTavernTouchDiagnostics(host, onStatus) {
 				const adopted = view && view.adopted;
 				if (adopted && Number(adopted.hiddenTurn) > 0) forgetHiddenTurn(HIDDEN_TURNS_KEY, sessionId, Number(adopted.hiddenTurn));
 				if (adopted && Number(adopted.syntheticTurn) > 0) forgetHiddenTurn(HIDDEN_REGEN_USER_TURNS_KEY, sessionId, Number(adopted.syntheticTurn));
-				apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns, view && view.deletedReplyTurns);
+				apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns, view && view.deletedReplyTurns, view && view.replacingDshTurns);
 			}
             function restored(sessionId, view) {
                 const turn = Number(view && view.undoneRollback && view.undoneRollback.turn);
@@ -20134,10 +20161,10 @@ async function runTavernTouchDiagnostics(host, onStatus) {
                     tail.style.display = "";
                     turnRowsBefore(tail, tail.getAttribute("data-chat-turn")).forEach(function (row) { row.style.display = ""; });
                 }
-                apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns, view && view.deletedReplyTurns);
+                apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns, view && view.deletedReplyTurns, view && view.replacingDshTurns);
             }
 			function rolledBack(sessionId, view) {
-				apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns, view && view.deletedReplyTurns);
+				apply(sessionId, view && view.suppressedDshTurns, view && view.regeneratedDshTurns, view && view.deletedReplyTurns, view && view.replacingDshTurns);
 			}
 			return Object.freeze({ apply: apply, regenerated: regenerated, rolledBack: rolledBack, restored: restored });
 		}
@@ -21850,6 +21877,9 @@ async function runTavernTouchDiagnostics(host, onStatus) {
 			const suppressedDshTurnsRevision = suppressedDshTurns.join(",");
 			const regeneratedDshTurns = suppressionState.view && suppressionState.view.regeneratedDshTurns || {};
 			const regeneratedDshTurnsRevision = JSON.stringify(regeneratedDshTurns);
+			// 正在被重生成替换的那一楼：只藏旧正文，玩家输入留着。
+			const replacingDshTurns = suppressionState.view && Array.isArray(suppressionState.view.replacingDshTurns) ? suppressionState.view.replacingDshTurns : [];
+			const replacingDshTurnsRevision = replacingDshTurns.join(",");
 			// 单条删除后要藏掉宿主那条尾行（复制/分支/用时/时间）。
 			const deletedReplyTurns = suppressionState.view && Array.isArray(suppressionState.view.deletedReplyTurns) ? suppressionState.view.deletedReplyTurns : [];
 			const deletedReplyTurnsRevision = deletedReplyTurns.join(",");
@@ -21857,7 +21887,7 @@ async function runTavernTouchDiagnostics(host, onStatus) {
 				let frame = null;
 				function applyProjectionState() {
 					frame = null;
-					historyProjection.apply(props.sessionId, suppressedDshTurns, regeneratedDshTurns, deletedReplyTurns);
+					historyProjection.apply(props.sessionId, suppressedDshTurns, regeneratedDshTurns, deletedReplyTurns, replacingDshTurns);
 				}
 				function scheduleProjection() {
 					if (frame === null) frame = window.requestAnimationFrame(applyProjectionState);
@@ -21876,7 +21906,7 @@ async function runTavernTouchDiagnostics(host, onStatus) {
 				});
 				observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-chat-flow-kind", "data-chat-turn", "data-turn-tail"] });
 				return function () { observer.disconnect(); if (frame !== null) window.cancelAnimationFrame(frame); };
-			}, [props.sessionId, latestMessageId, running, suppressedDshTurnsRevision, regeneratedDshTurnsRevision, deletedReplyTurnsRevision]);
+			}, [props.sessionId, latestMessageId, running, suppressedDshTurnsRevision, regeneratedDshTurnsRevision, deletedReplyTurnsRevision, replacingDshTurnsRevision]);
 			return null;
 		}
 		function CandidateQuestion(props) {
