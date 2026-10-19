@@ -30,7 +30,7 @@ export function createAutoCompaction(deps) {
     // and enabled policies retain the complete eligibility/recovery path below.
     if (deps.readMetadata && !options.manual) {
       const metadata = await deps.readMetadata(sessionId)
-      if (!metadata || !['story', 'script', 'writing'].includes(metadata.mode)) return null
+      if (!metadata || !['story', 'script'].includes(metadata.mode)) return null
       if (!jobs.has(metadata.id) && metadata.contextCompaction?.operation?.status !== 'running') {
         let policy
         try { policy = compactionPolicy(await deps.policy()) }
@@ -41,7 +41,7 @@ export function createAutoCompaction(deps) {
     // Eligibility uses only rounds, timeline and compaction metadata. Load full
     // history only after deciding to perform compression under the exclusive lock.
     const chat = await (deps.readState || deps.readChat)(sessionId)
-    if (!chat || !['story', 'script', 'writing'].includes(chat.mode)) return null
+    if (!chat || !['story', 'script'].includes(chat.mode)) return null
     if (jobs.has(chat.id)) {
       const active = jobs.get(chat.id)
       let result

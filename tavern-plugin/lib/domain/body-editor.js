@@ -20,7 +20,7 @@ function source(message) { return message.projectionText ?? message.sourceText ?
  * edit any loaded floor, including player inputs and the card greeting.
  */
 function resolveFloor(chat, input) {
-  if (!['story', 'script', 'writing'].includes(chat.mode || 'story')) throw new Error('只能编辑正文楼层')
+  if (!['story', 'script'].includes(chat.mode || 'story')) throw new Error('只能编辑正文楼层')
   const messages = Array.isArray(chat.messages) ? chat.messages : []
   const explicit = input !== null && input !== undefined && input.index !== undefined && input.index !== null
   let index

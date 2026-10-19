@@ -46,7 +46,7 @@ function slotOf(target, key) {
 export function sceneTarget(chat, turn) {
   turn = Number(turn)
   if (!Number.isSafeInteger(turn) || turn < 1) throw new Error('正文轮次不合法')
-  if (!chat || !['story', 'script', 'writing'].includes(chat.mode || 'story')) throw new Error('请先打开游玩对话')
+  if (!chat || !['story', 'script'].includes(chat.mode || 'story')) throw new Error('请先打开游玩对话')
   if(chat.sceneTargets){
     if(chat.sceneTargets[turn])return {...chat.sceneTargets[turn]}
     throw Object.assign(new Error('这段正文已不存在'),{code:'SCENE_TARGET_UNAVAILABLE'})
@@ -242,11 +242,11 @@ export function createSceneIllustrations(deps) {
     // Readiness needs the stored key, which only the full settings read resolves.
     if (!(await settings()).ready) return null
     const chat = await (deps.sceneStateForSession || deps.chatForSession)(sessionId, { turns: [] })
-    if (!chat || !['story', 'script', 'writing'].includes(chat.mode || 'story')) return null
+    if (!chat || !['story', 'script'].includes(chat.mode || 'story')) return null
     const latest = chat.sceneTargets ? Number(chat.sceneLatestTurn)
       : Number([...(chat.messages || [])].reverse().find(item => item?.role === 'assistant')?.turn || 0)
     // 游玩的开场白是人物卡自带的第 1 轮，可画轮次从 2 开始；写作没有开场白，第 1 轮就是正文。
-    const firstRound = (chat.mode || 'story') === 'writing' ? 1 : 2
+    const firstRound = 2
     if (!(latest >= firstRound)) return null
     const state = await status(sessionId, latest)
     if (!state.key || state.status !== 'idle' || state.versions.length || state.hasDeletedImages || state.recovery === 'save' || state.outcome === 'unconfirmed') return null

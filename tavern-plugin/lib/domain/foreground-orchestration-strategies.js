@@ -312,11 +312,11 @@ export function createNativePlayOrchestrationStrategy(options) {
       session: payload.agent?.session, disabledWritingSkills: input.chat?.disabledWritingSkills
     })
     let agentMessages = visibleMessages
-    const rawSnapshot = mode === 'story' || mode === 'script' || mode === 'writing' ? await options.resolvePreset(input.chat) : null
+    const rawSnapshot = mode === 'story' || mode === 'script' ? await options.resolvePreset(input.chat) : null
     // Render the three phases together; the persisted preset and prior messages stay authoritative.
     const randomSeed = rawSnapshot ? presetSeed(sessionId, Math.max(0, Number(payload.turn) || 0), Math.max(1, Number(payload.step) || 1)) : undefined
     const snapshot = resolveRuntimePresetMacros(rawSnapshot, { charName: input.chat?.cardName, macroState: input.chat?.macroState, randomSeed }).snapshot
-    if (mode === 'story' || mode === 'script' || mode === 'writing') {
+    if (mode === 'story' || mode === 'script') {
       if (Number(payload.step) === 1 && typeof options.synchronizeTail === 'function') {
         await options.synchronizeTail({ sessionId, chat: input.chat, payload })
       }
@@ -340,7 +340,7 @@ export function createNativePlayOrchestrationStrategy(options) {
     if (Number(payload.step) === 1) {
       const prepared = await options.prepareTurn({ sessionId, turn: payload.turn, requestId: input.requestId, userText: userTextOf(payload.messages), runtimePresetSnapshot: snapshot })
       if (prepared && prepared.duplicate) throw new Error('该消息已由酒馆处理，请勿重复发送')
-      if (mode === 'story' || mode === 'script' || mode === 'writing') {
+      if (mode === 'story' || mode === 'script') {
         agentMessages = replaceTurnInput(agentMessages, prepared.frame.userInput.projectedText)
         const adapted = options.appendFrame({ messages: agentMessages, frame: prepared.frame, step: payload.step, session: payload.agent?.session })
         agentMessages = adapted.messages
@@ -349,7 +349,7 @@ export function createNativePlayOrchestrationStrategy(options) {
         agentMessages = agentMessages.concat([snapshotMessage(prepared.text)])
       }
     }
-    if (mode !== 'story' && mode !== 'script' && mode !== 'writing') return { kind: 'enter', messages: agentMessages }
+    if (mode !== 'story' && mode !== 'script') return { kind: 'enter', messages: agentMessages }
     // Models that update the system prompt in history would otherwise append the
     // new prompt after the old one, leaving a switched-out preset at the head.
     // A new request series makes DSH replace the head instead. Unknown history
@@ -444,7 +444,7 @@ export function createNativePlayOrchestrationStrategy(options) {
       const workspace = options.workspaceContext(input.cwd, input.workspaceProjection)
       if (workspace !== '') sections.push({ name: 'tavern:resource-workspace', text: workspace })
     }
-    if (mode === 'story' || mode === 'script' || mode === 'writing') {
+    if (mode === 'story' || mode === 'script') {
       const raw = await options.resolvePreset(input.chat)
       const front = presetFrontSections(resolveRuntimePresetMacros(raw, { charName: input.chat?.cardName, macroState: input.chat?.macroState }).snapshot)
       sections.unshift(...front)

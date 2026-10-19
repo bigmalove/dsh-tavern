@@ -25,7 +25,7 @@ function loadedSkills(message) {
 // instructions loaded in the visible history (including user-invocable skills
 // absent from that catalog) or lifts a revocation an earlier notice declared.
 export function appendWritingSkillState(messages, mode, { session, disabledWritingSkills = [] } = {}) {
-  if (!['story', 'script', 'writing'].includes(mode)) return messages
+  if (!['story', 'script'].includes(mode)) return messages
   const visible = []
   const nodes = session?.surface?.nodes || []
   for (const seq of nodes) {

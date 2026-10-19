@@ -12,9 +12,9 @@ export const STORY_SUBMIT_PROMPT = [
   '</output_method>'
 ].join('\n')
 
-/** A global switch (Tavern settings); it applies to play and writing sessions. */
+/** A global switch (Tavern settings); it applies to play sessions. */
 export function storyToolCallEnabled(chat, enabled) {
-  return enabled === true && !!chat && (!chat.mode || ['story', 'script', 'writing'].includes(chat.mode))
+  return enabled === true && !!chat && (!chat.mode || ['story', 'script'].includes(chat.mode))
 }
 
 function validContent(content) {

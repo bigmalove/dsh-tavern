@@ -136,14 +136,11 @@ for(const type of ['global','character'])test(type+' variable writes validate Ch
  assert.deepEqual(saved,{hp:8})
 })
 
-// 写作模式是无卡的正文模式，与游玩共用模板能力；缺失 writing 白名单曾让
-// 「发送第一轮消息 → 投影用户输入 → 保存模板全局变量」整轮失败。
-const playModes = value => ['story', 'script', 'writing'].includes(value.mode)
+const playModes = value => ['story', 'script'].includes(value.mode)
 
-test('写作模式（无卡）可以保存模板全局变量；卡片模式仍然被拒绝', async () => {
-  const writing = { ...chat(), cardPath: '', mode: 'writing', mvu: { enabled: false } }
+test('游玩会话可以保存模板全局变量；卡片模式仍然被拒绝', async () => {
   const saved = []
-  const { adapter } = harness(writing, {
+  const { adapter } = harness(chat(), {
     isPlayChat: playModes,
     globalVariables: {
       read: async () => ({ keep: 1 }),

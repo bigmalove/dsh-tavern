@@ -29,7 +29,7 @@ export function createContextPlanner(options = {}) {
 
   function cardSections(input, projectText) {
     const sections = []
-    // Writing conversations carry no character card: there is nothing to project.
+    // Card-less conversations carry no character card: there is nothing to project.
     if (input.card === null || input.card === undefined) return sections
     const projectedWorldBook = projectText(input.worldBookContext)
     const worldBookLabel = str(input.worldBookLabel) || '本轮世界书上下文'
@@ -115,7 +115,7 @@ export function createContextPlanner(options = {}) {
       const projectText = playProjector(input, warnings)
       const sections = [{
         kind: 'base', required: true,
-        text: prompt(str(input.chat && input.chat.mode) === 'writing' ? 'writing' : 'story')
+        text: prompt('story')
       }]
       sections.push.apply(sections, cardSections({
         card: input.card,

@@ -146,8 +146,6 @@
 			const lastModeSession = React.useRef(null);
 			const fileRef = React.useRef(null);
 			const saveImportFile = React.useRef(null);
-			const writingSaveFile = React.useRef(null);
-			const writingChatFile = React.useRef(null);
 			const sillyTavernChatFile = React.useRef(null);
 			const saveImportMenu = React.useRef(null);
 			const [saveImportMenuOpen, setSaveImportMenuOpen] = React.useState(false);
@@ -622,66 +620,9 @@
 					const imported = await call("importGameSave", { fileB64: btoa(binary) });
 					notifyDataChanged(["cards", "sessions"]);
 					closePicker();
-					// 导入什么模式就打开什么模式：游玩存档回游玩，写作存档回写作。
 					await finishPendingOpen({ sessionId: imported.sessionId, targetMode: imported.mode || "story" });
 				} catch (error) { setError("导入存档失败：" + String(error.message || error)); }
 				finally { setBusy(false); }
-			}
-			// 一份记录一个新会话：每份各自占一个 Session，中断后可按文件续传。
-			async function importWritingChatLogEntry(entry) {
-				const key = "dsh-tavern:writing-chat-import:" + entry.key;
-				let attempt;
-				try { attempt = JSON.parse(localStorage.getItem(key) || "null"); } catch (_) {}
-				if (!attempt) {
-					const targetWorkspaceId = await playWorkspaceResolverRef.current();
-					attempt = { operationId: window.crypto && typeof window.crypto.randomUUID === "function" ? window.crypto.randomUUID() : String(Date.now()) + ":" + String(Math.random()), sessionId: await props.conversationHost.connectWorkspace(targetWorkspaceId) };
-					localStorage.setItem(key, JSON.stringify(attempt));
-				}
-				await waitForSessionSummary(attempt.sessionId);
-				await ensureTavernPreset(attempt.sessionId, { kind: "play" });
-				const imported = await call("importChatHistory", Object.assign({}, attempt, { cardPath: "", writing: true, text: entry.text, fileName: entry.fileName, userName: entry.preview.userName || "" }));
-				localStorage.removeItem(key);
-				return { sessionId: attempt.sessionId, targetMode: imported.mode || "writing" };
-			}
-			// 写作会话导入 SillyTavern 聊天记录：没有人物卡与世界书，整段记录按既有正文导入。可一次选多份，各自成为独立会话。
-			async function importWritingChatLogs(files) {
-				const chosen = Array.prototype.slice.call(files || []);
-				if (!chosen.length || busy) return;
-				setBusy(true); setError(""); setImportProgress("");
-				try {
-					const entries = [];
-					const failed = [];
-					for (const file of chosen) {
-						setImportProgress("正在读取 " + file.name + "…");
-						try {
-							const text = await readChatImportFile(file);
-							const preview = await call("previewChatImport", { text: text, cardPath: "", writing: true });
-							entries.push({ fileName: file.name, text: text, preview: preview, key: file.name + ":" + file.size + ":" + file.lastModified });
-						} catch (error) { failed.push({ entry: { fileName: file.name }, message: String(error.message || error) }); }
-					}
-					setImportProgress("");
-					if (!entries.length) { setError(chatImportBatchSummary({ succeeded: [], failed: failed })); return; }
-					const merged = chatImportMergedPreview(entries);
-					const confirmation = entries.length === 1
-						? "导入这份聊天记录为新写作会话？\n\n共 " + merged.count + " 条消息，将按原顺序成为已有正文；变量快照不会导入。"
-						: "导入这 " + entries.length + " 份聊天记录为 " + entries.length + " 个新写作会话？\n\n共 " + merged.count + " 条消息，各份互不相干，按原顺序成为已有正文；变量快照不会导入。\n\n导入后不会自动打开，请在左侧列表中选择。";
-					if (!await askConfirm(confirmation + (failed.length ? "\n\n无法读取：" + failed.map(function (item) { return item.entry.fileName; }).join("、") : ""))) return;
-					await playPrewarmRef.current.cancel();
-					const batch = await chatImportBatchRun(entries, importWritingChatLogEntry, function (step) {
-						setImportProgress(step.total > 1 ? "正在导入 " + (step.index + 1) + "/" + step.total + "：" + step.entry.fileName : "正在导入 " + step.entry.fileName + "…");
-					});
-					setImportProgress("");
-					notifyDataChanged(["sessions"]);
-					const summary = chatImportBatchSummary({ succeeded: batch.succeeded, failed: failed.concat(batch.failed) });
-					if (summary) setError(summary);
-					// 批量导入不抢走当前视图：只有单份导入才直接打开那个会话。
-					if (chosen.length === 1 && batch.succeeded.length === 1) {
-						const pending = batch.succeeded[0].result;
-						setPendingOpen(pending);
-						await finishPendingOpen(pending);
-					}
-				} catch (error) { setError("导入聊天记录失败：" + String(error.message || error)); }
-				finally { setImportProgress(""); setBusy(false); }
 			}
 			// 一份记录一个新对话；人物卡、称呼与“仅导入正文”对这一批里的每份都一样。
 			async function importConversationEntry(request, entry) {
@@ -751,20 +692,6 @@
 					console.info("dsh-tavern: 开始游戏完成", (Date.now() - startedAt) + "ms", preparedWorkspaceId ? "工作区已就绪" : "即时创建");
 				} catch (err) { if (!created) setOpeningPicker(previousOpeningPicker); setError((created ? "游戏已创建，开局消息发送失败：" : String(err && err.phase || "创建对话") + "失败：") + String(err && err.message || err)); if (initialMessage) throw err; }
 				finally { timing.finish(successful); tavernSessionTransition.end(); setBusy(false); }
-			}
-			// 写作会话不需要人物卡和开场白：直接创建，用户的第一条消息就是写作指令。
-			async function newWritingConversation() {
-				if (busy) return;
-				const startedAt = Date.now();
-				let created = null;
-				setBusy(true); setError("");
-				setPicking(false);
-				try {
-					created = await conversationLifecycle.start({ kind: "play", targetMode: "writing", card: null, openingId: "", userName: "", requestMode: "dsh" });
-					console.info("dsh-tavern: 新建写作会话完成", (Date.now() - startedAt) + "ms");
-				} catch (err) {
-					setError((created ? "写作会话已创建，打开失败：" : String(err && err.phase || "创建对话") + "失败：") + String(err && err.message || err));
-				} finally { setBusy(false); }
 			}
 			async function preparePlayConversation(card) {
 				setBusy(true); setError("");
@@ -856,7 +783,6 @@
 					try { await openSessionWhenReady(first.sessionId); }
 					catch (err) { setError("打开 Session 失败：" + String(err && err.message || err)); }
 				}
-				else if (nextMode === "writing") setPicking(false);
 				else openPicker();
 			}
 			async function switchPlayRequestMode(nextRequestMode) {
@@ -925,7 +851,6 @@
 							return (entry.requestMode === "sillytavern" ? "sillytavern" : "dsh") === requestMode;
 						})[0];
 						if (next) await openSessionWhenReady(next.sessionId);
-						else if (uiMode === "writing") { props.sessions.clear(); setPicking(false); }
 						else { await openBlankConversation(); openPicker("cards"); }
 					}
 					await refresh();
@@ -952,7 +877,7 @@
 					const forkTitle = (currentTitle || "对话") + " · 分支";
 					try { await props.renameSession(targetSessionId, forkTitle); }
 					catch (renameError) { console.warn("dsh-tavern: 分叉已创建，但自动命名失败", renameError); }
-					// The fork inherits the source mode (story / script / writing); trust the server.
+					// The fork inherits the source mode (story / script); trust the server.
 					const pending = { sessionId: targetSessionId, targetMode: (receipt && receipt.fork && receipt.fork.mode) || target.mode || "story" };
 					setPendingOpen(pending);
 					await finishPendingOpen(pending);
@@ -968,12 +893,12 @@
 				return tavernConversationForkRequests.bind(function (request) {
 					if (busy) throw new Error("当前有其他操作正在进行，请稍后再分叉");
 					// Forking is about the Session, not about a saved 游玩 record: story, script and
-					// writing sessions all carry a Chat with body text. The sidebar list is not a
+					// sessions carry a Chat with body text. The sidebar list is not a
 					// precondition either — it drops SillyTavern-compatibility games and sessions that
 					// were created after the last refresh.
 					const item = history.find(function (entry) { return entry.sessionId === request.sessionId && isBodyMode(entry.mode); });
 					const summary = summaries[request.sessionId];
-					const mode = (item && item.mode) || tavernSessionModes.values[request.sessionId] || (uiMode === "card" ? "card" : uiMode === "writing" ? "writing" : "story");
+					const mode = (item && item.mode) || tavernSessionModes.values[request.sessionId] || (uiMode === "card" ? "card" : "story");
 					// Card games have no body to fork from; the button never shows for them.
 					if (mode === "card") throw new Error("卡片对话没有正文，不能分叉");
 					const title = (item && item.title) || (summary && summary.displayTitle) || (item && item.cardName ? item.cardName + "的新对话" : "对话");
@@ -1042,7 +967,7 @@
 			const h = React.createElement;
 			const collapsedSidebar = collapsed ? h(React.Fragment, null,
 				h("div", { className: "dsh-tavern-sidebar collapsed" },
-					h("button", { className: "dsh-tavern-side-icon", title: "新建对话（跟随当前模式）", onClick: function () { props.toggleSidebar(); if (uiMode === "writing") { window.setTimeout(function () { void newWritingConversation(); }, 180); return; } window.setTimeout(function () { openPicker("cards"); }, 180); } }, "＋")
+					h("button", { className: "dsh-tavern-side-icon", title: "新建对话（跟随当前模式）", onClick: function () { props.toggleSidebar(); window.setTimeout(function () { openPicker("cards"); }, 180); } }, "＋")
 				)
 			) : null;
 			const visibleHistory = history.filter(function (item) {
@@ -1056,12 +981,11 @@
 				props.sessions.clear();
 				const next = visibleHistory.find(function (item) { return !sessionIds.includes(item.sessionId); });
 				if (next) openSessionWhenReady(next.sessionId).catch(function (err) { setError(String(err && err.message || err)); });
-				else if (uiMode === "writing") { props.sessions.clear(); setPicking(false); }
 				else void openBlankConversation().then(function () { openPicker("cards"); });
 			};
 			function renderHistoryRow(item) {
 				const summary = summaries[item.sessionId];
-				const title = item.title || (summary && summary.displayTitle ? summary.displayTitle : (isWritingMode(item.mode) ? "新写作" : (item.cardName + "的新对话")));
+				const title = item.title || (summary && summary.displayTitle ? summary.displayTitle : (item.cardName + "的新对话"));
 				return h("div", { key: item.sessionId, className: "dsh-tavern-side-row" + (current === item.sessionId ? " active" : "") },
 					managing ? h("input", { type: "checkbox", checked: selectedChats.includes(item.chatId), disabled: busy, "aria-label": "选择对话：" + title, onChange: function () { toggleChatSelection(item.chatId); } }) : null,
 					h("button", { className: "dsh-tavern-side-row-main", disabled: busy, onClick: async function () {
@@ -1288,29 +1212,20 @@
 				h("div", { className: "dsh-tavern-side-head" }, h("div", { className: "dsh-tavern-side-brand dsh-tavern-lockup", role: "img", "aria-label": "DSH Tavern" }), props.embedded ? null : h("button", { className: "dsh-tavern-side-icon", title: "收起侧栏", onClick: props.toggleSidebar }, "◧")),
 				h("div", { className: "dsh-tavern-mode-switch" + (compatibilityAvailable ? " compatibility-enabled" : "") },
 					h("button", { className: uiMode === "play" && requestMode === "dsh" ? "active" : "", disabled: busy, onClick: function () { switchPlayRequestMode("dsh"); } }, "游玩"),
-					h("button", { className: uiMode === "writing" ? "active" : "", disabled: busy, onClick: function () { switchMode("writing"); } }, "写作"),
 					h("button", { className: uiMode === "card" ? "active" : "", disabled: busy, onClick: function () { switchMode("card"); } }, "卡片")
 				),
-				h("button", { className: "dsh-tavern-side-new", disabled: busy, onClick: function () { if (uiMode === "writing") { void newWritingConversation(); return; } openPicker(); } }, uiMode === "play" ? (openingPicker ? "继续开局 · " + openingPicker.card.name : requestMode === "sillytavern" ? "＋ 选择人物卡 · 新开silly 对话" : "＋ 选择人物卡 · 新开游玩") : uiMode === "writing" ? "＋ 新建写作" : "＋ 新建卡片工作台对话"),
-				// 写作没有选卡/开局对话框：导入存档或聊天记录直接作为副本开局，模式随内容（写作或游玩）。
-				uiMode === "writing" ? h("div", { className: "dsh-tavern-writing-import", style: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: "8px", padding: "0 12px 8px" } },
-					h("input", { ref: writingSaveFile, type: "file", accept: ".dshsave", style: { display: "none" }, onChange: function (event) { const file = event.target.files && event.target.files[0]; event.target.value = ""; if (file) void importGameSave(file); } }),
-					h("input", { ref: writingChatFile, type: "file", accept: ".jsonl", multiple: true, style: { display: "none" }, onChange: function (event) { const files = Array.prototype.slice.call(event.target.files || []); event.target.value = ""; void importWritingChatLogs(files); } }),
-					h("button", { className: "dsh-tavern-btn", disabled: busy, onClick: function () { if (writingSaveFile.current) writingSaveFile.current.click(); } }, busy ? "正在导入…" : "导入存档"),
-					h("button", { className: "dsh-tavern-btn", disabled: busy, onClick: function () { if (writingChatFile.current) writingChatFile.current.click(); } }, "导入聊天记录"),
-					h("small", { style: { opacity: .7 } }, importProgress || "存档 .dshsave 或 SillyTavern .jsonl（可多选，每份各成一个会话）")
-				) : null,
+				h("button", { className: "dsh-tavern-side-new", disabled: busy, onClick: function () { openPicker(); } }, uiMode === "play" ? (openingPicker ? "继续开局 · " + openingPicker.card.name : requestMode === "sillytavern" ? "＋ 选择人物卡 · 新开silly 对话" : "＋ 选择人物卡 · 新开游玩") : "＋ 新建卡片工作台对话"),
 				uiMode === "play" && requestMode === "sillytavern" ? h("div", { className: "dsh-tavern-compatibility-notice" },
 					h("strong", null, "silly 模式"),
 					h("div", null, "按 SillyTavern 方式组织对话。未选择外部预设时使用内置纯净预设；选择后使用整份外部预设。对话与普通游玩分别保存。")
 				) : null,
 				h("div", { className: "dsh-tavern-side-title dsh-tavern-history-heading" },
-					h("span", null, uiMode === "play" ? (requestMode === "sillytavern" ? "silly 对话" : "游玩历史") : uiMode === "writing" ? "写作历史" : "卡片历史"),
+					h("span", null, uiMode === "play" ? (requestMode === "sillytavern" ? "silly 对话" : "游玩历史") : "卡片历史"),
 					h("button", { className: "dsh-tavern-history-action", disabled: busy, onClick: function () { setManaging(!managing); setSelectedChats([]); setMenuSession(null); setDeleteNotice(""); } }, managing ? "取消" : "管理")),
 				managing ? h("div", { className: "dsh-tavern-history-selection" },
 					h("button", { className: "dsh-tavern-history-action", disabled: busy || !visibleHistory.length, onClick: function () { setSelectedChats(visibleHistory.map(function (item) { return item.chatId; })); } }, "全选"),
 					h("span", null, "已选 " + visibleHistory.filter(function (item) { return selectedChats.includes(item.chatId); }).length)) : null,
-				h("div", { className: "dsh-tavern-side-list" }, rows.length ? rows : h("div", { className: "dsh-tavern-side-empty" }, uiMode === "play" ? (requestMode === "sillytavern" ? "还没有silly 对话。\n选择人物卡开始；未选择外部预设时自动使用内置纯净预设。" : "还没有游玩对话。\n选择人物卡开始；绑定剧本的卡会按剧本推进。") : uiMode === "writing" ? "还没有写作会话。\n不需要人物卡和开场白，直接开始写你的故事。" : "还没有卡片工作台对话。\n可以空白开始，再按需添加人物卡和剧本。")),
+				h("div", { className: "dsh-tavern-side-list" }, rows.length ? rows : h("div", { className: "dsh-tavern-side-empty" }, uiMode === "play" ? (requestMode === "sillytavern" ? "还没有silly 对话。\n选择人物卡开始；未选择外部预设时自动使用内置纯净预设。" : "还没有游玩对话。\n选择人物卡开始；绑定剧本的卡会按剧本推进。") : "还没有卡片工作台对话。\n可以空白开始，再按需添加人物卡和剧本。")),
 				managing ? h("button", { className: "dsh-tavern-btn", style: { flexShrink: 0, margin: "8px 12px", color: "#e57373" }, disabled: busy || !visibleHistory.some(function (item) { return selectedChats.includes(item.chatId); }), onClick: deleteSelectedConversations }, busy ? "正在删除…" : "删除所选（" + visibleHistory.filter(function (item) { return selectedChats.includes(item.chatId); }).length + "）") : null,
 				deleteNotice ? h("div", { role: "status", style: { padding: "4px 12px" } }, deleteNotice) : null,
 				!picking && error ? h("div", { className: "dsh-tavern-dock-error", role: "alert" }, error) : null,

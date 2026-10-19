@@ -19,7 +19,7 @@ function importedSession() {
   input('import:4', '第二条输入')
   reply('import:5', 2, '第二段正文')
   const chat = {
-    id: 'chat', sessionId: session.id, mode: 'writing', _storageRevision: 3,
+    id: 'chat', sessionId: session.id, mode: 'story', _storageRevision: 3,
     timeline: { schemaVersion: 1, branchId: 'b1', revision: 4, checkpoints: [], participants: {}, operations: {}, updatedAt: 0 },
     messages: [
       { role: 'user', text: '第一条输入' },
@@ -100,7 +100,7 @@ test('编辑中间一条输入之后，后面的输入楼层不错位', () => {
     { id: 'tavern-body-edit:mid', role: 'user', content: [{ type: 'text', text: '改过的二' }], source: { kind: 'user' } },
     { start: middle, end: middle, sourceEventSeqs: [middle] })
   const chat = {
-    id: 'chat', sessionId: session.id, mode: 'writing', _storageRevision: 3,
+    id: 'chat', sessionId: session.id, mode: 'story', _storageRevision: 3,
     timeline: { schemaVersion: 1, branchId: 'b1', revision: 4, checkpoints: [], participants: {}, operations: {}, updatedAt: 0 },
     messages: [
       { role: 'user', text: '一' }, { role: 'assistant', turn: 1, text: '甲' },

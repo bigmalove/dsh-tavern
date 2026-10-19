@@ -16,22 +16,17 @@ window.__ModuleLoader__.load({
 		function isPlayMode(mode) {
 			return mode === "story" || mode === "script";
 		}
-		// 写作模式与游玩共用正文管线，但没有人物卡；需要正文能力的组件用它判断。
-		function isWritingMode(mode) {
-			return mode === "writing";
-		}
 		function isBodyMode(mode) {
-			return isPlayMode(mode) || isWritingMode(mode);
+			return isPlayMode(mode);
 		}
 		function groupOfMode(mode) {
-			if (isPlayMode(mode || "story")) return "play";
-			return isWritingMode(mode) ? "writing" : "card";
+			return isPlayMode(mode || "story") ? "play" : "card";
 		}
 		function playModeOfCard(card) {
 			return card && card.script ? "script" : "story";
 		}
 		function modeLabel(mode) {
-			return mode === "script" ? "剧本" : mode === "writing" ? "写作" : mode === "card" ? "卡片" : "故事";
+			return mode === "script" ? "剧本" : mode === "card" ? "卡片" : "故事";
 		}
 
 		function ascii(bytes, off, len) {

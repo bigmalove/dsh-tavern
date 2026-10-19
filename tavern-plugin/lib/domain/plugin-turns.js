@@ -4,7 +4,7 @@ import { projectAgentContent } from './runtime-content-projection.js'
 import { capturePluginGeneration, pluginGenerationEvidence } from './plugin-generations.js'
 
 const storyTurnOf = message => Number(message?.turn || (message?.greeting ? 1 : 0))
-const isPlay = chat => ['story', 'script', 'writing'].includes(chat?.mode || 'story')
+const isPlay = chat => ['story', 'script'].includes(chat?.mode || 'story')
 
 /**
  * Read-only turn material for the public plugin API. Uses the bounded session

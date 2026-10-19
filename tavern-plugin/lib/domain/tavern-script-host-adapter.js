@@ -521,7 +521,7 @@ export function createTavernScriptHostAdapter(options = {}) {
 
   function assertTemplateChat(chat) {
     // 写作模式是无卡的正文模式：模板（用户输入渲染、全局变量、世界书）与游玩共用同一套能力。
-    if (!chat || !['story', 'script', 'writing'].includes(chat.mode) || (typeof options.isPlayChat === 'function' && !options.isPlayChat(chat))) throw new Error('当前会话没有绑定游玩对话')
+    if (!chat || !['story', 'script'].includes(chat.mode) || (typeof options.isPlayChat === 'function' && !options.isPlayChat(chat))) throw new Error('当前会话没有绑定游玩对话')
   }
 
   async function readFullPromptTemplateState(sessionId, cursor, windowed = false) {

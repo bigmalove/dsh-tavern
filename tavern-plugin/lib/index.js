@@ -608,8 +608,7 @@ export async function apply(ctx) {
   }
   function groupOfMode(mode) {
     const m = mode || 'story'
-    // Writing is a card-less body mode: it shares the play pipeline.
-    return m === 'story' || m === 'script' || m === 'writing' ? 'play' : 'card'
+    return m === 'story' || m === 'script' ? 'play' : 'card'
   }
   function renderCardText(text, card, macroState = {}) {
     const result = projectAgentContent(text, {
@@ -775,9 +774,6 @@ export async function apply(ctx) {
     return card
   }
   async function readCardExtensions(cardPath, chat) {
-    // A writing conversation has no card workspace; only the profile-owned global
-    // regex rules (and no helper scripts) apply to its bodies.
-    if (chat?.mode === 'writing') return withGlobalRegexScripts({}, await tavernExtensionSettings.read())
     const workspace = chat?.cardDefinitionSnapshot || await readCardWorkspace(cardPath)
     if (workspace === undefined) return undefined
     const extensions = cardPreparation.present({ card: workspace, as: 'card-extensions' })
@@ -898,6 +894,8 @@ export async function apply(ctx) {
   function normalizeChat(chat) {
     if (chat === undefined || chat === null || typeof chat !== 'object') return chat
     if (chat.mode === 'revision' || chat.mode === 'extract') chat.mode = 'card'
+    // 写作模式已移除：旧会话按卡片工作台打开，历史与导出仍可用，不再当正文对话。
+    if (chat.mode === 'writing') chat.mode = 'card'
     if (chat.requestMode !== 'sillytavern') chat.requestMode = 'dsh'
     if (typeof chat.cardPath !== 'string') chat.cardPath = ''
     if (chat.macroState === null || typeof chat.macroState !== 'object') chat.macroState = { userName: '你', local: {}, global: {} }
@@ -1070,7 +1068,7 @@ export async function apply(ctx) {
     const chat = await chatForSession(sessionId)
     if (chat === undefined) throw new Error('当前 Session 没有对应的 Tavern Chat')
     const mode = chat.mode || 'story'
-    if (!['story', 'script', 'writing'].includes(mode)) throw new Error('历史正文只能在正文对话中检索')
+    if (!['story', 'script'].includes(mode)) throw new Error('历史正文只能在正文对话中检索')
     let result
     await updateChat(chat.id, current => {
       const previousCooldowns = current.historyRecallCooldowns
@@ -1101,16 +1099,7 @@ export async function apply(ctx) {
       remove: async function () { await profileData.remove('resource-graph-operation.json') }
     }
   })
-  // Writing conversations own no card file. The whole pipeline still asks for a card
-  // object, so reads answer with a stable empty card instead of a missing resource;
-  // every place that would show or send card material checks the mode explicitly.
-  const WRITING_CARD = Object.freeze({
-    path: '', name: '写作', description: '', personality: '', scenario: '', first_mes: '',
-    mes_example: '', system_prompt: '', post_history_instructions: '', creator_notes: '',
-    tags: [], alternate_greetings: [], character_book: null
-  })
   async function readChatCard(chat) {
-    if (chat.mode === 'writing') return copyJsonTree(WRITING_CARD)
     if (chat.mode !== 'card' && chat.cardDefinitionSnapshot) return copyJsonTree(chat.cardDefinitionSnapshot)
     const card = await readCard(chat.cardPath)
     if (card === undefined) throw new Error('人物卡不存在: ' + chat.cardPath)
@@ -1629,7 +1618,7 @@ export async function apply(ctx) {
   function assertImportableSave(save) {
     const states = [save.chat, ...save.revisions.map(item => item.state)]
     if (states.some(state => !state || typeof state !== 'object' || !Array.isArray(state.messages))) throw new Error('存档包已损坏：存档内容不完整')
-    if (!['story', 'script', 'writing'].includes(save.chat.mode || 'story')) throw new Error('存档包不是正文对话')
+    if (!['story', 'script'].includes(save.chat.mode || 'story')) throw new Error('存档包不是正文对话')
     const events = save.session?.events
     if (!Array.isArray(events) || !events.some(event => event?.type === 'turn/end')) throw new Error('存档包已损坏：缺少模型会话记录')
     if (events.some((event, index) => event?.seq !== index)) throw new Error('存档包已损坏：模型会话记录不连续')
@@ -1639,9 +1628,7 @@ export async function apply(ctx) {
     if (typeof args?.fileB64 !== 'string' || !args.fileB64) throw new Error('请选择 .dshsave 存档文件')
     const save = readGameSave(Buffer.from(args.fileB64, 'base64'), { tavernVersion: TAVERN_PACKAGE_VERSION })
     assertImportableSave(save)
-    // 写作会话本来就无人物卡：不要求卡存在，也不导入卡。
-    if ((save.chat.mode || 'story') !== 'writing'
-      && !save.card?.payload && !save.chat.cardDefinitionSnapshot && !await readCard(str(save.chat.cardPath)).catch(() => undefined)) throw new Error('存档包里没有人物卡，本机也没有这张卡，无法导入')
+    if (!save.card?.payload && !save.chat.cardDefinitionSnapshot && !await readCard(str(save.chat.cardPath)).catch(() => undefined)) throw new Error('存档包里没有人物卡，本机也没有这张卡，无法导入')
     const sourceChatId = str(save.chat.id), sourceSessionId = str(save.session.header?.id || save.chat.sessionId)
     if (!/^[a-zA-Z0-9_-]+$/.test(sourceChatId) || !/^[a-zA-Z0-9_-]+$/.test(sourceSessionId)) throw new Error('存档包里的游戏编号无效')
     if (importingGameSaves.has(sourceChatId)) throw new Error('这份存档正在导入，请稍候')
@@ -2120,7 +2107,7 @@ export async function apply(ctx) {
       : null
     let replyDisplay = { projections: replyProjectionsOf(chat), presentation: null, latestSourceBacked: false }
     let cardExtensions = { regexScripts: [], helperScripts: [] }
-    if (['story', 'script', 'writing'].includes(chat.mode || 'story')) {
+    if (['story', 'script'].includes(chat.mode || 'story')) {
       cardExtensions = await requestPerformance.stage('cardExtensions', () => readCardExtensions(chat.cardPath, chat)) || cardExtensions
       const pinnedExtensions = await requestPerformance.stage('remoteAssets', () => tavernRemoteAssets.pinExtensions(cardExtensions))
       cardExtensions = Object.assign({}, cardExtensions, {
@@ -2310,9 +2297,8 @@ export async function apply(ctx) {
   }
   async function startChat(cardPath, sessionId, mode, openingId, userName, requestMode, preparationId, cardTask) {
     // Plain greetings have no interactive preview draft, but need the same
-    // game-local worldbook snapshot as scripted openings. A writing conversation
-    // has neither a card nor an opening: no preparation draft is resolved.
-    if (!preparationId && groupOfMode(mode || 'story') === 'play' && mode !== 'writing') {
+    // game-local worldbook snapshot as scripted openings.
+    if (!preparationId && groupOfMode(mode || 'story') === 'play') {
       preparationId = (await requestPerformance.stage('openingDraft', () => openingPreparation.create(cardPath, { userName }))).id
     }
     const preparation = preparationId ? openingPreparation.resolve(preparationId, cardPath, openingId) : undefined
@@ -2447,7 +2433,7 @@ export async function apply(ctx) {
       regexScripts: previous.tavernHelper.regexScripts
     })
     delete next.tavernHelper.messagesPending
-    if (mode === 'story' || mode === 'script' || mode === 'writing') {
+    if (mode === 'story' || mode === 'script') {
       let cardExtensions = { regexScripts: [], helperScripts: [] }
       try { cardExtensions = await readCardExtensions(chat.cardPath, chat) || cardExtensions } catch (_error) { cardExtensions = { regexScripts: [], helperScripts: [] } }
       const activePresetSnapshot = groupOfMode(chat.mode) === 'play' && chat.runtimePresetSnapshot && typeof chat.runtimePresetSnapshot === 'object'
@@ -2493,7 +2479,7 @@ export async function apply(ctx) {
     const window = await readRecentWindow(chatPersistence.readWindow,chatId,{limit:HELPER_MESSAGE_COLD_WINDOW,from:historyFrom,requirePartial:true})
     if (!window || window.from===0 || window.chat.sessionId!==sessionId
       || window.chat.backgroundConfigVersion!==1 || window.chat.conversationFeaturesVersion!==1
-      || !['story','script','writing'].includes(window.chat.mode || 'story')
+      || !['story', 'script'].includes(window.chat.mode || 'story')
       || window.chat.messages.some(message=>message.role==='assistant' && !Number.isSafeInteger(message.turn))) return null
     return window
   }
@@ -2612,7 +2598,7 @@ export async function apply(ctx) {
   const searchWorldbook = createWorldbookSearch({
     load: async sessionId => {
       const chat = await chatForSession(sessionId)
-      if (!chat || !['story', 'script', 'writing'].includes(chat.mode || 'story')) throw new Error('世界书查询仅用于当前游玩对话')
+      if (!chat || !['story', 'script'].includes(chat.mode || 'story')) throw new Error('世界书查询仅用于当前游玩对话')
       const card = await readChatCard(chat)
       return { chat, card, worldBook: await playWorldBook(chat, card) }
     },
@@ -2788,7 +2774,7 @@ export async function apply(ctx) {
   const worldbookPrefilter = createWorldbookPrefilter({
     async run(chatId, signal) {
       const chat = await storyContext({ chatId })
-      if (!chat || !['story', 'script', 'writing'].includes(chat.mode || 'story') || chat.requestMode === 'sillytavern' || chat.regenInProgress) return
+      if (!chat || !['story', 'script'].includes(chat.mode || 'story') || chat.requestMode === 'sillytavern' || chat.regenInProgress) return
       const latest = chat.messages?.at(-1)
       if (latest?.role !== 'assistant' || latest.greeting === true || backgroundTasks.activity(chat).busy) return
       if (backgroundModelSelection(chat) === null) return
@@ -3289,7 +3275,7 @@ export async function apply(ctx) {
         })
       }
       const chat = await sessionStateForSession(target.session.id)
-      if (!chat || !['story', 'script', 'writing'].includes(chat.mode)) return fallback()
+      if (!chat || !['story', 'script'].includes(chat.mode)) return fallback()
       const pendingMessages = pendingCompactionMessages.get(target) || []
       return compactForegroundIfNeeded({
         trigger, native: fallback, forced,
@@ -3321,9 +3307,9 @@ export async function apply(ctx) {
   ctx.on('agent/pre-step', async (payload, next) => {
     const id = payload.agent.session.id, background = backgroundAgentRunner.requestContext(id)
     const chat = background ? null : await sessionStateForSession(id)
-    if (chat && ['story', 'script', 'writing'].includes(chat.mode)) await retireOldForegroundFrames(payload.agent, payload.turn)
+    if (chat && ['story', 'script'].includes(chat.mode)) await retireOldForegroundFrames(payload.agent, payload.turn)
     if (background && ['image', 'phone'].includes(background.task)) return next()
-    if (background || chat && ['story', 'script', 'writing'].includes(chat.mode)) {
+    if (background || chat && ['story', 'script'].includes(chat.mode)) {
       const engine = await configureAgentCompaction(payload.agent)
       pendingCompactionMessages.set(payload.agent, payload.messages || [])
       try {
@@ -3576,7 +3562,7 @@ export async function apply(ctx) {
       if (!changed?.indices) break
       selected = await boundedHistory.read(chatId, str(sessionId), { lastAssistant: true, lastVariables: true, enough: mvuReplies, include: changed.indices, revision: changed.revision })
     }
-    const chat = selected && ['story', 'script', 'writing'].includes(selected.chat.mode || 'story') && selected.chat.requestMode !== 'sillytavern'
+    const chat = selected && ['story', 'script'].includes(selected.chat.mode || 'story') && selected.chat.requestMode !== 'sillytavern'
       ? normalizeChat(selected.chat) : await chatForSession(sessionId)
     if (chat?._storageRevision !== undefined) surfaceSyncedRevisions.set(str(sessionId), chat._storageRevision)
     return chat
@@ -3584,7 +3570,7 @@ export async function apply(ctx) {
   async function storyContext({ sessionId, chatId }) {
     const need = { storyRows: async header => (await worldBookScanDepth(header)) + 1, lastAssistant: true, lastVariables: true }
     const selected = chatId === undefined ? await boundedHistory.forSession(sessionId, need) : await boundedHistory.read(chatId, undefined, need)
-    if (selected && ['story', 'script', 'writing'].includes(selected.chat.mode || 'story') && selected.chat.requestMode !== 'sillytavern') return normalizeChat(selected.chat)
+    if (selected && ['story', 'script'].includes(selected.chat.mode || 'story') && selected.chat.requestMode !== 'sillytavern') return normalizeChat(selected.chat)
     return chatId === undefined ? chatForSession(sessionId) : readChat(chatId)
   }
   async function prepareNextWorldBookContext(snapshot, signal) {
@@ -3978,7 +3964,7 @@ export async function apply(ctx) {
   // A manual plugin task: an exclusive background task, like the ledger; returns once started.
   async function startPluginTask(sessionId, key, input) {
     const chat = await taskStateReader.forSession(str(sessionId))
-    if (!chat || !['story', 'script', 'writing'].includes(chat.mode)) throw new Error('当前没有游玩对话')
+    if (!chat || !['story', 'script'].includes(chat.mode)) throw new Error('当前没有游玩对话')
     if (agentRegistry.get(chat.sessionId)?.phase?.kind === 'running' || chat.regenInProgress) throw new Error('请等待正文生成完成后再运行插件任务')
     if (pluginTaskJobs.has(chat.id)) throw new Error('已有插件任务在运行，请等它完成')
     await pluginApi.manualTaskFor(chat.sessionId, key, input)
@@ -4264,7 +4250,7 @@ export async function apply(ctx) {
     waitReconcile: async sessionId => { await reconciling.get(str(sessionId))?.catch(() => {}) },
     clearFailedTurns: async function (sessionId) {
       const mode = await turnOrchestrator.modeFor(sessionId)
-      if (!['story', 'script', 'writing'].includes(mode)) return 0
+      if (!['story', 'script'].includes(mode)) return 0
       const session = sessionStore.get(sessionId) || agentRegistry.get(sessionId)?.session
       const chat = session && await chatForSession(sessionId)
       if (!chat) return 0
@@ -4279,7 +4265,7 @@ export async function apply(ctx) {
     },
     cleanupFailedTurn: async function (input) {
       const mode = await turnOrchestrator.modeFor(input.sessionId)
-      if (!['story', 'script', 'writing'].includes(mode)) return 0
+      if (!['story', 'script'].includes(mode)) return 0
       const liveAgent = agentRegistry.get(input.sessionId)
       const liveSession = sessionStore.get(input.sessionId) || (liveAgent && liveAgent.session)
       return clearFailedTurnSurface({ session: liveSession, turn: input.turn })
@@ -5048,7 +5034,7 @@ export async function apply(ctx) {
       case 'sendPhoneMessage': return { phoneChat: await phoneChat.send(args || {}) }
       case 'runCompaction': {
         const id = str(args && args.sessionId), chat = await chatForSession(id)
-        if (chat && ['story', 'script', 'writing'].includes(chat.mode)) return { result: await autoCompaction.run(id, { manual: true, signal: compactionAbort.signal }) }
+        if (chat && ['story', 'script'].includes(chat.mode)) return { result: await autoCompaction.run(id, { manual: true, signal: compactionAbort.signal }) }
         const result = await withCompactionSession(id, async agent => (await agentCompaction(agent)).compactNow(agent, compactionAbort.signal))
         return { result: { status: 'completed', foreground: { status: 'succeeded', message: result ? '压缩完成' : '没有可压缩的历史' }, background: { status: 'skipped' } } }
       }
@@ -5078,7 +5064,7 @@ export async function apply(ctx) {
       case 'setStatusBarPlacement': {
         if (!['sidebar', 'body'].includes(args?.placement)) throw new Error('无效的状态栏位置')
         const chat = await chatForSession(args.sessionId)
-        if (!chat || !['story', 'script', 'writing'].includes(chat.mode || 'story')) throw new Error('请先打开游玩会话')
+        if (!chat || !['story', 'script'].includes(chat.mode || 'story')) throw new Error('请先打开游玩会话')
         await updateChat(chat.id, current => ({ ...current, statusBarPlacement: args.placement }), { source: 'ui.status-bar-placement' })
         return { statusBarPlacement: args.placement }
       }

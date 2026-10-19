@@ -23,9 +23,8 @@ function sourceChat() {
   }
 }
 
-test('分叉只接受没有前台或后台未完成工作的正文对话（游玩与写作）', () => {
+test('分叉只接受没有前台或后台未完成工作的正文对话', () => {
   assert.equal(assertConversationForkable(sourceChat()), true)
-  assert.equal(assertConversationForkable({ ...sourceChat(), mode: 'writing' }), true)
   assert.throws(() => assertConversationForkable({ ...sourceChat(), mode: 'card' }), /卡片对话没有正文/)
   assert.throws(() => assertConversationForkable(sourceChat(), { agentRunning: true }), /正文仍在生成/)
   const settling = sourceChat()
@@ -40,20 +39,19 @@ test('分叉只接受没有前台或后台未完成工作的正文对话（游�
   assert.throws(() => assertConversationForkable(dangling), /尚未产生正文/)
 })
 
-test('分叉不依赖左侧栏历史：写作会话与尚未刷新进列表的会话都能分叉', async () => {
+test('分叉不依赖左侧栏历史：尚未刷新进列表的会话也能分叉', async () => {
   const source = await import('node:fs/promises').then(fs => fs.readFile(new URL('../tavern-plugin/src/client/features/sidebar.js', import.meta.url), 'utf8'))
   const start = source.indexOf('return tavernConversationForkRequests.bind(')
   const end = source.indexOf('}, [history, summaries, busy, uiMode])', start)
   assert.ok(start >= 0 && end > start)
   const flow = source.slice(start, end)
   assert.doesNotMatch(flow, /找不到当前游玩存档/)
-  assert.doesNotMatch(flow, /isPlayMode\(entry\.mode\)/, '写作会话同样是正文对话，不能按游玩模式过滤')
+  assert.doesNotMatch(flow, /isPlayMode\(entry\.mode\)/, '正文对话不能按游玩模式过滤')
   assert.match(flow, /isBodyMode\(entry\.mode\)/)
 })
 
 test('分叉回执带回会话模式，分支按源对话的模式打开', async () => {
   const { conversationForkReceipt } = await import('../tavern-plugin/lib/domain/conversation-fork.js')
-  assert.equal(conversationForkReceipt({ id: 'chat-1', sessionId: 'session-1', mode: 'writing' }).mode, 'writing')
   assert.equal(conversationForkReceipt({ id: 'chat-1', sessionId: 'session-1', mode: 'script' }).mode, 'script')
   assert.equal(conversationForkReceipt({ id: 'chat-1', sessionId: 'session-1' }).mode, 'story')
 })

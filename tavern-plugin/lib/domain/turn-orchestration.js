@@ -321,7 +321,7 @@ export function createTurnOrchestrator(options) {
       chatChanged = true
     }
 
-    if (mode === 'story' || mode === 'script' || mode === 'writing') {
+    if (mode === 'story' || mode === 'script') {
       // body.begin (including legacy timeline normalization) only edits metadata.
       // Keep the history already detached by chatForSession; full timeline.apply
       // remains deeply isolated for callers that edit or restore message bodies.
@@ -354,9 +354,7 @@ export function createTurnOrchestrator(options) {
     // Workbench tools must remain available when the file being repaired is invalid.
     const card = cardPath === '' ? null : mode === 'card' ? { name: chat.cardName } : await store.readCard(cardPath, chat)
     if (cardPath !== '' && card === undefined) throw new Error('人物卡不存在: ' + cardPath)
-    if ((mode === 'story' || mode === 'script' || mode === 'writing') && !reusedRuntimeInput) {
-      // A writing conversation has no card file; the store answers with the global
-      // regex rules every conversation inherits.
+    if ((mode === 'story' || mode === 'script') && !reusedRuntimeInput) {
       const extensions = typeof store.readCardExtensions === 'function'
         ? await store.readCardExtensions(cardPath, chat)
         : null
@@ -427,8 +425,7 @@ export function createTurnOrchestrator(options) {
           current.operations[foregroundOperation.operationId]?.status !== 'running') throw new Error('剧情已变化，本次正文准备已过期')
     }
     const templateWorldBook = foregroundWorldBook || await projectWorldBookTemplates({ chat, card, turn, userText: runtimeUserText })
-    // 脚本提示扫描是 story 与 script 共有的能力（写作会话没有卡脚本，扫描文本为空时自然返回 null）。
-    const scriptWorldBook = !foregroundWorldBook && mode !== 'writing' && typeof options.projectScriptPromptWorldbook === 'function' ? await options.projectScriptPromptWorldbook({ chat, card, turn }) : null
+    const scriptWorldBook = !foregroundWorldBook && typeof options.projectScriptPromptWorldbook === 'function' ? await options.projectScriptPromptWorldbook({ chat, card, turn }) : null
     const worldBookContext = foregroundWorldBook ? str(foregroundWorldBook.context) : [str(chat.preparedWorldBookContext).trim(), str(scriptWorldBook && scriptWorldBook.context).trim(), templateWorldBook?.dynamicConstants ? '' : str(templateWorldBook && templateWorldBook.context).trim()].filter(Boolean).join('\n\n')
     if (foregroundWorldBook) {
       if (foregroundWorldBook.randomState) chat.worldBookRandomState = foregroundWorldBook.randomState
@@ -690,7 +687,7 @@ export function createTurnOrchestrator(options) {
       displayParts: [{ kind: 'markdown', text: sourceText }],
       warnings: []
     }
-    if (mode === 'story' || mode === 'script' || mode === 'writing') {
+    if (mode === 'story' || mode === 'script') {
       if (renderMacros !== null && assistantText.includes('{{')) assistantText = renderMacros(assistantText, chat)
       const finalCardPath = cardPathOf(chat)
       previousMvuVariables = chat.promptTemplateInput?.turn === turn ? lastTavernHelperVariables([chat.promptTemplateInput.message])
@@ -895,7 +892,7 @@ export function createTurnOrchestrator(options) {
         chat.workspace.prepared = null
         changed = true
       }
-      if (['story', 'script', 'writing'].includes(chat.mode || 'story')) {
+      if (['story', 'script'].includes(chat.mode || 'story')) {
         const operation = Object.values(timeline.inspect({ chat }).operations).find(function (item) {
           return item.kind === 'body' && item.status === 'running' && Number(item.turn) === turn
         })
@@ -917,8 +914,6 @@ export function createTurnOrchestrator(options) {
     const webTools = chat.webSearchEnabled === true ? ['web_search'] : []
     const storyTools = storyToolCallEnabled(chat, await options.storyToolCall?.()) ? [STORY_SUBMIT_TOOL_NAME] : []
     if (mode === 'script') return ['tavern_read_variables', 'skill', 'tavern_read_skill_reference', 'tavern_read_script', 'tavern_recall_history', 'worldbook_search', ...webTools, ...storyTools]
-    // 写作模式与游玩同一套工具：没有人物卡时变量/世界书内容为空，但工具本身与游玩一致。
-    if (mode === 'writing') return ['tavern_read_variables', 'skill', 'tavern_read_skill_reference', 'tavern_recall_history', 'worldbook_search', ...webTools, ...storyTools]
     if (mode === 'card') return [...CARD_MEMORY_TOOLS, 'web_search', shellToolName, ...dshFileToolNames, 'skill', 'tavern_read_skill_reference', 'tavern_save_skill', ...cordisToolNames, 'tavern_user_profile_read', 'tavern_user_profile_save', 'tavern_read_card', 'tavern_read_card_raw', 'tavern_search_card', 'tavern_replace_card_text', 'tavern_mvu_overview', 'tavern_apply_mvu', 'tavern_read_play_chat', 'tavern_read_worldbook', 'tavern_update_worldbook', 'tavern_read_preset', 'tavern_update_preset', 'tavern_read_regex_library', 'tavern_copy_card', 'tavern_update_card', 'tavern_restore_card', 'tavern_validate_card', 'tavern_test_response']
     return ['tavern_read_variables', 'skill', 'tavern_read_skill_reference', 'tavern_recall_history', 'worldbook_search', ...webTools, ...storyTools]
   }

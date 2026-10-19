@@ -2,7 +2,7 @@ import { sessionEvents } from './session-events.js'
 import { isPluginSource, isProducerSource } from './message-source.js'
 
 export function usesStoryCompaction(chat) {
-  return chat !== null && typeof chat === 'object' && ['story', 'script', 'writing'].includes(chat.mode)
+  return chat !== null && typeof chat === 'object' && ['story', 'script'].includes(chat.mode)
 }
 
 export function createStoryCompactionRequest(options, instruction) {

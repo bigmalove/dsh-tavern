@@ -301,9 +301,6 @@
 				)
 			);
 			if (view.mode === "card") return null;
-			// 写作会话没有人物卡：与卡绑定的区块（人物卡应用、卡更新、交给卡片 Agent 调试）不显示，
-			// 世界书、姿势结算、Guide、后台任务等与游玩一致照常工作。
-			const writing = isWritingMode(view.mode);
 			const statusText = view.settleStatus === "running" ? "正在执行后台结算" : (view.settleStatus === "error" ? "后台结算失败" : "后台结算已完成");
 			const cardUpdateNotice = !view.cardUpdate ? "" : view.cardUpdate.error ? "检查更新失败：" + view.cardUpdate.error
 				: view.cardUpdate.worldbookSyncRequired || view.cardUpdate.legacy ? "旧存档需同步"
@@ -312,12 +309,12 @@
 				: view.cardUpdate.worldbookChanged ? "世界书有变化" : "";
 			return h("aside", { className: "dsh-tavern-status dsh-tavern-status-dashboard" },
 				h("div", { className: "dsh-tavern-status-head" },
-					h("div", { className: "dsh-tavern-status-role" }, writing ? "写作" : view.card.name),
-                    writing ? null : h("nav", { className: "dsh-tavern-status-resource-links", "aria-label": "本局资料" },
+					h("div", { className: "dsh-tavern-status-role" }, view.card.name),
+                    h("nav", { className: "dsh-tavern-status-resource-links", "aria-label": "本局资料" },
                         h("button", { type: "button", disabled: !view.card.path, onClick: () => props.openStyleTab("dsh-tavern:cards", { cardPath: view.card.path }) }, "打开人物卡 ↗"),
                         h("button", { type: "button", disabled: !view.card.path || resourceLinkBusy || !currentResourceBinding || noWorldBook || unavailableWorldBook, title: "打开本局人物卡绑定的世界书；多本绑定时打开主世界书", onClick: openWorldBookDetail }, resourceLinkBusy ? "正在打开…" : !currentResourceBinding ? "正在读取世界书…" : noWorldBook ? "未绑定世界书" : unavailableWorldBook ? "世界书不可用" : "打开世界书 ↗")),
                     resourceLinkError ? h("div", { className: "dsh-card-error", role: "status" }, resourceLinkError) : null,
-					(view.card.tags || []).length && !writing ? h("div", { className: "dsh-tavern-status-tags" }, (view.card.tags || []).slice(0, 8).map(function (tag) { return h("span", { key: tag, className: "dsh-tavern-status-tag" }, tag); })) : null,
+					(view.card.tags || []).length ? h("div", { className: "dsh-tavern-status-tags" }, (view.card.tags || []).slice(0, 8).map(function (tag) { return h("span", { key: tag, className: "dsh-tavern-status-tag" }, tag); })) : null,
 					h("div", { className: "dsh-tavern-status-settle" }, h("span", { className: "dsh-tavern-status-dot " + (view.settleStatus || "idle") }), statusText)
 				),
 					h("div", { className: "dsh-tavern-status-body" },
@@ -331,7 +328,7 @@
 						),
 						cardUpdateError ? h("p", { className: "dsh-card-error", role: "alert" }, "未应用更新：" + cardUpdateError) : null
 					) : null,
-					writing ? null : h(TavernCardAppDock, { sessionId: props.sessionId }),
+					h(TavernCardAppDock, { sessionId: props.sessionId }),
 					view.settleStatus === "error" ? h("div", { className: "dsh-card-error" },
 						h("div", null, view.settleError || "后台结算失败，请重试。"),
 						h("button", { className: "dsh-tavern-btn", disabled: settlementRetryBusy, onClick: retrySettlement }, settlementRetryBusy ? "重试中…" : "重试后台结算")
@@ -343,7 +340,7 @@
 					(view.presentationWarnings || []).map(function (warning, index) {
 						return h("div", { className: "dsh-card-error", key: "presentation-warning-" + index }, warning);
 					}),
-					writing ? null : h("details", { className: "dsh-tavern-status-section dsh-tavern-status-support" },
+					h("details", { className: "dsh-tavern-status-section dsh-tavern-status-support" },
                         h("summary", null, "遇到显示或生成问题？"),
                         h("p", { className: "dsh-tavern-settings-desc" }, "正则加载、前端美化或内容生成异常，可交给卡片 Agent 排查。"),
 						h("div", { className: "dsh-tavern-debug-panel" },
@@ -379,7 +376,7 @@
 						),
 						guideError ? h("div", { className: "dsh-card-error" }, guideError) : null
 					),
-					writing ? null : h("section", { className: "dsh-tavern-status-section" },
+					h("section", { className: "dsh-tavern-status-section" },
 						h("div", { className: "dsh-tavern-character-design-head" },
                             h("div", { className: "dsh-tavern-status-label" }, "人物设计档案（" + ((view.characterDesigns && view.characterDesigns.characters || []).length) + "）"),
                             h("button", { className: "dsh-tavern-btn", disabled: running || view.activity?.busy || view.characterDesignTask?.status === "running", onClick: () => designCharacter(view.characterDesignTask?.status === "failed" ? view.characterDesignTask.guidance : "") }, view.characterDesignTask?.status === "running" ? "设计中…" : view.characterDesignTask?.status === "failed" ? "重试设计" : "设计人物")),
@@ -1053,15 +1050,13 @@
             const h = React.createElement;
             const owner = props.sessions.subagentAddress(props.sessionId)?.parentSessionId || props.sessionId;
             const mode = useTavernSessionMode(owner);
-            // 写作会话没有人物卡；其余本局设置与游玩一致（预设、长期偏好、后台模型、写作 Skill、插件）。
-            const writing = isWritingMode(mode);
             return h("aside", { className: "dsh-tavern-status dsh-local-settings", "aria-label": "本局设置" },
                 h("div", { className: "dsh-tavern-status-head" }, h("strong", null, "本局设置")),
                 h("div", { className: "dsh-tavern-status-body" }, isBodyMode(mode) ? h(React.Fragment, null,
-                    h("p", { className: "dsh-local-intro" }, writing ? "仅影响本局，修改后自动保存。写作会话不需要人物卡和开场白，世界书只使用标记为全局生效的独立世界书。" : "仅影响本局，修改后自动保存，已有对话和变量会保留。"),
+                    h("p", { className: "dsh-local-intro" }, "仅影响本局，修改后自动保存，已有对话和变量会保留。"),
                     h("p", { className: "dsh-local-warning dsh-local-intro" }, "切换预设、长期偏好、模型、结算或联网搜索后，下一次请求要重建缓存，耗时和费用会增加。"),
-                    h("section", { className: "dsh-local-section" }, h("h3", null, writing ? "基本信息" : "游玩"),
-                        writing ? null : h(TavernLocalPlayerName, { key: owner + ":name", sessionId: owner }),
+                    h("section", { className: "dsh-local-section" }, h("h3", null, "游玩"),
+                        h(TavernLocalPlayerName, { key: owner + ":name", sessionId: owner }),
                         h(TavernConversationPreset, { key: owner + ":preset", sessionId: owner }),
                         h(UserPreferenceProfileTab, { key: owner + ":profile", scope: { sessionId: owner }, conversationOnly: true }),
                         h(TavernStatusBarSetting, { key: owner + ":status", sessionId: owner })),

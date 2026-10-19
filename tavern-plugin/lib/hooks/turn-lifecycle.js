@@ -119,12 +119,12 @@ export function registerTurnLifecycleHooks({
       cwd: agent.session.header && agent.session.header.cwd,
       workspaceProjection,
       // 正文模式（含写作）都把当轮常驻世界书换成最新读出的内容；写作会话只解析全局世界书。
-      fixedSystemSections: chat && ['story', 'script', 'writing'].includes(chat.mode || 'story')
+      fixedSystemSections: chat && ['story', 'script'].includes(chat.mode || 'story')
         ? withCurrentWorldbook(sessionStablePrefixSections(agent.session), (await nativeWorldBookTemplateContext(chat, await readChatCard(chat))).prefixContext ?? '')
         : sessionStablePrefixSections(agent.session)
     })
     // Third-party plugin sections join the body prompt only, after Tavern's own.
-    if (pluginPromptSections && chat && chat.requestMode !== 'sillytavern' && ['story', 'script', 'writing'].includes(await turnOrchestrator.modeFor(agent.session.id))) {
+    if (pluginPromptSections && chat && chat.requestMode !== 'sillytavern' && ['story', 'script'].includes(await turnOrchestrator.modeFor(agent.session.id))) {
       const extra = await pluginPromptSections({ gameId: agent.session.id })
       if (extra.length) assembled.sections = [...(assembled.sections || []), ...extra]
     }
