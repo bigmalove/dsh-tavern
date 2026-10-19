@@ -128,6 +128,29 @@ function useTavernHeaderItems() {
 	return value && Array.isArray(value.items) ? value : TAVERN_HEADER_DEFAULT;
 }
 
+// 手机上顶栏只有一行的宽度，带文字的按钮会挤到右下角的宿主按钮上。
+// 窄屏或触屏一律按纯图标排；桌面上的设置仍按用户选择。
+function tavernCompactHeader() {
+	if (typeof window === "undefined") return false;
+	const coarse = Boolean(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+	const narrow = window.innerWidth <= (coarse ? 1023 : 640);
+	return narrow || (typeof document !== "undefined" && Boolean(document.querySelector('[data-mobile-nav="frame"]')));
+}
+function useTavernCompactHeader() {
+	const [compact, setCompact] = React.useState(tavernCompactHeader);
+	React.useEffect(function () {
+		if (typeof window === "undefined" || !window.matchMedia) return undefined;
+		const queries = [window.matchMedia("(max-width: 640px)"), window.matchMedia("(pointer: coarse)")];
+		const onChange = function () { setCompact(tavernCompactHeader()); };
+		queries.forEach(q => { if (q.addEventListener) q.addEventListener("change", onChange); else if (q.addListener) q.addListener(onChange); });
+		onChange();
+		return function () {
+			queries.forEach(q => { if (q.removeEventListener) q.removeEventListener("change", onChange); else if (q.removeListener) q.removeListener(onChange); });
+		};
+	}, []);
+	return compact;
+}
+
 function TavernStartCards(props) {
 	const { newTabOptions, onNewTab } = props;
 	const h = React.createElement;

@@ -1620,6 +1620,22 @@
         // Width the shortcuts may use, read from the whole title row so it does
         // not depend on how many buttons are folded right now: the row, minus the
         // host's own buttons, minus a minimum share kept for the session title.
+        // 会话标题那一格是 flex:1，看起来「可以压」，但它的 min-content 由标题和
+        // 旁边的按钮决定，压不下去。早先按 row 宽度的 30% 估算，会把这一格算小了：
+        // 顶栏以为还有地方，实际已经被挤到右下角的宿主按钮上。这里量它的真实下限。
+        function tavernClusterMinWidth(cluster) {
+            const style = cluster.style;
+            const saved = { flex: style.flex, width: style.width, minWidth: style.minWidth };
+            style.flex = "0 0 auto";
+            style.width = "min-content";
+            style.minWidth = "0";
+            const width = cluster.offsetWidth;
+            style.flex = saved.flex;
+            style.width = saved.width;
+            style.minWidth = saved.minWidth;
+            return width;
+        }
+
         function tavernHeaderAvailableWidth(node) {
             const row = node.closest("[class*=\"_titleRow\"]");
             if (!row) return node.clientWidth;
@@ -1634,10 +1650,7 @@
                 if (child.contains(node)) { free -= Math.max(0, child.offsetWidth - node.offsetWidth); continue; }
                 if (/_titleCluster/.test(String(child.className))) {
                     // Everything in the cluster except the crumbs stays; the crumbs keep a minimum.
-                    const parts = Array.from(child.children).filter(part => window.getComputedStyle(part).display !== "none");
-                    free -= px(style.columnGap) * Math.max(0, parts.length - 1);
-                    for (const part of parts) if (!/_crumbs/.test(String(part.className))) free -= part.offsetWidth;
-                    free -= Math.min(160, row.clientWidth * 0.3);
+                    free -= Math.max(tavernClusterMinWidth(child), Math.min(160, row.clientWidth * 0.3));
                     continue;
                 }
                 free -= child.offsetWidth;
@@ -1710,7 +1723,11 @@
             const h = React.createElement;
             const catalog = useTavernHeaderCatalog();
             const header = useTavernHeaderItems();
-            const display = header.display === "icon" ? "icon" : "icon-text";
+            // 手机/触屏强制纯图标：带文字会把顶栏挤到宿主右下角按钮上。
+            const compact = useTavernCompactHeader();
+            // 存回设置时用用户自己选的形态，别把手机上的强制图标写进配置。
+            const configuredDisplay = header.display === "icon" ? "icon" : "icon-text";
+            const display = compact ? "icon" : configuredDisplay;
             const items = header.items;
             // 外层槽位已解析好 owner（含子会话回溯）；这里只用它，别重复依赖宿主 API。
             const owner = props.owner || props.sessionId;
@@ -1740,10 +1757,10 @@
                 if (index < 0 || target < 0 || target >= items.length) return;
                 const next = items.slice();
                 [next[index], next[target]] = [next[target], next[index]];
-                saveHeader({ display: display, items: next });
+                saveHeader({ display: configuredDisplay, items: next });
             }
             function remove(id) {
-                saveHeader({ display: display, items: items.filter(value => value !== id) });
+                saveHeader({ display: configuredDisplay, items: items.filter(value => value !== id) });
             }
             // Natural widths are cached: a folded button is display:none, so it
             // cannot be measured again until the display mode changes.
